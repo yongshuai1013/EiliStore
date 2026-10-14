@@ -1,0 +1,36 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install xcodegen
+        run: brew install xcodegen
+        
+      - name: Generate project
+        run: xcodegen generate
+        
+      - name: Build IPA
+        run: |
+          xcodebuild archive \
+            -project EiliStore.xcodeproj \
+            -scheme EiliStore \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/EiliStore.xcarchive \
+            CODE_SIGNING_ALLOWED=NO
+          mkdir -p build/Payload
+          cp -r build/EiliStore.xcarchive/Products/Applications/EiliStore.app build/Payload/
+          cd build && zip -r EiliStore-ipa.zip Payload/ && cd ..
+          
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: EiliStore-ipa
+          path: build/EiliStore-ipa.zip
