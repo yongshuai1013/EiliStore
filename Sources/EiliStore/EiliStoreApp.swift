@@ -217,12 +217,53 @@ struct SignInstallView: View {
 
 // MARK: - 設定
 struct SettingsView: View {
+    @State private var appleID = ""
+    @State private var password = ""
+    @State private var isLoggedIn = false
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    
     var body: some View {
         NavigationView {
             List {
-                Section(header: Text("帳戶")) {
-                    NavigationLink(destination: SignInView()) {
-                        Text("Apple ID 登入")
+                Section(header: Text("Apple ID 登入")) {
+                    if isLoggedIn {
+                        HStack {
+                            Spacer()
+                            Text("已登入: \(appleID)")
+                                .foregroundColor(.teal)
+                            Spacer()
+                        }
+                        Button("登出", role: .destructive) {
+                            PaxAuthService.shared.logout()
+                            isLoggedIn = false
+                            appleID = ""
+                            password = ""
+                        }
+                    } else {
+                        TextField("Apple ID", text: $appleID)
+                            .autocapitalization(.none)
+                            .keyboardType(.emailAddress)
+                            .disabled(isLoading)
+                        SecureField("密碼", text: $password)
+                            .disabled(isLoading)
+                        if let error = errorMessage {
+                            Text(error)
+                                .foregroundColor(.red)
+                                .font(.caption)
+                        }
+                        Button(action: doLogin) {
+                            HStack {
+                                Spacer()
+                                if isLoading {
+                                    ProgressView()
+                                } else {
+                                    Text("登入")
+                                }
+                                Spacer()
+                            }
+                        }
+                        .disabled(isLoading || appleID.isEmpty || password.isEmpty)
                     }
                 }
                 
@@ -260,6 +301,37 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("設定")
+            .onAppear {
+                if KeychainHelper.loadString(forKey: "paxstore.auth.session") != nil,
+                   let savedID = KeychainHelper.loadString(forKey: "paxstore.apple.id"),
+                   !savedID.isEmpty {
+                    isLoggedIn = true
+                    appleID = savedID
+                }
+            }
+        }
+    }
+    
+    private func doLogin() {
+        isLoading = true
+        errorMessage = nil
+        Task {
+            do {
+                try await PaxAuthService.shared.login(appleID: appleID, password: password)
+                await MainActor.run {
+                    isLoggedIn = true
+                    isLoading = false
+                    // 保存 Apple ID
+                    KeychainHelper.saveString(appleID, forKey: "paxstore.apple.id")
+                    AppLogger.shared.log("登入成功: \(appleID)")
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = error.localizedDescription
+                    AppLogger.shared.log("登入失敗: \(error.localizedDescription)")
+                }
+            }
         }
     }
 }
