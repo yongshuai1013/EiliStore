@@ -13,6 +13,8 @@ packages:
   CodeSignKit:
     url: https://github.com/mahee96/CodeSignKit.git
     branch: main
+  EMProxy:
+    path: Packages/EMProxy
 targets:
   EiliStore:
     type: application
@@ -23,6 +25,7 @@ targets:
       - package: ZIPFoundation
       - package: SideSign
       - package: CodeSignKit
+      - package: EMProxy
       - framework: Libraries/IDeviceFFI.xcframework
         embed: false
     settings:
