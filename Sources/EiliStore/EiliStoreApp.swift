@@ -233,6 +233,9 @@ struct SettingsView: View {
                     NavigationLink(destination: LogView()) {
                         Text("日誌")
                     }
+                    NavigationLink(destination: AnisetteServerView()) {
+                        Text("Anisette 伺服器")
+                    }
                 }
                 
                 Section(header: Text("關於")) {
