@@ -122,6 +122,41 @@ struct ConnectionConfigView: View {
         bindPort = defaults.string(forKey: "eilistore.bindPort") ?? "51820"
         emproxyEnabled = defaults.object(forKey: "eilistore.emproxyEnabled") as? Bool ?? true
         emproxyRunning = EMProxyManager.shared.isRunning
+        discoverNetwork()
+    }
+    
+    private func discoverNetwork() {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0 else { return }
+        defer { freeifaddrs(ifaddr) }
+        var ptr = ifaddr
+        while let curr = ptr {
+            let ifa = curr.pointee
+            defer { ptr = ifa.ifa_next }
+            guard let addrPtr = ifa.ifa_addr,
+                  addrPtr.pointee.sa_family == UInt8(AF_INET),
+                  let cname = ifa.ifa_name else { continue }
+            let ifName = String(cString: cname)
+            guard ifName.hasPrefix("utun") else { continue }
+            var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(addrPtr, socklen_t(addrPtr.pointee.sa_len),
+                              &hostname, socklen_t(hostname.count),
+                              nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            let ip = String(cString: hostname)
+            var prefix = 32
+            if let nm = ifa.ifa_netmask {
+                let s = nm.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                    $0.pointee.sin_addr.s_addr
+                }
+                prefix = UInt32(bigEndian: s).nonzeroBitCount
+            }
+            tunnelIP = "\(ip)/\(prefix)"
+            let parts = ip.split(separator: ".")
+            if parts.count == 4 {
+                autoDeviceIP = "\(parts[0]).\(parts[1]).\(parts[2]).1/32"
+            }
+            break
+        }
     }
     
     private func save() {
