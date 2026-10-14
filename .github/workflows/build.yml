@@ -11,6 +11,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Download IDevice xcframework (SideStore prebuilt)
+        run: |
+          mkdir -p /tmp/idevice_dl
+          curl -L -o /tmp/idevice_dl/idevice.zip "https://github.com/SideStore/idevice/releases/download/v0.1.68-ss-3e55c84/idevice-xcframework-v0.1.68-ss-3e55c84.zip"
+          mkdir -p Libraries
+          unzip -q -o /tmp/idevice_dl/idevice.zip -d /tmp/idevice_dl/
+          XCFRAMEWORK=$(find /tmp/idevice_dl -name "*.xcframework" -type d | head -1)
+          echo "Found: $XCFRAMEWORK"
+          rm -rf Libraries/IDeviceFFI.xcframework
+          cp -R "$XCFRAMEWORK" Libraries/IDeviceFFI.xcframework
+      
       - name: Install xcodegen
         run: brew install xcodegen
         
