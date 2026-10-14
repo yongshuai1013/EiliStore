@@ -242,7 +242,7 @@ struct SettingsView: View {
                     NavigationLink(destination: PairingFileManagementView()) {
                         Text("配對檔管理")
                     }
-                    NavigationLink(destination: FileBrowserView()) {
+                    NavigationLink(destination: FileBrowserView(directory: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!)) {
                         Text("檔案管理")
                     }
                 }
