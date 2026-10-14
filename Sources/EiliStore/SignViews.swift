@@ -187,21 +187,86 @@ struct SignIPAView: View {
     }
 }
 
-/// 證書管理頁（UI 空殼，後端待接）
+/// 證書管理頁
 struct CertificateView: View {
+    @State private var certificates: [String] = []
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @StateObject private var logger = AppLogger.shared
+    
     var body: some View {
         List {
             Section(header: Text("證書")) {
-                Text("暫無證書")
-                    .foregroundColor(.secondary)
+                if isLoading {
+                    ProgressView()
+                } else if certificates.isEmpty {
+                    Text("暫無證書")
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(certificates, id: \.self) { cert in
+                        Text(cert)
+                            .font(.caption)
+                    }
+                }
+            }
+            
+            if let error = errorMessage {
+                Section {
+                    Text(error)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                }
             }
             
             Section {
-                Button("創建證書") {}
-                    .foregroundColor(.teal)
+                Button("刷新證書列表") {
+                    loadCertificates()
+                }
+                .foregroundColor(.teal)
+                
+                Button("創建證書") {
+                    createCertificate()
+                }
+                .foregroundColor(.teal)
+            }
+            
+            Section(header: Text("說明")) {
+                Text("證書用於簽名 IPA。免費帳號最多 3 個證書。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
         .navigationTitle("證書管理")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            loadCertificates()
+        }
+    }
+    
+    private func loadCertificates() {
+        isLoading = true
+        errorMessage = nil
+        
+        Task {
+            do {
+                // TODO: 需要先選擇 team，現在簡化
+                // let teams = try await PaxSigningService.shared.fetchTeams()
+                // 實際需要用戶先登入並選擇 team
+                await MainActor.run {
+                    isLoading = false
+                    logger.log("證書列表加載（待實現 team 選擇）")
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isLoading = false
+                }
+            }
+        }
+    }
+    
+    private func createCertificate() {
+        logger.log("創建證書（待實現）")
+        errorMessage = "需要先登入並選擇 Team"
     }
 }
