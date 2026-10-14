@@ -242,6 +242,9 @@ struct SettingsView: View {
                     NavigationLink(destination: PairingFileManagementView()) {
                         Text("配對檔管理")
                     }
+                    NavigationLink(destination: FileBrowserView()) {
+                        Text("檔案管理")
+                    }
                 }
                 
                 Section(header: Text("關於")) {
