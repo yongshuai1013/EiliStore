@@ -96,12 +96,25 @@ struct InstallAppView: View {
                 }
                 
                 // 3. 登記到 AppManager（帶 IPA 路徑）
-                // TODO: 需要從 IPA 解析真實的 name/bundleId，現在用文件名
-                let appName = ipaURL.deletingPathExtension().lastPathComponent
+                // 從 IPA 解析真實信息
+                let appInfo: IPAParser.AppInfo
+                do {
+                    appInfo = try IPAParser.parse(ipaURL: savedIPA)
+                    logger.log("解析 IPA: \(appInfo.name) (\(appInfo.bundleId))")
+                } catch {
+                    logger.log("⚠️ IPA 解析失敗，用文件名: \(error.localizedDescription)")
+                    appInfo = IPAParser.AppInfo(
+                        name: ipaURL.deletingPathExtension().lastPathComponent,
+                        bundleId: "unknown.\(ipaURL.deletingPathExtension().lastPathComponent)",
+                        version: "1.0",
+                        iconData: nil
+                    )
+                }
+                
                 let newApp = InstalledApp(
-                    name: appName,
-                    bundleId: "unknown.\(appName)", // TODO: 從 IPA 解析
-                    team: "未知",
+                    name: appInfo.name,
+                    bundleId: appInfo.bundleId,
+                    team: "未知", // TODO: 從簽名信息獲取
                     expiresDate: Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date(),
                     ipaPath: savedIPA.path
                 )
@@ -111,7 +124,7 @@ struct InstallAppView: View {
                     progressPercent = 100
                     isInstalling = false
                 }
-                logger.log("✅ 安裝完成: \(appName)，已登記到 App 列表")
+                logger.log("✅ 安裝完成: \(appInfo.name)，已登記到 App 列表")
             } catch {
                 await MainActor.run {
                     progressMessage = "安裝失敗: \(error.localizedDescription)"
