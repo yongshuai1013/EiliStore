@@ -226,7 +226,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             List {
-                Section(header: Text("Apple ID 登入")) {
+                Section(header: Text("賬號")) {
                     if isLoggedIn {
                         HStack {
                             Spacer()
