@@ -38,18 +38,14 @@ struct MainTabView: View {
 
 // MARK: - 主頁（My Apps 風格，不顯示 Apple ID）
 struct MyAppsView: View {
-    // 假數據，UI 先行
-    @State private var installedApps: [InstalledApp] = [
-        InstalledApp(name: "SideStore", team: "SideStore Team", expiresInDays: 5, iconName: "app.fill"),
-    ]
-    @State private var appIDsRemaining = 6
+    @StateObject private var manager = AppManager.shared
     
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    // 無更新橫幅
-                    Text("沒有可用更新")
+                    // 更新橫幅
+                    Text(manager.hasUpdates ? "有 \(manager.appsNeedingRefresh.count) 個 App 需要刷新" : "沒有可用更新")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity)
@@ -64,19 +60,39 @@ struct MyAppsView: View {
                             .foregroundColor(.secondary)
                             .textCase(.uppercase)
                         Spacer()
-                        Button("全部刷新") {}
+                        Button(manager.isRefreshing ? "刷新中..." : "全部刷新") {
+                            Task {
+                                await manager.refreshAll()
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundColor(.teal)
+                        .disabled(manager.isRefreshing || !manager.hasUpdates)
+                    }
+                    
+                    // 刷新進度
+                    if !manager.refreshProgress.isEmpty {
+                        Text(manager.refreshProgress)
                             .font(.caption)
-                            .foregroundColor(.teal)
+                            .foregroundColor(.secondary)
                     }
                     
                     // App 列表
-                    ForEach(installedApps) { app in
-                        AppRowView(app: app)
+                    if manager.installedApps.isEmpty {
+                        Text("還沒有安裝 App")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                    } else {
+                        ForEach(manager.installedApps) { app in
+                            AppRowView(app: app)
+                        }
                     }
                     
                     // App ID 剩餘
                     VStack(spacing: 4) {
-                        Text("\(appIDsRemaining) 個 App ID 剩餘")
+                        Text("\(manager.appIDsRemaining) 個 App ID 剩餘")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                         Button("查看 App IDs") {}
@@ -98,16 +114,12 @@ struct MyAppsView: View {
                     }
                 }
             }
+            .task {
+                // App 啟動時檢查是否需要自動刷新
+                await manager.checkAndAutoRefresh()
+            }
         }
     }
-}
-
-struct InstalledApp: Identifiable {
-    let id = UUID()
-    let name: String
-    let team: String
-    let expiresInDays: Int
-    let iconName: String
 }
 
 struct AppRowView: View {
@@ -146,13 +158,13 @@ struct AppRowView: View {
                 Text("過期於")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-                Text("\(app.expiresInDays) 天後")
+                Text("\(app.daysRemaining) 天後")
                     .font(.subheadline)
                     .bold()
                     .foregroundColor(.white)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(expiryColor(days: app.expiresInDays))
+                    .background(expiryColor(days: app.daysRemaining))
                     .cornerRadius(20)
             }
         }
