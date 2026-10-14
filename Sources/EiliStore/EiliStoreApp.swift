@@ -236,6 +236,9 @@ struct SettingsView: View {
                     NavigationLink(destination: AnisetteServerView()) {
                         Text("Anisette 伺服器")
                     }
+                    NavigationLink(destination: ConnectionConfigView()) {
+                        Text("連接配置")
+                    }
                 }
                 
                 Section(header: Text("關於")) {
