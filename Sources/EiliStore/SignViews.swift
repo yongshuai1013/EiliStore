@@ -224,14 +224,14 @@ struct CertificateView: View {
                 Text("加載中...")
                     .foregroundColor(.secondary)
             } else {
-                ForEach(teams, id: \.teamId) { team in
-                    teamRow(team)
+                ForEach(Array(teams.enumerated()), id: \.offset) { index, team in
+                    teamRow(team, index: index)
                 }
             }
         }
     }
     
-    private func teamRow(_ team: SideSign.Team) -> some View {
+    private func teamRow(_ team: SideSign.Team, index: Int) -> some View {
         Button(action: {
             selectedTeam = team
             loadCertificates()
@@ -239,7 +239,7 @@ struct CertificateView: View {
             HStack {
                 Text(team.name)
                 Spacer()
-                if selectedTeam?.teamId == team.teamId {
+                if selectedTeam?.name == team.name {
                     Image(systemName: "checkmark")
                         .foregroundColor(.teal)
                 }
