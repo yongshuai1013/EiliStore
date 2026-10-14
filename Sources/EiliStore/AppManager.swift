@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import SideSign
 
 /// 已安裝 App 的數據模型
 struct InstalledApp: Identifiable, Codable {
@@ -102,7 +103,8 @@ class AppManager: ObservableObject {
     
     // MARK: - 刷新
     
-    /// 刷新所有即將過期的 App（真實邏輯）
+    /// 刷新所有即將過期的 App（正確路線：只換 provisioning profile，不重裝）
+    /// 參考 SideStore PR #846：refresh should only renew provisioning profiles
     func refreshAll() async {
         let toRefresh = appsNeedingRefresh
         guard !toRefresh.isEmpty else {
@@ -114,28 +116,99 @@ class AppManager: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
         
-        AppLogger.shared.log("開始刷新 \(toRefresh.count) 個 App...")
+        AppLogger.shared.log("開始刷新 \(toRefresh.count) 個 App（只換 profile，不重裝）...")
         
+        // 1. 檢查登入
+        // TODO: 檢查 PaxAuthService 是否已登入
+        
+        // 2. 獲取 Team
+        // TODO: 需要用戶選擇或記住 Team，現在先嘗試獲取第一個
+        let teams: [SideSign.Team]
+        do {
+            teams = try await PaxSigningService.shared.fetchTeams()
+        } catch {
+            AppLogger.shared.log("❌ 獲取 Team 失敗: \(error.localizedDescription)")
+            refreshProgress = "獲取 Team 失敗"
+            return
+        }
+        guard let team = teams.first else {
+            AppLogger.shared.log("❌ 沒有可用的 Team")
+            refreshProgress = "沒有可用的 Team"
+            return
+        }
+        AppLogger.shared.log("使用 Team: \(team.name)")
+        
+        // 3. 找配對檔
+        guard let pairingFile = findPairingFile() else {
+            AppLogger.shared.log("❌ 找不到配對檔，需要先配對設備")
+            refreshProgress = "找不到配對檔"
+            return
+        }
+        
+        // 4. 連接 misagent
+        let misagent = RustMisagentClient(host: "10.7.0.1", pairingFileURL: pairingFile)
+        do {
+            try await misagent.connect()
+            AppLogger.shared.log("✅ Misagent 已連接")
+        } catch {
+            AppLogger.shared.log("❌ Misagent 連接失敗: \(error.localizedDescription)")
+            refreshProgress = "連接設備失敗"
+            return
+        }
+        
+        // 5. 對每個 App：拉新 profile → 裝到設備
         for app in toRefresh {
             refreshProgress = "正在刷新 \(app.name)..."
             AppLogger.shared.log("正在刷新: \(app.name) (\(app.bundleId))")
             
-            // 真實刷新需要：
-            // 1. 該 App 的原始 IPA 文件（簽名時需要）
-            // 2. 有效的 Apple ID 登入 + 證書
-            // 3. 調用 SigningFlowView 的簽名邏輯重簽
-            // 4. 調用 AppInstaller 重裝
-            //
-            // 目前 IPA 文件未持久化，無法自動重簽。
-            // 需要先在安裝時保存 IPA，到時才能自動刷新。
-            
-            AppLogger.shared.log("⚠️ \(app.name): 需要原始 IPA 文件才能重簽，當前未保存，跳過")
-            // 不修改 expiresDate，不假裝成功
+            do {
+                // 找或創建 App ID
+                let appID = try await PaxSigningService.shared.findOrCreateAppID(
+                    bundleIdentifier: app.bundleId,
+                    name: app.name,
+                    for: team
+                )
+                AppLogger.shared.log("  App ID: \(appID.name)")
+                
+                // 下載新的 provisioning profile
+                let profile = try await PaxSigningService.shared.provisioningProfile(for: appID, team: team)
+                AppLogger.shared.log("  新 profile 已下載 (\(profile.data.count) bytes)")
+                
+                // 裝到設備（這就是刷新的核心，3-5 秒）
+                try await misagent.installProfile(profile.data)
+                AppLogger.shared.log("  ✅ Profile 已安裝到設備")
+                
+                // 更新過期時間
+                if let index = installedApps.firstIndex(where: { $0.id == app.id }) {
+                    installedApps[index].expiresDate = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
+                    AppLogger.shared.log("  ✅ \(app.name) 刷新完成，有效期延長7天")
+                }
+            } catch {
+                AppLogger.shared.log("  ❌ \(app.name) 刷新失敗: \(error.localizedDescription)")
+                // 繼續下一個，不中斷
+            }
         }
         
+        misagent.disconnect()
         save()
-        refreshProgress = "刷新完成（部分跳過，需 IPA 文件）"
-        AppLogger.shared.log("刷新完成：需要 IPA 文件才能真正重簽")
+        refreshProgress = "刷新完成"
+        AppLogger.shared.log("全部刷新完成")
+    }
+    
+    /// 查找配對檔
+    private func findPairingFile() -> URL? {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        // 1. 先找 PairingFiles/PairingFile_Lockdown.plist
+        let preferred = docs.appendingPathComponent("PairingFiles/PairingFile_Lockdown.plist")
+        if FileManager.default.fileExists(atPath: preferred.path) {
+            return preferred
+        }
+        // 2. 找 PairingFiles/ 下第一個 .plist
+        let dir = docs.appendingPathComponent("PairingFiles", isDirectory: true)
+        if let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            return files.first(where: { $0.pathExtension == "plist" })
+        }
+        return nil
     }
     
     /// 檢查並自動刷新（App 啟動時調用）
