@@ -3,12 +3,20 @@ options:
   bundleIdPrefix: com.eili
   deploymentTarget:
     iOS: "15.0"
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation
+    version: 0.9.19
 targets:
   EiliStore:
     type: application
     platform: iOS
     sources:
       - Sources/EiliStore
+    dependencies:
+      - package: ZIPFoundation
+      - framework: Libraries/IDeviceFFI.xcframework
+        embed: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.eili.eilistore
@@ -20,6 +28,8 @@ targets:
       properties:
         CFBundleDisplayName: EiliStore
         UILaunchStoryboardName: LaunchScreen
+        UIBackgroundModes:
+          - audio
 schemes:
   EiliStore:
     build:
