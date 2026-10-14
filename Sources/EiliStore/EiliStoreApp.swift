@@ -88,6 +88,17 @@ struct MyAppsView: View {
                         ForEach(manager.installedApps) { app in
                             AppRowView(app: app)
                         }
+                        .onDelete { indexSet in
+                            for index in indexSet {
+                                let app = manager.installedApps[index]
+                                // 刪除保存的 IPA 文件
+                                if let ipaPath = app.ipaPath {
+                                    try? FileManager.default.removeItem(atPath: ipaPath)
+                                    AppLogger.shared.log("已刪除 IPA: \(ipaPath)")
+                                }
+                                manager.removeApp(bundleId: app.bundleId)
+                            }
+                        }
                     }
                     
                     // App ID 剩餘
