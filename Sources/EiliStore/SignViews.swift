@@ -15,7 +15,7 @@ struct SignInView: View {
     
     var body: some View {
         Form {
-            Section(header: Text("Apple ID")) {
+            Section("Apple ID") {
                 TextField("Apple ID", text: $appleID)
                     .textContentType(.emailAddress)
                     .autocapitalization(.none)
@@ -65,7 +65,7 @@ struct SignInView: View {
                 }
             }
             
-            Section(header: Text("說明")) {
+            Section("說明") {
                 Text("登入後可用於簽名 IPA。帳號信息保存在 Keychain。")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -154,7 +154,7 @@ struct SignIPAView: View {
     
     var body: some View {
         List {
-            Section(header: Text("IPA 文件")) {
+            Section("IPA 文件") {
                 Button("選擇 IPA") {}
                 if let ipa = selectedIPA {
                     Text(ipa)
@@ -163,7 +163,7 @@ struct SignIPAView: View {
                 }
             }
             
-            Section(header: Text("簽名")) {
+            Section("簽名") {
                 Button(action: {}) {
                     HStack {
                         Spacer()
@@ -176,7 +176,7 @@ struct SignIPAView: View {
             }
             
             if !progress.isEmpty {
-                Section(header: Text("進度")) {
+                Section("進度") {
                     Text(progress)
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -199,7 +199,7 @@ struct CertificateView: View {
     
     var body: some View {
         List {
-            Section(header: Text("Team")) {
+            Section("Team") {
                 if teams.isEmpty {
                     Text("加載中...")
                         .foregroundColor(.secondary)
@@ -215,7 +215,7 @@ struct CertificateView: View {
                 }
             }
             
-            Section(header: Text("證書")) {
+            Section("證書") {
                 if isLoading {
                     ProgressView()
                 } else if certificates.isEmpty {
@@ -250,7 +250,7 @@ struct CertificateView: View {
                 .disabled(selectedTeam == nil)
             }
             
-            Section(header: Text("說明")) {
+            Section("說明") {
                 Text("證書用於簽名 IPA。免費帳號最多 3 個證書。")
                     .font(.caption)
                     .foregroundColor(.secondary)
