@@ -10,8 +10,10 @@ struct InstalledApp: Identifiable, Codable {
     var installedDate: Date
     var expiresDate: Date
     var iconName: String
+    /// 保存的 IPA 文件路徑（用於自動重簽）
+    var ipaPath: String?
     
-    init(id: UUID = UUID(), name: String, bundleId: String, team: String, installedDate: Date = Date(), expiresDate: Date, iconName: String = "app.fill") {
+    init(id: UUID = UUID(), name: String, bundleId: String, team: String, installedDate: Date = Date(), expiresDate: Date, iconName: String = "app.fill", ipaPath: String? = nil) {
         self.id = id
         self.name = name
         self.bundleId = bundleId
@@ -19,6 +21,7 @@ struct InstalledApp: Identifiable, Codable {
         self.installedDate = installedDate
         self.expiresDate = expiresDate
         self.iconName = iconName
+        self.ipaPath = ipaPath
     }
     
     /// 剩餘天數
