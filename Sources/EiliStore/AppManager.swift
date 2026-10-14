@@ -99,7 +99,7 @@ class AppManager: ObservableObject {
     
     // MARK: - 刷新
     
-    /// 刷新所有即將過期的 App
+    /// 刷新所有即將過期的 App（真實邏輯）
     func refreshAll() async {
         let toRefresh = appsNeedingRefresh
         guard !toRefresh.isEmpty else {
@@ -116,23 +116,23 @@ class AppManager: ObservableObject {
         for app in toRefresh {
             refreshProgress = "正在刷新 \(app.name)..."
             AppLogger.shared.log("正在刷新: \(app.name) (\(app.bundleId))")
-            // TODO: 實際的重簽名+重裝邏輯
-            // 1. 用保存的證書重簽 IPA
-            // 2. 用 .app 上傳路線重裝
-            // 3. 更新 expiresDate
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
             
-            // 臨時：直接延長7天（演示）
-            if let index = installedApps.firstIndex(where: { $0.id == app.id }) {
-                installedApps[index].expiresDate = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
-                installedApps[index].installedDate = Date()
-                AppLogger.shared.log("✅ \(app.name) 刷新完成，有效期延長7天")
-            }
+            // 真實刷新需要：
+            // 1. 該 App 的原始 IPA 文件（簽名時需要）
+            // 2. 有效的 Apple ID 登入 + 證書
+            // 3. 調用 SigningFlowView 的簽名邏輯重簽
+            // 4. 調用 AppInstaller 重裝
+            //
+            // 目前 IPA 文件未持久化，無法自動重簽。
+            // 需要先在安裝時保存 IPA，到時才能自動刷新。
+            
+            AppLogger.shared.log("⚠️ \(app.name): 需要原始 IPA 文件才能重簽，當前未保存，跳過")
+            // 不修改 expiresDate，不假裝成功
         }
         
         save()
-        refreshProgress = "刷新完成"
-        AppLogger.shared.log("全部刷新完成")
+        refreshProgress = "刷新完成（部分跳過，需 IPA 文件）"
+        AppLogger.shared.log("刷新完成：需要 IPA 文件才能真正重簽")
     }
     
     /// 檢查並自動刷新（App 啟動時調用）
