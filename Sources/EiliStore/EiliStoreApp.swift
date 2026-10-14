@@ -191,16 +191,7 @@ struct AppRowView: View {
     }
 }
 
-// MARK: - 軟體源（佔位）
-struct SourcesView: View {
-    var body: some View {
-        NavigationView {
-            Text("軟體源（待實作）")
-                .foregroundColor(.secondary)
-                .navigationTitle("軟體源")
-        }
-    }
-}
+// MARK: - 軟體源（已移至 SourcesView.swift）
 
 // MARK: - 簽名
 struct SignInstallView: View {
