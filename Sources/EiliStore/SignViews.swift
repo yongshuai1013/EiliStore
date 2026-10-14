@@ -199,48 +199,8 @@ struct CertificateView: View {
     
     var body: some View {
         List {
-            Section("Team") {
-                if teams.isEmpty {
-                    Text("加載中...")
-                        .foregroundColor(.secondary)
-                } else {
-                    ForEach(teams, id: \.teamId) { team in
-                        Button(action: {
-                            selectedTeam = team
-                            loadCertificates()
-                        }) {
-                            HStack {
-                                Text(team.name)
-                                Spacer()
-                                if selectedTeam?.teamId == team.teamId {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(.teal)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            Section("證書") {
-                if isLoading {
-                    ProgressView()
-                } else if certificates.isEmpty {
-                    Text("暫無證書")
-                        .foregroundColor(.secondary)
-                } else {
-                    ForEach(certificates, id: \.serialNumber) { cert in
-                        VStack(alignment: .leading) {
-                            Text(cert.name ?? "未知")
-                                .font(.headline)
-                            Text("序列號: \(cert.serialNumber)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-            }
-            
+            teamSection
+            certSection
             if let error = errorMessage {
                 Section {
                     Text(error)
@@ -248,25 +208,81 @@ struct CertificateView: View {
                         .font(.caption)
                 }
             }
-            
-            Section {
-                Button("創建證書") {
-                    createCertificate()
-                }
-                .foregroundColor(.teal)
-                .disabled(selectedTeam == nil)
-            }
-            
-            Section("說明") {
-                Text("證書用於簽名 IPA。免費帳號最多 3 個證書。")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+            actionSection
+            infoSection
         }
         .navigationTitle("證書管理")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             loadTeams()
+        }
+    }
+    
+    private var teamSection: some View {
+        Section("Team") {
+            if teams.isEmpty {
+                Text("加載中...")
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(teams, id: \.teamId) { team in
+                    teamRow(team)
+                }
+            }
+        }
+    }
+    
+    private func teamRow(_ team: SideSign.Team) -> some View {
+        Button(action: {
+            selectedTeam = team
+            loadCertificates()
+        }) {
+            HStack {
+                Text(team.name)
+                Spacer()
+                if selectedTeam?.teamId == team.teamId {
+                    Image(systemName: "checkmark")
+                        .foregroundColor(.teal)
+                }
+            }
+        }
+    }
+    
+    private var certSection: some View {
+        Section("證書") {
+            if isLoading {
+                ProgressView()
+            } else if certificates.isEmpty {
+                Text("暫無證書")
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(certificates, id: \.serialNumber) { cert in
+                    VStack(alignment: .leading) {
+                        Text(cert.name ?? "未知")
+                            .font(.headline)
+                        Text("序列號: \(cert.serialNumber)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+    }
+    
+    private var actionSection: some View {
+        Section {
+            Button("創建證書") {
+                createCertificate()
+            }
+            .foregroundColor(.teal)
+            .disabled(selectedTeam == nil)
+        }
+    }
+    
+    private var infoSection: some View {
+        Section("說明") {
+            Text("證書用於簽名 IPA。免費帳號最多 3 個證書。")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
     }
     
