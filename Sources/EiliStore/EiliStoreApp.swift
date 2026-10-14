@@ -197,7 +197,7 @@ struct SignInstallView: View {
         NavigationView {
             List {
                 Section(header: Text("簽名")) {
-                    NavigationLink(destination: SignIPAView()) {
+                    NavigationLink(destination: SigningFlowView()) {
                         Text("簽名 IPA")
                     }
                     NavigationLink(destination: SignInView()) {
