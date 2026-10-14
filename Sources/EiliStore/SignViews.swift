@@ -204,13 +204,20 @@ struct CertificateView: View {
                     Text("加載中...")
                         .foregroundColor(.secondary)
                 } else {
-                    Picker("選擇 Team", selection: $selectedTeam) {
-                        ForEach(teams, id: \.teamId) { team in
-                            Text(team.name).tag(team as SideSign.Team?)
+                    ForEach(teams, id: \.teamId) { team in
+                        Button(action: {
+                            selectedTeam = team
+                            loadCertificates()
+                        }) {
+                            HStack {
+                                Text(team.name)
+                                Spacer()
+                                if selectedTeam?.teamId == team.teamId {
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(.teal)
+                                }
+                            }
                         }
-                    }
-                    .onChange(of: selectedTeam) { _ in
-                        loadCertificates()
                     }
                 }
             }
