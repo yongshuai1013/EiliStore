@@ -197,10 +197,10 @@ struct SignInstallView: View {
         NavigationView {
             List {
                 Section(header: Text("簽名")) {
-                    NavigationLink(destination: Text("簽名 IPA（待實作）")) {
+                    NavigationLink(destination: SignIPAView()) {
                         Text("簽名 IPA")
                     }
-                    NavigationLink(destination: Text("Apple ID 登入（待實作）")) {
+                    NavigationLink(destination: SignInView()) {
                         Text("Apple ID 登入")
                     }
                 }
@@ -222,7 +222,7 @@ struct SettingsView: View {
         NavigationView {
             List {
                 Section(header: Text("證書")) {
-                    NavigationLink(destination: Text("證書管理（待實作）")) {
+                    NavigationLink(destination: CertificateView()) {
                         Text("證書管理")
                     }
                 }
