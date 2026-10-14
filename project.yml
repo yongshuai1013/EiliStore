@@ -7,6 +7,12 @@ packages:
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation
     version: 0.9.19
+  SideSign:
+    url: https://github.com/yongshuai1013/SideSign.git
+    revision: da194c60f5366394fb715354391952dd9ca89ac4
+  CodeSignKit:
+    url: https://github.com/mahee96/CodeSignKit.git
+    branch: main
 targets:
   EiliStore:
     type: application
@@ -15,6 +21,8 @@ targets:
       - Sources/EiliStore
     dependencies:
       - package: ZIPFoundation
+      - package: SideSign
+      - package: CodeSignKit
       - framework: Libraries/IDeviceFFI.xcframework
         embed: false
     settings:
