@@ -274,9 +274,6 @@ struct SettingsView: View {
                 }
                 
                 Section(header: Text("調試")) {
-                    NavigationLink(destination: LogView()) {
-                        Text("日誌")
-                    }
                     NavigationLink(destination: AnisetteServerView()) {
                         Text("Anisette 伺服器")
                     }
@@ -297,6 +294,9 @@ struct SettingsView: View {
                         Spacer()
                         Text("1.0")
                             .foregroundColor(.secondary)
+                    }
+                    NavigationLink(destination: LogView()) {
+                        Text("日誌")
                     }
                 }
             }
