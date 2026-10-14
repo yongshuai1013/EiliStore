@@ -202,9 +202,6 @@ struct SignInstallView: View {
                     NavigationLink(destination: SigningFlowView()) {
                         Text("簽名 IPA")
                     }
-                    NavigationLink(destination: SignInView()) {
-                        Text("Apple ID 登入")
-                    }
                 }
                 
                 Section(header: Text("安裝")) {
@@ -223,6 +220,12 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             List {
+                Section(header: Text("帳戶")) {
+                    NavigationLink(destination: SignInView()) {
+                        Text("Apple ID 登入")
+                    }
+                }
+                
                 Section(header: Text("證書")) {
                     NavigationLink(destination: CertificateView()) {
                         Text("證書管理")
