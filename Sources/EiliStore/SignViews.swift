@@ -74,9 +74,11 @@ struct SignInView: View {
         .navigationTitle("Apple ID 登入")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            if KeychainHelper.loadString(forKey: "paxstore.auth.session") != nil {
+            if KeychainHelper.loadString(forKey: "paxstore.auth.session") != nil,
+               let savedID = KeychainHelper.loadString(forKey: "paxstore.apple.id"),
+               !savedID.isEmpty {
                 isLoggedIn = true
-                appleID = KeychainHelper.loadString(forKey: "paxstore.apple.id") ?? ""
+                appleID = savedID
             }
         }
         .alert("輸入驗證碼", isPresented: $show2FAPrompt) {
