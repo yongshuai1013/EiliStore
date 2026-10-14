@@ -193,9 +193,6 @@ struct SourcesView: View {
 
 // MARK: - 簽名
 struct SignInstallView: View {
-    @State private var appleID: String = ""
-    @State private var isLoggedIn: Bool = false
-    
     var body: some View {
         NavigationView {
             List {
@@ -203,14 +200,8 @@ struct SignInstallView: View {
                     NavigationLink(destination: Text("簽名 IPA（待實作）")) {
                         Text("簽名 IPA")
                     }
-                    NavigationLink(destination: LoginView(appleID: $appleID, isLoggedIn: $isLoggedIn)) {
-                        HStack {
-                            Text("Apple ID 登入")
-                            Spacer()
-                            Text(isLoggedIn ? appleID : "未登入")
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-                        }
+                    NavigationLink(destination: Text("Apple ID 登入（待實作）")) {
+                        Text("Apple ID 登入")
                     }
                 }
                 
