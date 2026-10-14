@@ -239,6 +239,9 @@ struct SettingsView: View {
                     NavigationLink(destination: ConnectionConfigView()) {
                         Text("連接配置")
                     }
+                    NavigationLink(destination: PairingFileManagementView()) {
+                        Text("配對檔管理")
+                    }
                 }
                 
                 Section(header: Text("關於")) {
