@@ -224,6 +224,12 @@ struct SettingsView: View {
                     }
                 }
                 
+                Section(header: Text("調試")) {
+                    NavigationLink(destination: LogView()) {
+                        Text("日誌")
+                    }
+                }
+                
                 Section(header: Text("關於")) {
                     HStack {
                         Text("版本")
