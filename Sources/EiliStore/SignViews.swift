@@ -1,4 +1,5 @@
 import SwiftUI
+import SideSign
 
 /// Apple ID 登入頁
 struct SignInView: View {
@@ -189,13 +190,31 @@ struct SignIPAView: View {
 
 /// 證書管理頁
 struct CertificateView: View {
-    @State private var certificates: [String] = []
+    @State private var teams: [SideSign.Team] = []
+    @State private var selectedTeam: SideSign.Team?
+    @State private var certificates: [SideSign.X509Certificate] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
     @StateObject private var logger = AppLogger.shared
     
     var body: some View {
         List {
+            Section(header: Text("Team")) {
+                if teams.isEmpty {
+                    Text("加載中...")
+                        .foregroundColor(.secondary)
+                } else {
+                    Picker("選擇 Team", selection: $selectedTeam) {
+                        ForEach(teams, id: \.teamId) { team in
+                            Text(team.name).tag(team as SideSign.Team?)
+                        }
+                    }
+                    .onChange(of: selectedTeam) { _ in
+                        loadCertificates()
+                    }
+                }
+            }
+            
             Section(header: Text("證書")) {
                 if isLoading {
                     ProgressView()
@@ -203,9 +222,14 @@ struct CertificateView: View {
                     Text("暫無證書")
                         .foregroundColor(.secondary)
                 } else {
-                    ForEach(certificates, id: \.self) { cert in
-                        Text(cert)
-                            .font(.caption)
+                    ForEach(certificates, id: \.serialNumber) { cert in
+                        VStack(alignment: .leading) {
+                            Text(cert.name ?? "未知")
+                                .font(.headline)
+                            Text("序列號: \(cert.serialNumber)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
             }
@@ -219,15 +243,11 @@ struct CertificateView: View {
             }
             
             Section {
-                Button("刷新證書列表") {
-                    loadCertificates()
-                }
-                .foregroundColor(.teal)
-                
                 Button("創建證書") {
                     createCertificate()
                 }
                 .foregroundColor(.teal)
+                .disabled(selectedTeam == nil)
             }
             
             Section(header: Text("說明")) {
@@ -239,34 +259,70 @@ struct CertificateView: View {
         .navigationTitle("證書管理")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            loadCertificates()
+            loadTeams()
+        }
+    }
+    
+    private func loadTeams() {
+        Task {
+            do {
+                let fetched = try await PaxSigningService.shared.fetchTeams()
+                await MainActor.run {
+                    teams = fetched
+                    if let first = fetched.first {
+                        selectedTeam = first
+                        loadCertificates()
+                    }
+                    logger.log("加載 \(fetched.count) 個 Team")
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "加載 Team 失敗: \(error.localizedDescription)"
+                    logger.log("❌ 加載 Team 失敗: \(error.localizedDescription)")
+                }
+            }
         }
     }
     
     private func loadCertificates() {
+        guard let team = selectedTeam else { return }
         isLoading = true
         errorMessage = nil
         
         Task {
             do {
-                // TODO: 需要先選擇 team，現在簡化
-                // let teams = try await PaxSigningService.shared.fetchTeams()
-                // 實際需要用戶先登入並選擇 team
+                let certs = try await PaxSigningService.shared.fetchCertificates(for: team)
                 await MainActor.run {
+                    certificates = certs
                     isLoading = false
-                    logger.log("證書列表加載（待實現 team 選擇）")
+                    logger.log("加載 \(certs.count) 個證書")
                 }
             } catch {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
                     isLoading = false
+                    logger.log("❌ 加載證書失敗: \(error.localizedDescription)")
                 }
             }
         }
     }
     
     private func createCertificate() {
-        logger.log("創建證書（待實現）")
-        errorMessage = "需要先登入並選擇 Team"
+        guard let team = selectedTeam else { return }
+        
+        Task {
+            do {
+                logger.log("正在創建證書...")
+                let keyStore = try await PaxSigningService.shared.createCertificate(for: team)
+                PaxSigningService.shared.saveActiveCertificate(keyStore)
+                logger.log("✅ 證書創建成功，已設為活動證書")
+                loadCertificates()
+            } catch {
+                await MainActor.run {
+                    errorMessage = "創建失敗: \(error.localizedDescription)"
+                }
+                logger.log("❌ 創建證書失敗: \(error.localizedDescription)")
+            }
+        }
     }
 }
