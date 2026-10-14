@@ -213,6 +213,9 @@ class AppManager: ObservableObject {
     
     /// 檢查並自動刷新（App 啟動時調用）
     func checkAndAutoRefresh() async {
+        // 1. 確保 EiliStore 自己在列表裡（用於自刷新）
+        ensureSelfRegistered()
+        
         AppLogger.shared.log("App 啟動，檢查 App 過期狀態...")
         if hasUpdates {
             AppLogger.shared.log("發現 \(appsNeedingRefresh.count) 個 App 需要刷新")
@@ -220,5 +223,50 @@ class AppManager: ObservableObject {
         } else {
             AppLogger.shared.log("所有 App 簽名有效，無需刷新")
         }
+    }
+    
+    /// 確保 EiliStore 自己在 App 列表裡（用於自刷新）
+    private func ensureSelfRegistered() {
+        let selfBundleId = Bundle.main.bundleIdentifier ?? "com.eili.eilistore"
+        
+        // 如果已經在列表裡，不重複添加
+        if installedApps.contains(where: { $0.bundleId == selfBundleId }) {
+            return
+        }
+        
+        // 嘗試從 embedded provisioning profile 讀真實過期時間
+        var expiresDate = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
+        if let profilePath = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),
+           let profileData = try? Data(contentsOf: URL(fileURLWithPath: profilePath)),
+           let expiry = extractExpiry(from: profileData) {
+            expiresDate = expiry
+            AppLogger.shared.log("從 profile 讀到 EiliStore 過期時間: \(expiry)")
+        }
+        
+        let selfApp = InstalledApp(
+            name: "EiliStore",
+            bundleId: selfBundleId,
+            team: "自己",
+            expiresDate: expiresDate,
+            iconName: "app.fill"
+        )
+        installedApps.append(selfApp)
+        save()
+        AppLogger.shared.log("已登記 EiliStore 自己到刷新列表")
+    }
+    
+    /// 從 mobileprovision 提取過期時間
+    private func extractExpiry(from data: Data) -> Date? {
+        // mobileprovision 是 CMS 簽名的 plist，找 ExpirationDate
+        // 簡化：轉成字符串搜索
+        guard let str = String(data: data, encoding: .ascii) else { return nil }
+        // 找 <key>ExpirationDate</key> 後面的 <date>
+        guard let keyRange = str.range(of: "<key>ExpirationDate</key>") else { return nil }
+        let afterKey = str[keyRange.upperBound...]
+        guard let dateStart = afterKey.range(of: "<date>"),
+              let dateEnd = afterKey.range(of: "</date>") else { return nil }
+        let dateStr = String(afterKey[dateStart.upperBound..<dateEnd.lowerBound])
+        let formatter = ISO8601DateFormatter()
+        return formatter.date(from: dateStr)
     }
 }
