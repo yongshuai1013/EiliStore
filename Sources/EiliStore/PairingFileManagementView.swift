@@ -233,11 +233,17 @@ struct PairingFileManagementView: View {
               let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any] else {
             return "無法解析 plist"
         }
-        // 簡化：只檢查 PEM 格式，不做完整 PKCS#8 驗證（需要 LockdownClient）
         let hostKeyPEM = (plist["HostPrivateKey"] as? Data).flatMap({ String(data: $0, encoding: .utf8) })
             ?? (plist["HostPrivateKey"] as? String)
-        guard let pem = hostKeyPEM, pem.contains("BEGIN") && pem.contains("PRIVATE KEY") else {
+        guard let pem = hostKeyPEM, let der = LockdownClient.derFromPEM(pem) else {
             return "HostPrivateKey 不是有效的 PEM"
+        }
+        var diag: [String] = []
+        guard LockdownClient.validatePKCS8(der, diag: &diag) != nil else {
+            return "PKCS#8 結構無效：" + diag.joined(separator: "；")
+        }
+        if diag.contains(where: { $0.contains("p×q≠n") }) {
+            return "私鑰參數數學驗算失敗（p×q≠n），文件在複製時已損壞"
         }
         return nil
     }
