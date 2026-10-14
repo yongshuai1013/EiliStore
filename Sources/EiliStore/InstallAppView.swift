@@ -82,6 +82,11 @@ struct InstallAppView: View {
         
         Task {
             do {
+                // 1. 先把 IPA 存到永久位置（用於以後自動重簽）
+                let savedIPA = try saveIPAForFuture(ipaURL)
+                logger.log("IPA 已保存: \(savedIPA.lastPathComponent)")
+                
+                // 2. 安裝
                 try await AppInstaller.shared.install(ipaURL: ipaURL) { msg, pct in
                     Task { @MainActor in
                         progressMessage = msg
@@ -89,12 +94,24 @@ struct InstallAppView: View {
                     }
                     logger.log("[\(pct)%] \(msg)")
                 }
+                
+                // 3. 登記到 AppManager（帶 IPA 路徑）
+                // TODO: 需要從 IPA 解析真實的 name/bundleId，現在用文件名
+                let appName = ipaURL.deletingPathExtension().lastPathComponent
+                let newApp = InstalledApp(
+                    name: appName,
+                    bundleId: "unknown.\(appName)", // TODO: 從 IPA 解析
+                    team: "未知",
+                    expiresDate: Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date(),
+                    ipaPath: savedIPA.path
+                )
                 await MainActor.run {
+                    AppManager.shared.addApp(newApp)
                     progressMessage = "安裝完成"
                     progressPercent = 100
                     isInstalling = false
                 }
-                logger.log("✅ 安裝完成: \(ipaURL.lastPathComponent)")
+                logger.log("✅ 安裝完成: \(appName)，已登記到 App 列表")
             } catch {
                 await MainActor.run {
                     progressMessage = "安裝失敗: \(error.localizedDescription)"
@@ -103,5 +120,18 @@ struct InstallAppView: View {
                 logger.log("❌ 安裝失敗: \(error.localizedDescription)")
             }
         }
+    }
+    
+    /// 把 IPA 存到 Documents/IPAs/ 永久保存
+    private func saveIPAForFuture(_ url: URL) throws -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let ipaDir = docs.appendingPathComponent("IPAs", isDirectory: true)
+        try FileManager.default.createDirectory(at: ipaDir, withIntermediateDirectories: true)
+        
+        let dest = ipaDir.appendingPathComponent(url.lastPathComponent)
+        // 如果已存在，先刪
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.copyItem(at: url, to: dest)
+        return dest
     }
 }
