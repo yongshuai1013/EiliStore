@@ -87,17 +87,37 @@ struct SignInView: View {
         
         Task {
             do {
-                // TODO: 實際調用 PaxAuthService 登入
-                // 這裡先做個佔位，實際需要處理 2FA
-                try await Task.sleep(nanoseconds: 2_000_000_000)
+                let authService = PaxAuthService.shared
+                let codeProvider = TwoFACodeProvider()
                 
-                // 臨時：保存到 Keychain（演示）
-                KeychainHelper.saveString(appleID, forKey: "paxstore.apple.id")
+                // 設置日誌回調
+                codeProvider.onLog = { msg in
+                    AppLogger.shared.log("[登入] \(msg)")
+                }
                 
-                await MainActor.run {
-                    isLoggedIn = true
-                    isLoading = false
-                    logger.log("✅ 登入成功: \(appleID)")
+                // TODO: 需要 UI 來輸入 2FA 驗證碼
+                // 現在先嘗試登入，如果需要 2FA 會等待輸入
+                // 實際使用時需要彈出輸入框讓用戶輸入驗證碼
+                
+                let success = try await authService.login(
+                    appleID: appleID,
+                    password: password,
+                    codeProvider: codeProvider
+                )
+                
+                if success {
+                    KeychainHelper.saveString(appleID, forKey: "paxstore.apple.id")
+                    await MainActor.run {
+                        isLoggedIn = true
+                        isLoading = false
+                        logger.log("✅ 登入成功: \(appleID)")
+                    }
+                } else {
+                    await MainActor.run {
+                        errorMessage = "登入失敗"
+                        isLoading = false
+                        logger.log("❌ 登入失敗")
+                    }
                 }
             } catch {
                 await MainActor.run {
