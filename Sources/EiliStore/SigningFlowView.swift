@@ -119,9 +119,10 @@ struct SigningFlowView: View {
                     .sheet(isPresented: $showingShare) {
                         ShareSheet(url: signedURL)
                     }
-                    NavigationLink(destination: InstallView(initialIPAURL: signedURL)) {
-                        Text("直接安裝此 IPA")
-                    }
+                    // 簽完後可去「安裝 App」頁手動安裝
+                    Text("簽名完成，請到「安裝 App」頁安裝")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             }
         }
