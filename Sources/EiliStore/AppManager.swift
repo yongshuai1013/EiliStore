@@ -76,9 +76,13 @@ class AppManager: ObservableObject {
         installedApps.removeAll { $0.bundleId == app.bundleId }
         installedApps.append(app)
         save()
+        AppLogger.shared.log("已添加 App: \(app.name) (\(app.bundleId))")
     }
     
     func removeApp(bundleId: String) {
+        if let app = installedApps.first(where: { $0.bundleId == bundleId }) {
+            AppLogger.shared.log("已移除 App: \(app.name)")
+        }
         installedApps.removeAll { $0.bundleId == bundleId }
         save()
     }
@@ -100,14 +104,18 @@ class AppManager: ObservableObject {
         let toRefresh = appsNeedingRefresh
         guard !toRefresh.isEmpty else {
             refreshProgress = "沒有需要刷新的 App"
+            AppLogger.shared.log("刷新檢查：沒有需要刷新的 App")
             return
         }
         
         isRefreshing = true
         defer { isRefreshing = false }
         
+        AppLogger.shared.log("開始刷新 \(toRefresh.count) 個 App...")
+        
         for app in toRefresh {
             refreshProgress = "正在刷新 \(app.name)..."
+            AppLogger.shared.log("正在刷新: \(app.name) (\(app.bundleId))")
             // TODO: 實際的重簽名+重裝邏輯
             // 1. 用保存的證書重簽 IPA
             // 2. 用 .app 上傳路線重裝
@@ -118,17 +126,23 @@ class AppManager: ObservableObject {
             if let index = installedApps.firstIndex(where: { $0.id == app.id }) {
                 installedApps[index].expiresDate = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
                 installedApps[index].installedDate = Date()
+                AppLogger.shared.log("✅ \(app.name) 刷新完成，有效期延長7天")
             }
         }
         
         save()
         refreshProgress = "刷新完成"
+        AppLogger.shared.log("全部刷新完成")
     }
     
     /// 檢查並自動刷新（App 啟動時調用）
     func checkAndAutoRefresh() async {
+        AppLogger.shared.log("App 啟動，檢查 App 過期狀態...")
         if hasUpdates {
+            AppLogger.shared.log("發現 \(appsNeedingRefresh.count) 個 App 需要刷新")
             await refreshAll()
+        } else {
+            AppLogger.shared.log("所有 App 簽名有效，無需刷新")
         }
     }
 }
