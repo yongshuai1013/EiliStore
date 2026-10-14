@@ -7,7 +7,10 @@ struct SignInView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var isLoggedIn = false
+    @State private var show2FAPrompt = false
+    @State private var twoFACode = ""
     @StateObject private var logger = AppLogger.shared
+    @State private var codeProvider: TwoFACodeProvider?
     
     var body: some View {
         Form {
@@ -40,7 +43,6 @@ struct SignInView: View {
                         Spacer()
                     }
                     Button("登出", role: .destructive) {
-                        // TODO: 清除 Keychain
                         isLoggedIn = false
                         appleID = ""
                         password = ""
@@ -71,12 +73,23 @@ struct SignInView: View {
         .navigationTitle("Apple ID 登入")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // 檢查是否已登入
             if KeychainHelper.loadString(forKey: "paxstore.auth.session") != nil {
-                // 簡化：只檢查有沒有存過，實際應該驗證 session 有效性
                 isLoggedIn = true
                 appleID = KeychainHelper.loadString(forKey: "paxstore.apple.id") ?? ""
             }
+        }
+        .alert("輸入驗證碼", isPresented: $show2FAPrompt) {
+            TextField("6位驗證碼", text: $twoFACode)
+                .keyboardType(.numberPad)
+            Button("提交") {
+                codeProvider?.submitCode(twoFACode)
+                twoFACode = ""
+            }
+            Button("取消", role: .cancel) {
+                // TODO: 取消登入
+            }
+        } message: {
+            Text("請輸入發送到您設備的驗證碼")
         }
     }
     
@@ -88,21 +101,23 @@ struct SignInView: View {
         Task {
             do {
                 let authService = PaxAuthService.shared
-                let codeProvider = TwoFACodeProvider()
+                let provider = TwoFACodeProvider()
                 
-                // 設置日誌回調
-                codeProvider.onLog = { msg in
+                // 設置日誌和 2FA 回調
+                provider.onLog = { msg in
                     AppLogger.shared.log("[登入] \(msg)")
                 }
-                
-                // TODO: 需要 UI 來輸入 2FA 驗證碼
-                // 現在先嘗試登入，如果需要 2FA 會等待輸入
-                // 實際使用時需要彈出輸入框讓用戶輸入驗證碼
+                provider.onCodeRequired = { [self] in
+                    Task { @MainActor in
+                        self.codeProvider = provider
+                        self.show2FAPrompt = true
+                    }
+                }
                 
                 let success = try await authService.login(
                     appleID: appleID,
                     password: password,
-                    codeProvider: codeProvider
+                    codeProvider: provider
                 )
                 
                 if success {
