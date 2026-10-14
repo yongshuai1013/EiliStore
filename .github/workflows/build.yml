@@ -27,10 +27,10 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
           mkdir -p build/Payload
           cp -r build/EiliStore.xcarchive/Products/Applications/EiliStore.app build/Payload/
-          cd build && zip -r EiliStore-ipa.zip Payload/ && cd ..
+          cd build && zip -r EiliStore.ipa Payload/ && cd ..
           
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: EiliStore-ipa
-          path: build/EiliStore-ipa.zip
+          path: build/EiliStore.ipa
