@@ -128,6 +128,7 @@ struct MyAppsView: View {
                                 Spacer()
                                 Button(manager.enableExternalAutoRefresh ? "自動刷新：開" : "自動刷新：關") {
                                     manager.enableExternalAutoRefresh.toggle()
+                                    UserDefaults.standard.set(manager.enableExternalAutoRefresh, forKey: "enableExternalAutoRefresh")
                                 }
                                 .font(.caption)
                                 .foregroundColor(.teal)
