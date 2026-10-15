@@ -299,12 +299,6 @@ struct SettingsView: View {
             }
         }
     }
-}
-
-struct MainTabView_Previews: PreviewProvider {
-    static var previews: some View {
-        MainTabView()
-    }
 
     private func findPairingFileURL() -> URL? {
         let fm = FileManager.default
@@ -312,6 +306,11 @@ struct MainTabView_Previews: PreviewProvider {
         let dir = docs.appendingPathComponent("PairingFiles")
         guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return nil }
         return files.first(where: { $0.pathExtension == "plist" })
+    }
+}
+struct MainTabView_Previews: PreviewProvider {
+    static var previews: some View {
+        MainTabView()
     }
 
 }
