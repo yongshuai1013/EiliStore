@@ -187,11 +187,7 @@ struct MyAppsView: View {
                                 // 到期天數（跟已安裝一樣）
                                 if let exp = manager.externalExpiry[bid] {
                                     let days = Calendar.current.dateComponents([.day], from: Date(), to: exp).day ?? 0
-                                    VStack(alignment: .trailing, spacing: 4) {
-                                        Text("剩餘")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                        ZStack {
+                                    ZStack {
                                             let extBid = bid
                                             let isRefreshing = currentlyRefreshingBundleId == extBid
                                             let bgColor = expiryColor(days: days)
@@ -215,8 +211,7 @@ struct MyAppsView: View {
                                                 .padding(.horizontal, 14)
                                                 .padding(.vertical, 10.5)
                                                 .frame(minWidth: 77, minHeight: 35)
-                                        }
-                                    }
+                                        }                                    }
                                     .padding(.vertical, 8)
                                     .padding(.horizontal, 12)
                                     .background((days <= 1 ? Color.red : Color.teal).opacity(0.15))
