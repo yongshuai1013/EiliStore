@@ -97,7 +97,7 @@ class AppManager: ObservableObject {
                 updated = true
             }
             if updated {
-                saveApps()
+                save()
             }
         } catch {
             // 靜默失敗，保持本地數據
