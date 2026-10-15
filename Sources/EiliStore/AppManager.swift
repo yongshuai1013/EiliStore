@@ -301,6 +301,7 @@ class AppManager: ObservableObject {
                     let days = Calendar.current.dateComponents([.day], from: Date(), to: realExpiry).day ?? 0
                     AppLogger.shared.log("  ✅ \(app.name) 刷新完成，有效期 \(days) 天")
                 }
+                refreshFraction = Double(idx + 1) / Double(max(toRefresh.count, 1))
             } catch {
                 AppLogger.shared.log("  ❌ \(app.name) 刷新失敗: \(error.localizedDescription)")
                 // 繼續下一個，不中斷
@@ -319,6 +320,7 @@ class AppManager: ObservableObject {
                 let profile = try await PaxSigningService.shared.provisioningProfile(for: appID, team: team)
                 try await misagent.installProfile(profile.data)
                 AppLogger.shared.log("外部刷新成功: " + bid)
+                refreshFraction = Double(bids.firstIndex(of: bid)! + 1) / Double(max(bids.count, 1))
             } catch {
                 AppLogger.shared.log("外部刷新失敗 " + bid + ": " + error.localizedDescription)
             }
@@ -349,6 +351,7 @@ class AppManager: ObservableObject {
         guard !bids.isEmpty else { return }
         
         isRefreshingExternal = true
+        refreshFraction = 0.0
         defer { isRefreshingExternal = false }
         
         AppLogger.shared.log("開始刷新外部 App...")
