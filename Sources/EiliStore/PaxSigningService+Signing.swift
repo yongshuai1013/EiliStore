@@ -77,7 +77,7 @@ extension PaxSigningService {
         }
         // 創建前清掉所有重複：同 bundleID、同名、或名字包含 bundleID 的都刪（避免 Apple 報 duplicate 35）
         let profileName = "PaxStore \(appID.bundleIdentifier)"
-        for p in existing where p.bundleIdentifier == appID.bundleIdentifier || p.name == profileName || p.name.contains(appID.bundleIdentifier) {
+        for p in existing where p.bundleIdentifier == appID.bundleIdentifier || p.name == profileName {
             if let pid = p.identifier {
                 AppLogger.shared.log("刪除重複 profile: \(p.name ?? "") (\(pid))")
                 do {
