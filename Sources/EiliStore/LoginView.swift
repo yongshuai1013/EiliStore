@@ -179,3 +179,43 @@ struct LoginView: View {
         }
     }
 }
+
+// MARK: - 已登入時的賬號頁
+struct AccountView: View {
+    @Binding var appleID: String
+    @Binding var isLoggedIn: Bool
+    @State private var showLogoutAlert = false
+
+    var body: some View {
+        List {
+            Section(header: Text("賬號")) {
+                HStack {
+                    Text("Apple ID")
+                    Spacer()
+                    Text(appleID)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Section {
+                Button("登出") {
+                    showLogoutAlert = true
+                }
+                .foregroundColor(.red)
+            }
+            Section(footer: Text("登出會清除本地登入狀態，下次登入需要重新驗證。")) {
+                EmptyView()
+            }
+        }
+        .navigationTitle("賬號")
+        .alert("確定要登出嗎？", isPresented: $showLogoutAlert) {
+            Button("登出", role: .destructive) {
+                PaxAuthService.shared.logout()
+                appleID = ""
+                isLoggedIn = false
+            }
+            Button("取消", role: .cancel) { }
+        } message: {
+            Text("登出後若 Apple 暫時限制登入，可能無法立即重新登入。")
+        }
+    }
+}
