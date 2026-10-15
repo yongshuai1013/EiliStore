@@ -107,58 +107,27 @@ struct FileBrowserView: View {
 
     @ViewBuilder
     private func fileRow(url: URL, isDir: Bool) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: iconName(for: url, isDir: isDir))
-                .font(.title2)
-                .foregroundColor(isDir ? .blue : iconColor(for: url))
-                .frame(width: 32)
-
-            VStack(alignment: .leading, spacing: 2) {
+        HStack {
+            Image(systemName: isDir ? "folder.fill" : "doc.fill")
+                .foregroundColor(isDir ? .blue : .gray)
+            VStack(alignment: .leading) {
                 Text(url.lastPathComponent)
                     .lineLimit(1)
-                Text(isDir ? "資料夾" : fileSizeString(url))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if !isDir {
+                    Text(fileSizeString(url))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
-
             Spacer()
-
             if !isDir {
                 Button {
                     shareItem = ShareItem(url: url)
                 } label: {
                     Image(systemName: "square.and.arrow.up")
-                        .foregroundColor(.teal)
                 }
                 .buttonStyle(.borderless)
             }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func iconName(for url: URL, isDir: Bool) -> String {
-        if isDir { return "folder.fill" }
-        switch url.pathExtension.lowercased() {
-        case "ipa": return "app.badge.fill"
-        case "plist": return "doc.text.fill"
-        case "json": return "curlybraces"
-        case "txt", "log": return "doc.text"
-        case "png", "jpg", "jpeg", "gif", "webp": return "photo.fill"
-        case "mp4", "mov": return "video.fill"
-        case "mp3", "m4a", "wav": return "music.note"
-        case "zip": return "archivebox.fill"
-        case "crt", "cer", "p12": return "lock.doc.fill"
-        default: return "doc.fill"
-        }
-    }
-
-    private func iconColor(for url: URL) -> Color {
-        switch url.pathExtension.lowercased() {
-        case "ipa": return .teal
-        case "png", "jpg", "jpeg", "gif", "webp": return .green
-        case "mp4", "mov": return .purple
-        case "mp3", "m4a", "wav": return .pink
-        default: return .gray
         }
     }
 
