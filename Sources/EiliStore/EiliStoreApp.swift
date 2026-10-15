@@ -105,7 +105,7 @@ struct MyAppsView: View {
                             .padding()
                     } else {
                         ForEach(manager.displayApps) { app in
-                            AppRowView(app: app)
+                            AppRowView(app: app, manager: manager)
                         }
                         .onDelete { indexSet in
                             for index in indexSet {
@@ -263,6 +263,7 @@ struct MyAppsView: View {
 
 struct AppRowView: View {
     let app: InstalledApp
+    @ObservedObject var manager: AppManager
 
     var body: some View {
         HStack(spacing: 12) {
