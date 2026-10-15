@@ -128,22 +128,33 @@ struct MyAppsView: View {
                                 .foregroundColor(.secondary)
                                 .textCase(.uppercase)
                             Spacer()
-                            Button(manager.enableExternalAutoRefresh ? "自動刷新：開" : "自動刷新：關") {
-                                manager.enableExternalAutoRefresh.toggle()
-                                UserDefaults.standard.set(manager.enableExternalAutoRefresh, forKey: "enableExternalAutoRefresh")
+                            Button(manager.isRefreshing ? "刷新中..." : "全部刷新") {
+                                Task {
+                                    await manager.refreshExternalOnly()
+                                }
                             }
                             .font(.caption)
                             .foregroundColor(.teal)
+                            .disabled(manager.isRefreshing)
                         }
                         ForEach(manager.externalBundleIds, id: \.self) { bid in
                             HStack(spacing: 12) {
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(Color.teal.opacity(0.18))
-                                    .frame(width: 52, height: 52)
-                                    .overlay(
-                                        Image(systemName: "app.fill")
-                                            .foregroundColor(.teal)
-                                    )
+                                // 嘗試從已安裝 App 拿圖標
+                                if let uiImage = AppIconHelper.shared.icon(for: bid) {
+                                    Image(uiImage: uiImage)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                        .frame(width: 52, height: 52)
+                                        .cornerRadius(12)
+                                } else {
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(Color.teal.opacity(0.18))
+                                        .frame(width: 52, height: 52)
+                                        .overlay(
+                                            Image(systemName: "app.fill")
+                                                .foregroundColor(.teal)
+                                        )
+                                }
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(bid)
                                         .font(.headline)
