@@ -331,6 +331,7 @@ class AppManager: ObservableObject {
                 )
                 let profile = try await PaxSigningService.shared.provisioningProfile(for: appID, team: team)
                 try await misagent.installProfile(profile.data)
+                self.externalExpiry[bid] = Calendar.current.date(byAdding: .day, value: 7, to: Date())
                 AppLogger.shared.log("外部刷新成功: " + bid)
                 // 外部進度簡單遞增（避免 bids 作用域問題）
                 refreshFraction += 1.0 / Double(max(externalBundleIds.count, 1))
