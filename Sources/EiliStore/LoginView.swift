@@ -256,7 +256,21 @@ struct AccountView: View {
                 }
             }
             Section {
-                Button("登出") {
+                Section(header: Text("Session 二維碼")) {
+                NavigationLink(destination: SessionQRView()) {
+                    HStack {
+                        Text("導出/導入 Session")
+                        Spacer()
+                        Image(systemName: "qrcode")
+                            .foregroundColor(.blue)
+                    }
+                }
+                Text("導出備份，換設備時掃碼導入")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            Button("登出") {
                     showLogoutAlert = true
                 }
                 .foregroundColor(.red)
