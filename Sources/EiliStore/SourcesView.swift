@@ -103,7 +103,6 @@ struct AddSourceView: View {
     @State private var urlText = ""
 
     private let recommended: [(name: String, subtitle: String, url: String)] = [
-        ("SideStore 官方源", "apps.sidestore.io/apps.json", "https://apps.sidestore.io/apps.json"),
         ("SideStore Team Picks", "community-apps.sidestore.io/sidecommunity.json", "https://community-apps.sidestore.io/sidecommunity.json"),
     ]
 
