@@ -303,14 +303,34 @@ struct AppRowView: View {
                 Text("剩餘")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-                Text("\(app.daysRemaining) 天")
-                    .font(.subheadline)
-                    .bold()
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(expiryColor(days: app.daysRemaining))
-                    .cornerRadius(20)
+                ZStack {
+                    Text("\(app.daysRemaining) 天")
+                        .font(.subheadline)
+                        .bold()
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(expiryColor(days: app.daysRemaining))
+                        .cornerRadius(20)
+                    // 刷新時顯示轉圈
+                    if manager.currentlyRefreshingBundleId == app.bundleId {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .tint(.white)
+                    }
+                }
+                // 到期進度條（像 SideStore 的黃色條）
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(height: 4)
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.yellow)
+                            .frame(width: geo.size.width * min(max(Double(app.daysRemaining) / 7.0, 0), 1), height: 4)
+                    }
+                }
+                .frame(width: 80, height: 4)
             }
         }
         .padding()
