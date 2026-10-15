@@ -106,9 +106,11 @@ struct MyAppsView: View {
                         Text("\(manager.appIDsRemaining) 個 App ID 剩餘")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                        Button("查看 App IDs") {}
-                            .font(.subheadline)
-                            .foregroundColor(.teal)
+                        NavigationLink(destination: AppIDsView()) {
+                            Text("查看 App IDs")
+                                .font(.subheadline)
+                                .foregroundColor(.teal)
+                        }
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 8)
