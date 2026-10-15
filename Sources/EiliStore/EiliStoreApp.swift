@@ -156,7 +156,7 @@ struct MyAppsView: View {
                                         )
                                 }
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(AppIconHelper.shared.appName(for: bid) ?? bid)
+                                    Text(manager.externalNames[bid] ?? bid)
                                         .font(.headline)
                                         .bold()
                                         .lineLimit(1)
