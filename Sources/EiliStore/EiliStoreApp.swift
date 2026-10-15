@@ -329,26 +329,30 @@ struct AppRowView: View {
                 Text("剩餘")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-                // 天數膠囊（SideStore 尺寸：77x35，14號粗體；刷新時進度填充）
+                // 天數膠囊（照抄 SideStore PillButton）
                 ZStack {
                     let isRefreshing = currentlyRefreshingBundleId == app.bundleId
                     let bgColor = expiryColor(days: app.daysRemaining)
-                    // 背景
                     RoundedRectangle(cornerRadius: 17.5)
                         .fill(isRefreshing ? bgColor.opacity(0.15) : bgColor)
                         .frame(minWidth: 77, minHeight: 35)
-                    // 進度填充
                     if isRefreshing {
+                        // 進度填充（像 SideStore 的 UIProgressView）
                         GeometryReader { geo in
                             RoundedRectangle(cornerRadius: 17.5)
                                 .fill(bgColor)
-                                .frame(width: geo.size.width * refreshFraction)
+                                .frame(width: max(0, geo.size.width * refreshFraction))
                         }
                         .frame(minWidth: 77, minHeight: 35)
+                        // 白色轉圈（像 SideStore 的 activityIndicator）
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(0.8)
                     }
+                    // 刷新時文字隱藏（SideStore 設成 clear）
                     Text("\(app.daysRemaining) 天")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.white)
+                        .foregroundColor(isRefreshing ? .clear : .white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10.5)
                         .frame(minWidth: 77, minHeight: 35)
