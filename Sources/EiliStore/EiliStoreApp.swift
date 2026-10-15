@@ -336,13 +336,6 @@ struct AppRowView: View {
         default: return Color(red: 1.000, green: 0.231, blue: 0.188) // RefreshRed
         }
     }
-    }
-        if days <= 4 { return .orange }
-        return .green
-    }
-        if days <= 5 { return .orange }
-        return .teal
-    }
 }
 
 // MARK: - 軟體源（已移至 SourcesView.swift）
