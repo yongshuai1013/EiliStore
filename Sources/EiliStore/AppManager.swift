@@ -13,8 +13,10 @@ struct InstalledApp: Identifiable, Codable {
     var iconName: String
     /// 保存的 IPA 文件路徑（用於自動重簽）
     var ipaPath: String?
+    /// 解出的 App 圖標路徑（Documents/AppIcons/）
+    var iconPath: String?
     
-    init(id: UUID = UUID(), name: String, bundleId: String, team: String, installedDate: Date = Date(), expiresDate: Date, iconName: String = "app.fill", ipaPath: String? = nil) {
+    init(id: UUID = UUID(), name: String, bundleId: String, team: String, installedDate: Date = Date(), expiresDate: Date, iconName: String = "app.fill", ipaPath: String? = nil, iconPath: String? = nil) {
         self.id = id
         self.name = name
         self.bundleId = bundleId
@@ -23,6 +25,7 @@ struct InstalledApp: Identifiable, Codable {
         self.expiresDate = expiresDate
         self.iconName = iconName
         self.ipaPath = ipaPath
+        self.iconPath = iconPath
     }
     
     /// 剩餘天數
