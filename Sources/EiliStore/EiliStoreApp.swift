@@ -62,9 +62,24 @@ struct MyAppsView: View {
                             .textCase(.uppercase)
                         Spacer()
                         Button(manager.isRefreshing ? "刷新中..." : "全部刷新") {
-                            Task {
-                                await manager.refreshAll()
+                            if !manager.externalBundleIds.isEmpty {
+                                showRefreshConfirm = true
+                            } else {
+                                Task {
+                                    await manager.refreshAll(includeExternal: false)
+                                }
                             }
+                        }
+                        .alert("刷新簽名", isPresented: $showRefreshConfirm) {
+                            Button("僅列表") {
+                                Task { await manager.refreshAll(includeExternal: false) }
+                            }
+                            Button("包含外部") {
+                                Task { await manager.refreshAll(includeExternal: true) }
+                            }
+                            Button("取消", role: .cancel) {}
+                        } message: {
+                            Text("是否同時刷新 \(manager.externalBundleIds.count) 個外部 App？")
                         }
                         .font(.caption)
                         .foregroundColor(.teal)
