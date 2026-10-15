@@ -54,6 +54,31 @@ class AppManager: ObservableObject {
     var displayApps: [InstalledApp] {
         installedApps
     }
+    
+    /// 從 Apple App IDs 同步到期日（以 Apple 的 expirationDate 為準）
+    func syncExpiryFromAppIDs() async {
+        do {
+            let teams = try await PaxSigningService.shared.fetchTeams()
+            guard let team = teams.first else { return }
+            let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
+            var updated = false
+            for appID in appIDs {
+                let bid = appID.bundleIdentifier
+                if let idx = installedApps.firstIndex(where: { $0.bundleId == bid }),
+                   let exp = appID.expirationDate {
+                    if installedApps[idx].expiresDate != exp {
+                        installedApps[idx].expiresDate = exp
+                        updated = true
+                    }
+                }
+            }
+            if updated {
+                saveApps()
+            }
+        } catch {
+            // 靜默失敗，保持本地數據
+        }
+    }
     @Published var refreshProgress: String = ""
     
     private let storageKey = "EiliStore.InstalledApps"
