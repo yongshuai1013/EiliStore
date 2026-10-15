@@ -187,7 +187,7 @@ struct MyAppsView: View {
                                             .foregroundColor(.white)
                                             .padding(.horizontal, 14)
                                             .padding(.vertical, 8)
-                                            .background(Color.yellow)
+                                            .background(expiryColor(days: days))
                                             .cornerRadius(20)
                                     }
                                     .padding(.vertical, 8)
@@ -305,7 +305,7 @@ struct AppRowView: View {
                 Text("剩餘")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-                // 天數膠囊（純色，像 SideStore；刷新時顯示轉圈）
+                // 天數膠囊（按天數變色，像 SideStore；刷新時顯示轉圈）
                 ZStack {
                     Text("\(app.daysRemaining) 天")
                         .font(.subheadline)
@@ -313,7 +313,7 @@ struct AppRowView: View {
                         .foregroundColor(.white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
-                        .background(Color.yellow)
+                        .background(expiryColor(days: app.daysRemaining))
                         .cornerRadius(20)
                     if manager.currentlyRefreshingBundleId == app.bundleId {
                         ProgressView()
