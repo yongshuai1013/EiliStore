@@ -80,20 +80,34 @@ struct MyAppsView: View {
                         .disabled(manager.isRefreshing)
                     }
                     
-                    // 刷新進度（橫幅樣式，跟 SideStore 一樣）
+                    // 刷新提示（跟 SideStore 一樣：成功是細膠囊，失敗是大圓角卡片帶標題＋詳情）
                     if !manager.refreshProgress.isEmpty {
-                        Text(manager.refreshProgress)
-                            .font(.subheadline)
-                            .bold()
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
+                        if manager.isRefreshError {
+                            VStack(alignment: .leading, spacing: 6) {
+                                if !manager.refreshTitle.isEmpty {
+                                    Text(manager.refreshTitle)
+                                        .font(.subheadline)
+                                        .bold()
+                                        .foregroundColor(.white)
+                                }
+                                Text(manager.refreshProgress)
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding()
-                            .background(
-                                manager.refreshProgress.contains("失敗") || manager.refreshProgress.contains("錯誤")
-                                ? Color.red.opacity(0.85)
-                                : Color.teal.opacity(0.85)
-                            )
-                            .cornerRadius(16)
+                            .background(Color.purple.opacity(0.75))
+                            .cornerRadius(20)
+                        } else {
+                            Text(manager.refreshProgress)
+                                .font(.subheadline)
+                                .bold()
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(Color.purple.opacity(0.85))
+                                .cornerRadius(20)
+                        }
                     }
                     
                     // App 列表
