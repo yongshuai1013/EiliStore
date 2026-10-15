@@ -58,9 +58,25 @@ extension PaxSigningService {
         
         // 查找現有
         let existing = try await portal.listProvisioningProfiles(for: team, session: session)
-        if let found = existing.first(where: { $0.bundleIdentifier == appID.bundleIdentifier }) {
+        let matches = existing.filter { $0.bundleIdentifier == appID.bundleIdentifier }
+        if let found = matches.first {
+            // 如果有多個重複的，刪掉多餘的只留一個
+            if matches.count > 1 {
+                for dup in matches.dropFirst() {
+                    if let dupID = dup.identifier {
+                        try? await portal.deleteProvisioningProfile(profileID: dupID, team: team, session: session)
+                    }
+                }
+            }
             guard let profileID = found.identifier else { throw SigningError.profileFailed("Profile 缺少 ID") }
             return try await portal.downloadProvisioningProfile(profileID: profileID, team: team, session: session)
+        }
+        // 創建前先清掉同名的重複 profile（避免 Apple 報 duplicate）
+        let profileName = "PaxStore \(appID.bundleIdentifier)"
+        for p in existing where p.name == profileName {
+            if let pid = p.identifier {
+                try? await portal.deleteProvisioningProfile(profileID: pid, team: team, session: session)
+            }
         }
         
         // 需要證書 ID 來創建 profile
