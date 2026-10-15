@@ -124,6 +124,7 @@ struct MyAppsView: View {
             .navigationTitle("My Apps")
             .navigationBarTitleDisplayMode(.large)
             .onAppear {
+                KeepAlive.shared.start()
                 manager.refreshAppIDsRemaining()
             }
             .toolbar {
