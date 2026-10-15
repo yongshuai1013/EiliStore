@@ -54,7 +54,7 @@ public struct SessionQRView: View {
     
     private func generateQR() {
         // 從 Keychain 讀取 session
-        guard let sessionData = KeychainHelper.load(forKey: KeychainKey.session) else {
+        guard let sessionData = KeychainHelper.load(forKey: "paxstore.auth.session") else {
             message = "沒有已保存的 Session"
             return
         }
@@ -81,7 +81,7 @@ public struct SessionQRView: View {
             return
         }
         // 寫入 Keychain
-        if KeychainHelper.save(data, forKey: KeychainKey.session) {
+        if KeychainHelper.save(data, forKey: "paxstore.auth.session") {
             message = "Session 導入成功！"
             showScanner = false
         } else {
