@@ -30,5 +30,7 @@
     <array>
         <string>UIInterfaceOrientationPortrait</string>
     </array>
+    <key>NSCameraUsageDescription</key>
+    <string>掃描 Session 二維碼需要使用相機</string>
 </dict>
 </plist>
