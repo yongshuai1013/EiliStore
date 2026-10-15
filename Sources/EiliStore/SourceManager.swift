@@ -27,6 +27,7 @@ struct SourceApp: Identifiable, Codable {
     var downloadURL: String
     var iconURL: String?
     var description: String?
+    var developerName: String?
     
     init(id: String = UUID().uuidString, name: String, bundleId: String, version: String, downloadURL: String, iconURL: String? = nil, description: String? = nil) {
         self.id = id
@@ -142,7 +143,8 @@ class SourceManager: ObservableObject {
                 version: version,
                 downloadURL: downloadURL,
                 iconURL: entry.iconURL,
-                description: entry.localizedDescription ?? entry.subtitle
+                description: entry.localizedDescription ?? entry.subtitle,
+                developerName: entry.developerName
             ))
         }
         return (json.name, apps)
