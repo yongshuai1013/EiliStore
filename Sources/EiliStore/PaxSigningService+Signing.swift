@@ -71,12 +71,19 @@ extension PaxSigningService {
             guard let profileID = found.identifier else { throw SigningError.profileFailed("Profile 缺少 ID") }
             return try await portal.downloadProvisioningProfile(profileID: profileID, team: team, session: session)
         }
-        // 創建前先清掉同名的重複 profile（避免 Apple 報 duplicate）
+        // 創建前清掉所有重複：同 bundleID 或同名的都刪（避免 Apple 報 duplicate 35）
         let profileName = "PaxStore \(appID.bundleIdentifier)"
-        for p in existing where p.name == profileName {
+        for p in existing where p.bundleIdentifier == appID.bundleIdentifier || p.name == profileName {
             if let pid = p.identifier {
+                AppLogger.shared.log("刪除重複 profile: \(p.name ?? "")")
                 try? await portal.deleteProvisioningProfile(profileID: pid, team: team, session: session)
             }
+        }
+        // 重新拉取列表確認清乾淨了
+        let existing2 = try await portal.listProvisioningProfiles(for: team, session: session)
+        let stillDup = existing2.filter { $0.name == profileName }
+        if !stillDup.isEmpty {
+            throw SigningError.profileFailed("Apple 端仍有重複 profile '\(profileName)'，請到 developer.apple.com 手動刪除後重試")
         }
         
         // 需要證書 ID 來創建 profile
