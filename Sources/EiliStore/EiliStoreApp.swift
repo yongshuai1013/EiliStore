@@ -88,11 +88,20 @@ struct MyAppsView: View {
                         .disabled(manager.isRefreshing)
                     }
                     
-                    // 刷新進度
+                    // 刷新進度（橫幅樣式，跟 SideStore 一樣）
                     if !manager.refreshProgress.isEmpty {
                         Text(manager.refreshProgress)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(.subheadline)
+                            .bold()
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(
+                                manager.refreshProgress.contains("失敗") || manager.refreshProgress.contains("錯誤")
+                                ? Color.red.opacity(0.85)
+                                : Color.teal.opacity(0.85)
+                            )
+                            .cornerRadius(16)
                     }
                     
                     // App 列表
