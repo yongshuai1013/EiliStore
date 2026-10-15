@@ -75,7 +75,7 @@ struct SignInView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if KeychainHelper.loadString(forKey: "paxstore.auth.session") != nil,
-               let savedID = KeychainHelper.loadString(forKey: "paxstore.apple.id"),
+               let savedID = KeychainHelper.loadString(forKey: "paxstore.auth.appleID"),
                !savedID.isEmpty {
                 isLoggedIn = true
                 appleID = savedID
@@ -124,7 +124,7 @@ struct SignInView: View {
                 )
                 
                 if success {
-                    KeychainHelper.saveString(appleID, forKey: "paxstore.apple.id")
+                    KeychainHelper.saveString(appleID, forKey: "paxstore.auth.appleID")
                     await MainActor.run {
                         isLoggedIn = true
                         isLoading = false
