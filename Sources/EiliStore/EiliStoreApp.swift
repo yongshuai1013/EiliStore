@@ -315,16 +315,30 @@ struct AppRowView: View {
                 Text("剩餘")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-                // 天數膠囊（按天數變色，像 SideStore；刷新時顯示轉圈）
+                // 天數膠囊（SideStore 尺寸：77x35，14號粗體；刷新時進度填充）
                 ZStack {
+                    let isRefreshing = currentlyRefreshingBundleId == app.bundleId
+                    let bgColor = expiryColor(days: app.daysRemaining)
+                    // 背景
+                    RoundedRectangle(cornerRadius: 17.5)
+                        .fill(isRefreshing ? bgColor.opacity(0.15) : bgColor)
+                        .frame(minWidth: 77, minHeight: 35)
+                    // 進度填充
+                    if isRefreshing {
+                        GeometryReader { geo in
+                            RoundedRectangle(cornerRadius: 17.5)
+                                .fill(bgColor)
+                                .frame(width: geo.size.width * refreshFraction)
+                        }
+                        .frame(minWidth: 77, minHeight: 35)
+                    }
                     Text("\(app.daysRemaining) 天")
-                        .font(.subheadline)
-                        .bold()
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundColor(.white)
                         .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(expiryColor(days: app.daysRemaining))
-                        .cornerRadius(20)
+                        .padding(.vertical, 10.5)
+                        .frame(minWidth: 77, minHeight: 35)
+                }
                     if manager.currentlyRefreshingBundleId == app.bundleId {
                         ProgressView()
                             .scaleEffect(0.7)
