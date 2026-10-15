@@ -112,8 +112,8 @@ struct FileBrowserView: View {
         }
         .navigationTitle(directory.lastPathComponent)
         .toolbar {
-            if clipboard.copiedURL != nil {
-                ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if clipboard.copiedURL != nil {
                     Button("貼上") { paste() }
                 }
             }
