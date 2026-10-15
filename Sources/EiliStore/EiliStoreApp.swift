@@ -123,6 +123,9 @@ struct MyAppsView: View {
             }
             .navigationTitle("My Apps")
             .navigationBarTitleDisplayMode(.large)
+            .onAppear {
+                manager.refreshAppIDsRemaining()
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {}) {
