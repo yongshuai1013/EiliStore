@@ -194,9 +194,12 @@ class AppManager: ObservableObject {
     
     /// 刷新所有即將過期的 App（正確路線：只換 provisioning profile，不重裝）
     /// 參考 SideStore PR #846：refresh should only renew provisioning profiles
-    func refreshAll() async {
+    func refreshAll(includeExternal: Bool = false) async {
         // 刷新列表裡所有 App（不只過期的）
         let toRefresh = displayApps
+        // 外部選中的 Bundle IDs（由調用方決定是否包含）
+        let dbBundleIds = Set(installedApps.map { $0.bundleId })
+        let externalBids: Set<String> = includeExternal ? selectedRefreshBundleIds.subtracting(dbBundleIds) : []
         // 外部選中的 Bundle IDs（不在列表裡的）
         let dbBundleIds = Set(installedApps.map { $0.bundleId })
         let externalBids = selectedRefreshBundleIds.subtracting(dbBundleIds)
