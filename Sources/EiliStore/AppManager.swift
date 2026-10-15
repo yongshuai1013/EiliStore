@@ -328,14 +328,44 @@ class AppManager: ObservableObject {
     }
     
     /// 檢查並自動刷新（App 啟動時調用）
+    /// 檢查外部選中的 App 是否快過期（1天內）
+    private func checkExternalExpiry() async -> Bool {
+        do {
+            let teams = try await PaxSigningService.shared.fetchTeams()
+            guard let team = teams.first else { return false }
+            let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
+            let calendar = Calendar.current
+            for appID in appIDs {
+                if externalBundleIds.contains(appID.bundleIdentifier),
+                   let exp = appID.expirationDate {
+                    let days = calendar.dateComponents([.day], from: Date(), to: exp).day ?? 999
+                    if days <= 1 {
+                        return true
+                    }
+                }
+            }
+        } catch {
+        }
+        return false
+    }
+    
     func checkAndAutoRefresh() async {
         // 1. 確保 EiliStore 自己在列表裡（用於自刷新）
         ensureSelfRegistered()
         
         AppLogger.shared.log("App 啟動，檢查 App 過期狀態...")
-        if hasUpdates {
-            AppLogger.shared.log("發現 \(appsNeedingRefresh.count) 個 App 需要刷新")
-            await refreshAll()
+        var externalNeedsRefresh = false
+        if enableExternalAutoRefresh && !externalBundleIds.isEmpty {
+            externalNeedsRefresh = await checkExternalExpiry()
+        }
+        if hasUpdates || externalNeedsRefresh {
+            if hasUpdates {
+                AppLogger.shared.log("發現過期 App，開始刷新")
+            }
+            if externalNeedsRefresh {
+                AppLogger.shared.log("外部 App 快過期，觸發刷新")
+            }
+            await refreshAll(includeExternal: enableExternalAutoRefresh)
         } else {
             AppLogger.shared.log("所有 App 簽名有效，無需刷新")
         }
