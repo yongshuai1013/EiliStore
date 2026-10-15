@@ -274,7 +274,7 @@ class AppManager: ObservableObject {
         }
         
         // 5. 對每個 App：拉新 profile → 裝到設備
-        for app in toRefresh {
+        for (idx, app) in toRefresh.enumerated() {
             currentlyRefreshingBundleId = app.bundleId
             refreshProgress = "正在刷新 \(app.name)..."
             AppLogger.shared.log("正在刷新: \(app.name) (\(app.bundleId))")
@@ -322,7 +322,8 @@ class AppManager: ObservableObject {
                 let profile = try await PaxSigningService.shared.provisioningProfile(for: appID, team: team)
                 try await misagent.installProfile(profile.data)
                 AppLogger.shared.log("外部刷新成功: " + bid)
-                refreshFraction = Double(bids.firstIndex(of: bid)! + 1) / Double(max(bids.count, 1))
+                // 外部進度簡單遞增（避免 bids 作用域問題）
+                refreshFraction += 1.0 / Double(max(externalBundleIds.count, 1))
             } catch {
                 AppLogger.shared.log("外部刷新失敗 " + bid + ": " + error.localizedDescription)
             }
