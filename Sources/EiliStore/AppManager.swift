@@ -327,8 +327,8 @@ class AppManager: ObservableObject {
         let bids = externalBundleIds
         guard !bids.isEmpty else { return }
         
-        isRefreshing = true
-        defer { isRefreshing = false }
+        isRefreshingExternal = true
+        defer { isRefreshingExternal = false }
         
         AppLogger.shared.log("開始刷新外部 App...")
         
