@@ -38,6 +38,12 @@ public final class AnisetteServerManager {
     
     public let defaultCatalogURL = "https://servers.sidestore.io/servers.json"
     
+    /// 內置伺服器（iloader v2.3.8 的兩個，未被 Apple 封鎖）
+    public let builtInServers: [AnisetteServer] = [
+        AnisetteServer(id: "builtin-jkcoxson", name: "Jkcoxson (iloader)", url: "https://ani.jkcoxson.com"),
+        AnisetteServer(id: "builtin-stikstore2", name: "StikStore Secondary (iloader)", url: "https://ani2.stikstore.app"),
+    ]
+    
     private init() {}
     
     // MARK: - Catalog URL
@@ -90,7 +96,7 @@ public final class AnisetteServerManager {
     
     /// 所有 server（catalog＋自訂），按用戶排序
     public var allServers: [AnisetteServer] {
-        let all = cachedCatalogServers + customServers
+        let all = builtInServers + cachedCatalogServers + customServers
         let order = serverOrder
         // 按 order 排序，沒在 order 裡的放後面
         return all.sorted { a, b in
