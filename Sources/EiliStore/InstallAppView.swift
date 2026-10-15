@@ -45,19 +45,28 @@ struct InstallAppView: View {
             }
         }
         .navigationTitle("安裝 App")
-        .fileImporter(
-            isPresented: $showFilePicker,
-            allowedContentTypes: [.init(filenameExtension: "ipa") ?? .data],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                if let url = urls.first {
-                    // fileImporter 回傳的是 security-scoped URL，必須先取得訪問權限才能讀取
-                    guard url.startAccessingSecurityScopedResource() else {
-                        logger.log("❌ 無法取得文件訪問權限")
-                        return
+        .sheet(isPresented: $showFilePicker) {
+            // 用跟簽名頁相同的 DocumentPicker（asCopy: true，系統先複製到臨時目錄，App 直接可讀）
+            DocumentPicker(
+                onPick: { url in
+                    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                    let dest = docs.appendingPathComponent(url.lastPathComponent)
+                    try? FileManager.default.removeItem(at: dest)
+                    do {
+                        try FileManager.default.copyItem(at: url, to: dest)
+                        selectedIPA = dest
+                        logger.log("已選擇 IPA: \(url.lastPathComponent)")
+                    } catch {
+                        logger.log("❌ 複製 IPA 失敗: \(error.localizedDescription)")
                     }
+                    showFilePicker = false
+                },
+                onCancel: {
+                    showFilePicker = false
+                }
+            )
+        }
+    }
                     defer { url.stopAccessingSecurityScopedResource() }
                     // 複製到 App 目錄（fileImporter 的 URL 是臨時的）
                     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
