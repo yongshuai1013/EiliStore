@@ -124,8 +124,11 @@ struct MyAppsView: View {
                                 Text("外部 App")
                                     .font(.headline)
                                 Spacer()
-                                Toggle("自動刷新", isOn: $manager.enableExternalAutoRefresh)
-                                    .font(.caption)
+                                Button(manager.enableExternalAutoRefresh ? "自動刷新：開" : "自動刷新：關") {
+                                    manager.enableExternalAutoRefresh.toggle()
+                                }
+                                .font(.caption)
+                                .foregroundColor(.teal)
                             }
                             .padding(.horizontal)
                             ForEach(manager.externalBundleIds, id: \.self) { bid in
