@@ -196,7 +196,7 @@ struct MyAppsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showAppIDSelection = true }) {
+                    // TEMP: Button(action: { showAppIDSelection = true }) {
                         Image(systemName: "plus")
                             .foregroundColor(.teal)
                     }
