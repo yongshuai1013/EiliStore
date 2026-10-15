@@ -67,6 +67,7 @@ struct AppIDSelectionView: View {
         } else {
             manager.selectedRefreshBundleIds.insert(bid)
         }
+        UserDefaults.standard.set(Array(manager.selectedRefreshBundleIds), forKey: "selectedRefreshBundleIds")
     }
 
     private func selectAll() {
@@ -75,5 +76,6 @@ struct AppIDSelectionView: View {
         } else {
             manager.selectedRefreshBundleIds = Set(appIDs)
         }
+        UserDefaults.standard.set(Array(manager.selectedRefreshBundleIds), forKey: "selectedRefreshBundleIds")
     }
 }
