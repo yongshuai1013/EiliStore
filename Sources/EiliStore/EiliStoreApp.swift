@@ -191,14 +191,28 @@ struct MyAppsView: View {
                                         Text("剩餘")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
-                                        Text("\(days) 天")
-                                            .font(.subheadline)
-                                            .bold()
-                                            .foregroundColor(.white)
-                                            .padding(.horizontal, 14)
-                                            .padding(.vertical, 8)
-                                            .background(expiryColor(days: days))
-                                            .cornerRadius(20)
+                                        ZStack {
+                                            let extBid = externalBundleId(for: extApp)
+                                            let isRefreshing = currentlyRefreshingBundleId == extBid
+                                            let bgColor = expiryColor(days: days)
+                                            RoundedRectangle(cornerRadius: 17.5)
+                                                .fill(isRefreshing ? bgColor.opacity(0.15) : bgColor)
+                                                .frame(minWidth: 77, minHeight: 35)
+                                            if isRefreshing {
+                                                GeometryReader { geo in
+                                                    RoundedRectangle(cornerRadius: 17.5)
+                                                        .fill(bgColor)
+                                                        .frame(width: geo.size.width * refreshFraction)
+                                                }
+                                                .frame(minWidth: 77, minHeight: 35)
+                                            }
+                                            Text("\(days) 天")
+                                                .font(.system(size: 14, weight: .bold))
+                                                .foregroundColor(.white)
+                                                .padding(.horizontal, 14)
+                                                .padding(.vertical, 10.5)
+                                                .frame(minWidth: 77, minHeight: 35)
+                                        }
                                     }
                                     .padding(.vertical, 8)
                                     .padding(.horizontal, 12)
