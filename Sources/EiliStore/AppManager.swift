@@ -49,10 +49,10 @@ class AppManager: ObservableObject {
     @Published var appIDsRemaining: Int = 10
     @Published var isRefreshing: Bool = false
     
-    /// 顯示用的 App 列表：過濾掉明確標記為未簽名的（team == "未知"）
-    /// 空 team 的歷史數據保留，避免誤殺
+    /// 顯示用的 App 列表：目前直接顯示全部
+    /// 數據庫裡的都是 EiliStore 自己安裝的，不需要過濾
     var displayApps: [InstalledApp] {
-        installedApps.filter { $0.team != "未知" }
+        installedApps
     }
     @Published var refreshProgress: String = ""
     
