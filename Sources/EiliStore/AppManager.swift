@@ -52,6 +52,13 @@ class AppManager: ObservableObject {
     /// 已註冊的 Bundle ID 白名單（從 Apple App IDs 獲取）
     @Published var registeredBundleIds: Set<String> = []
     
+    /// 用戶選擇的需要刷新簽名的 Bundle ID（空 = 全部）
+    @Published var selectedRefreshBundleIds: Set<String> = [] {
+        didSet {
+            UserDefaults.standard.set(Array(selectedRefreshBundleIds), forKey: "selectedRefreshBundleIds")
+        }
+    }
+    
     /// 顯示用的 App 列表：用 App IDs 白名單過濾簽名
     /// - 白名單為空時顯示全部（未同步或斷網）
     /// - EiliStore 自己永遠顯示
@@ -101,6 +108,7 @@ class AppManager: ObservableObject {
     private let storageKey = "EiliStore.InstalledApps"
     
     private init() {
+        self.selectedRefreshBundleIds = Set(UserDefaults.standard.stringArray(forKey: "selectedRefreshBundleIds") ?? [])
         load()
         // 如果是空的，加個示例（僅首次）
         if installedApps.isEmpty {
