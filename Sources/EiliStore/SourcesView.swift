@@ -241,7 +241,7 @@ struct SourceAppRow: View {
     @StateObject private var installer = SourceAppInstaller.shared
 
     private var isInstalled: Bool {
-        AppManager.shared.apps.contains(where: { $0.bundleId == app.bundleId })
+        AppManager.shared.installedApps.contains(where: { $0.bundleId == app.bundleId })
     }
 
     var body: some View {
@@ -330,7 +330,7 @@ struct SourceAppDetailView: View {
     @StateObject private var installer = SourceAppInstaller.shared
 
     private var isInstalled: Bool {
-        AppManager.shared.apps.contains(where: { $0.bundleId == app.bundleId })
+        AppManager.shared.installedApps.contains(where: { $0.bundleId == app.bundleId })
     }
 
     var body: some View {
@@ -414,8 +414,13 @@ struct SourceAppDetailView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("資訊")
                         .font(.headline)
-                    LabeledContent("Bundle ID", value: app.bundleId)
-                        .font(.caption)
+                    HStack {
+                        Text("Bundle ID")
+                        Spacer()
+                        Text(app.bundleId)
+                            .foregroundColor(.secondary)
+                    }
+                    .font(.caption)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal)
