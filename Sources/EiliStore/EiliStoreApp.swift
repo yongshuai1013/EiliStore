@@ -141,14 +141,11 @@ struct MyAppsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showAppIDSelection = true }) {
+                    Button(action: {}) {
                         Image(systemName: "plus")
                             .foregroundColor(.teal)
                     }
                 }
-            }
-            .sheet(isPresented: $showAppIDSelection) {
-                AppIDSelectionView()
             }
             .task {
                 // App 啟動時檢查是否需要自動刷新
