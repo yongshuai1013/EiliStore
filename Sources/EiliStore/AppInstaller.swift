@@ -1,132 +1,76 @@
 import Foundation
-import ZIPFoundation
 
 /// App 安裝協調器（經外置 VPN）
-/// 仿 SideInstaller：解壓 IPA，上傳 .app 文件夾，PackageType=Developer
+/// 使用 PaxStore 的 Swift AFC 路線：上傳 IPA → installation_proxy 安裝
 public class AppInstaller {
     public static let shared = AppInstaller()
-    
+
     private init() {}
-    
+
+    /// 安裝已簽名的 IPA
     public func install(ipaURL: URL, progress: @escaping (String, Int) -> Void) async throws {
-        RustFFILock.shared.isTransferActive = true
-        defer { RustFFILock.shared.isTransferActive = false }
-        
+        // 1. 檢查 VPN
         progress("檢查 VPN 連線...", 0)
         let vpnOK = await VPNConnectionChecker.shared.checkConnection()
         guard vpnOK else { throw InstallerError.vpnNotConnected }
         let host = VPNConnectionChecker.shared.effectiveGatewayHost
-        
+
+        // 2. 找到配對檔
         progress("讀取配對檔...", 5)
         guard let pairingURL = findPairingFile() else { throw InstallerError.noPairingFile }
-        
-        // 解壓 IPA
-        progress("解壓 IPA...", 10)
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        
-        guard let archive = Archive(url: ipaURL, accessMode: .read) else {
-            throw InstallerError.afcFailed("無法打開 IPA")
+
+        // 3. 上傳 IPA (經 Swift AFCClient)
+        progress("上傳 IPA...", 20)
+        let remoteName = "EiliStore-\(UUID().uuidString.prefix(8)).ipa"
+        let stagedPath = "PublicStaging/\(remoteName)"
+        let installPath = "/PublicStaging/\(remoteName)"
+
+        // 先拿 AFC 端口（經 lockdownd）
+        let tmpLockdown = LockdownClient(host: host)
+        try await tmpLockdown.connect(pairingFileURL: pairingURL)
+        let (afcPort, afcSSL) = try await tmpLockdown.startService("com.apple.afc")
+        guard let afcIdentity = tmpLockdown.identity else {
+            tmpLockdown.disconnect()
+            throw InstallerError.afcFailed("無法取得配對 identity")
         }
-        for entry in archive {
-            let dest = tempDir.appendingPathComponent(entry.path)
-            if entry.type == .directory {
-                try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
-            } else {
-                try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                _ = try archive.extract(entry, to: dest)
-            }
-        }
-        
-        let payloadDir = tempDir.appendingPathComponent("Payload")
-        let contents = try FileManager.default.contentsOfDirectory(atPath: payloadDir.path)
-        guard let appName = contents.first(where: { $0.hasSuffix(".app") }) else {
-            throw InstallerError.afcFailed("找不到 .app")
-        }
-        let appLocalURL = payloadDir.appendingPathComponent(appName)
-        let remoteAppPath = "/PublicStaging/\(appName)"
-        progress("上傳 \(appName)...", 15)
-        
-        // 收集文件
-        var dirs: [String] = []
-        var files: [(local: URL, remote: String)] = []
-        if let enumerator = FileManager.default.enumerator(atPath: appLocalURL.path) {
-            for case let rel as String in enumerator {
-                let localPath = appLocalURL.appendingPathComponent(rel).path
-                var isDir: ObjCBool = false
-                if FileManager.default.fileExists(atPath: localPath, isDirectory: &isDir) {
-                    let remote = remoteAppPath + "/" + rel
-                    if isDir.boolValue {
-                        dirs.append(remote)
-                    } else {
-                        files.append((local: URL(fileURLWithPath: localPath), remote: remote))
-                    }
-                }
-            }
-        }
-        progress("共 \(files.count) 個文件", 16)
-        
-        // 上傳
-        let afc = RustAFCClient(host: host, pairingFileURL: pairingURL)
+        tmpLockdown.disconnect()
+
+        // AFC 走 10.7.0.1
+        let afcHost = "10.7.0.1"
+        let afc = AFCClient(host: afcHost)
         do {
-            try await afc.connect()
-            try await afc.makeDirectory("/PublicStaging")
-            try await afc.makeDirectory(remoteAppPath)
-            for d in dirs {
-                try await afc.makeDirectory(d)
-            }
-            var done = 0
-            for f in files {
-                try await afc.uploadFile(localURL: f.local, remotePath: f.remote) { _, _ in }
-                done += 1
-                let pct = 15 + Int(Double(done) / Double(files.count) * 60.0)
-                progress("上傳中 \(done)/\(files.count)", pct)
+            try await afc.connect(port: afcPort, useSSL: afcSSL, identity: afcSSL ? afcIdentity : nil)
+            try await afc.uploadFile(localURL: ipaURL, remotePath: stagedPath) { sent, total in
+                let pct = total > 0 ? Int(sent * 60 / total) : 0
+                progress("上傳 IPA... \(sent / 1024 / 1024)MB / \(total / 1024 / 1024)MB", 20 + pct)
             }
             afc.disconnect()
+            progress("上傳完成", 80)
         } catch {
             afc.disconnect()
-            throw InstallerError.afcFailed("上傳失敗: \(error.localizedDescription)")
+            throw InstallerError.afcFailed("Swift AFC: \(error)")
         }
-        
-        // 安裝
-        progress("安裝...", 80)
-        let installer = RustInstallationProxy(host: host, pairingFileURL: pairingURL)
-        do {
-            try await installer.connect()
-            try await installer.install(packagePath: remoteAppPath) { msg, pct in
-                progress(msg, pct)
-            }
-            installer.disconnect()
-        } catch {
-            installer.disconnect()
-            throw InstallerError.afcFailed("安裝失敗: \(error.localizedDescription)")
+
+        // 4. 連接 lockdownd（供 installation_proxy 用）
+        progress("連接設備...", 81)
+        let lockdown = LockdownClient(host: host)
+        try await lockdown.connect(pairingFileURL: pairingURL)
+        defer { lockdown.disconnect() }
+        progress("配對驗證通過", 82)
+
+        // 5. 經 installation_proxy 安裝
+        progress("開始安裝...", 82)
+        let proxy = InstallationProxy(lockdown: lockdown)
+        let proxyHost = try await proxy.connect()
+        progress("安裝服務地址=\(proxyHost)", 82)
+        defer { proxy.disconnect() }
+        try await proxy.install(packagePath: installPath) { percent in
+            progress("安裝中... \(percent)%", 82 + percent * 18 / 100)
         }
-        
-        progress("安裝完成", 100)
+
+        progress("完成", 100)
     }
-    
-    public func diagnoseAFC() async -> String {
-        var lines: [String] = []
-        lines.append("AFC 引擎: Rust FFI")
-        let vpnOK = await VPNConnectionChecker.shared.checkConnection()
-        guard vpnOK else { return "VPN 未連接" }
-        let host = VPNConnectionChecker.shared.effectiveGatewayHost
-        lines.append("Host: \(host)")
-        guard let pairingURL = findPairingFile() else {
-            return lines.joined(separator: "\n") + "\n無配對檔"
-        }
-        let afc = RustAFCClient(host: host, pairingFileURL: pairingURL)
-        do {
-            try await afc.connect()
-            lines.append("✅ AFC 連接成功")
-            afc.disconnect()
-        } catch {
-            lines.append("❌ AFC 連接失敗: \(error.localizedDescription)")
-        }
-        return lines.joined(separator: "\n")
-    }
-    
+
     private func findPairingFile() -> URL? {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let dir = docs.appendingPathComponent("PairingFiles")
@@ -139,7 +83,6 @@ public class AppInstaller {
         }
         return nil
     }
-}
 
 public enum InstallerError: Error, LocalizedError {
     case vpnNotConnected
