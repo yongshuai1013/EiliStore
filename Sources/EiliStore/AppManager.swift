@@ -450,6 +450,9 @@ class AppManager: ObservableObject {
         // 1. 確保 EiliStore 自己在列表裡（用於自刷新）
         ensureSelfRegistered()
         
+        // 同步外部 App 名稱和過期時間（從 Apple App IDs）
+        await syncExpiryFromAppIDs()
+        
         AppLogger.shared.log("App 啟動，檢查 App 過期狀態...")
         var externalNeedsRefresh = false
         if enableExternalAutoRefresh && !externalBundleIds.isEmpty {
