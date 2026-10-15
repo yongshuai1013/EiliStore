@@ -184,10 +184,23 @@ struct MyAppsView: View {
                                         Text("剩餘")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
-                                        Text("\(days) 天")
-                                            .font(.subheadline)
-                                            .bold()
-                                            .foregroundColor(days <= 1 ? .red : .primary)
+                                        // 天數膠囊本身就是進度條（跟上面列表一樣）
+                                        ZStack {
+                                            RoundedRectangle(cornerRadius: 20)
+                                                .fill(Color.yellow.opacity(0.25))
+                                            GeometryReader { geo in
+                                                RoundedRectangle(cornerRadius: 20)
+                                                    .fill(Color.yellow)
+                                                    .frame(width: geo.size.width * min(max(Double(days) / 7.0, 0), 1))
+                                            }
+                                            Text("\(days) 天")
+                                                .font(.subheadline)
+                                                .bold()
+                                                .foregroundColor(.white)
+                                                .padding(.horizontal, 14)
+                                                .padding(.vertical, 8)
+                                        }
+                                        .frame(width: 90, height: 36)
                                     }
                                     .padding(.vertical, 8)
                                     .padding(.horizontal, 12)
