@@ -56,8 +56,6 @@ public class HeartbeatManager {
         if let heartbeat = heartbeat {
             await heartbeat.stop()
         }
-        client?.disconnect()
-        client = nil
         heartbeat = nil
         print("[HeartbeatManager] 已停止")
     }
