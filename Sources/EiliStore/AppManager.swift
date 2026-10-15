@@ -59,6 +59,19 @@ class AppManager: ObservableObject {
         }
     }
     
+    /// 是否允許自動刷新外部 App（用戶第一次確認）
+    @Published var enableExternalAutoRefresh: Bool = false {
+        didSet {
+            UserDefaults.standard.set(enableExternalAutoRefresh, forKey: "enableExternalAutoRefresh")
+        }
+    }
+    
+    /// 外部選中的 Bundle IDs（不在數據庫裡的）
+    var externalBundleIds: [String] {
+        let dbIds = Set(installedApps.map { $0.bundleId })
+        return selectedRefreshBundleIds.subtracting(dbIds).sorted()
+    }
+    
     /// 顯示用的 App 列表：用 App IDs 白名單過濾簽名
     /// - 白名單為空時顯示全部（未同步或斷網）
     /// - EiliStore 自己永遠顯示
@@ -108,6 +121,8 @@ class AppManager: ObservableObject {
     private let storageKey = "EiliStore.InstalledApps"
     
     private init() {
+        self.selectedRefreshBundleIds = Set(UserDefaults.standard.stringArray(forKey: "selectedRefreshBundleIds") ?? [])
+        self.enableExternalAutoRefresh = UserDefaults.standard.bool(forKey: "enableExternalAutoRefresh")
         self.selectedRefreshBundleIds = Set(UserDefaults.standard.stringArray(forKey: "selectedRefreshBundleIds") ?? [])
         load()
         // 如果是空的，加個示例（僅首次）
