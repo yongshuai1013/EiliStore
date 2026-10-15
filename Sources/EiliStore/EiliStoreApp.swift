@@ -63,21 +63,24 @@ struct MyAppsView: View {
                             .foregroundColor(.secondary)
                             .textCase(.uppercase)
                         Spacer()
-                        Button(manager.isRefreshing ? "刷新中..." : "全部刷新") {
+                        Button {
                             Task {
                                 await manager.refreshAll(includeExternal: false)
+                            }
+                        } label: {
+                            if manager.isRefreshing {
+                                HStack(spacing: 4) {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                    Text("\(Int(manager.refreshFraction * 100))%")
+                                }
+                            } else {
+                                Text("全部刷新")
                             }
                         }
                         .font(.caption)
                         .foregroundColor(.teal)
                         .disabled(manager.isRefreshing)
-                    }
-                    
-                    // 刷新進度條（跟 SideStore 一樣）
-                    if manager.isRefreshing || manager.isRefreshingExternal {
-                        ProgressView(value: manager.refreshFraction)
-                            .progressViewStyle(LinearProgressViewStyle(tint: .teal))
-                            .padding(.horizontal)
                     }
                     
                     // 刷新進度（橫幅樣式，跟 SideStore 一樣）
@@ -129,9 +132,19 @@ struct MyAppsView: View {
                                 .foregroundColor(.secondary)
                                 .textCase(.uppercase)
                             Spacer()
-                            Button(manager.isRefreshingExternal ? "刷新中..." : "全部刷新") {
+                            Button {
                                 Task {
                                     await manager.refreshExternalOnly()
+                                }
+                            } label: {
+                                if manager.isRefreshingExternal {
+                                    HStack(spacing: 4) {
+                                        ProgressView()
+                                            .scaleEffect(0.7)
+                                        Text("\(Int(manager.refreshFraction * 100))%")
+                                    }
+                                } else {
+                                    Text("全部刷新")
                                 }
                             }
                             .font(.caption)
