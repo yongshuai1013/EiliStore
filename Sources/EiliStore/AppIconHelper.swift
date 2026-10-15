@@ -13,6 +13,38 @@ class AppIconHelper {
         return nil
     }
     
+    /// 返回 App 名稱，找不到返回 nil
+    func appName(for bundleId: String) -> String? {
+        guard let wsClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type,
+              let ws = wsClass.perform(NSSelectorFromString("defaultWorkspace"))?.takeUnretainedValue() as? NSObject else {
+            return nil
+        }
+        let sel = NSSelectorFromString("allInstalledApplications")
+        guard ws.responds(to: sel),
+              let apps = ws.perform(sel)?.takeUnretainedValue() as? [NSObject] else {
+            return nil
+        }
+        for app in apps {
+            let bidSel = NSSelectorFromString("bundleIdentifier")
+            guard app.responds(to: bidSel),
+                  let bid = app.perform(bidSel)?.takeUnretainedValue() as? String,
+                  bid == bundleId else {
+                continue
+            }
+            // 試 localizedName / name
+            for nameSel in ["localizedName", "appName", "name"] {
+                let s = NSSelectorFromString(nameSel)
+                if app.responds(to: s),
+                   let name = app.perform(s)?.takeUnretainedValue() as? String,
+                   !name.isEmpty {
+                    return name
+                }
+            }
+            return nil
+        }
+        return nil
+    }
+    
     private func iconViaWorkspace(bundleId: String) -> UIImage? {
         guard let wsClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type,
               let ws = wsClass.perform(NSSelectorFromString("defaultWorkspace"))?.takeUnretainedValue() as? NSObject else {
