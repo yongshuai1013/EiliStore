@@ -202,13 +202,16 @@ struct MyAppsView: View {
                                                 GeometryReader { geo in
                                                     RoundedRectangle(cornerRadius: 17.5)
                                                         .fill(bgColor)
-                                                        .frame(width: geo.size.width * refreshFraction)
+                                                        .frame(width: max(0, geo.size.width * refreshFraction))
                                                 }
                                                 .frame(minWidth: 77, minHeight: 35)
+                                                ProgressView()
+                                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                                    .scaleEffect(0.8)
                                             }
                                             Text("\(days) 天")
                                                 .font(.system(size: 14, weight: .bold))
-                                                .foregroundColor(.white)
+                                                .foregroundColor(isRefreshing ? .clear : .white)
                                                 .padding(.horizontal, 14)
                                                 .padding(.vertical, 10.5)
                                                 .frame(minWidth: 77, minHeight: 35)
