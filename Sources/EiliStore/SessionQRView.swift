@@ -103,9 +103,11 @@ struct QRScannerView: UIViewControllerRepresentable {
               let input = try? AVCaptureDeviceInput(device: device) else {
             return vc
         }
+        guard session.canAddInput(input) else { return vc }
         session.addInput(input)
         
         let output = AVCaptureMetadataOutput()
+        guard session.canAddOutput(output) else { return vc }
         session.addOutput(output)
         output.setMetadataObjectsDelegate(context.coordinator, queue: .main)
         output.metadataObjectTypes = [.qr]
