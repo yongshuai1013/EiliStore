@@ -80,34 +80,25 @@ struct MyAppsView: View {
                         .disabled(manager.isRefreshing)
                     }
                     
-                    // 刷新提示（跟 SideStore 一樣：成功是細膠囊，失敗是大圓角卡片帶標題＋詳情）
+                    // 刷新提示（小尺寸，EiliStore 主題青色）：標題＋詳情
                     if !manager.refreshProgress.isEmpty {
-                        if manager.isRefreshError {
-                            VStack(alignment: .leading, spacing: 6) {
-                                if !manager.refreshTitle.isEmpty {
-                                    Text(manager.refreshTitle)
-                                        .font(.subheadline)
-                                        .bold()
-                                        .foregroundColor(.white)
-                                }
-                                Text(manager.refreshProgress)
+                        VStack(alignment: .leading, spacing: 4) {
+                            if !manager.refreshTitle.isEmpty {
+                                Text(manager.refreshTitle)
                                     .font(.caption)
-                                    .foregroundColor(.white.opacity(0.9))
+                                    .bold()
+                                    .foregroundColor(.white)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .background(Color.purple.opacity(0.75))
-                            .cornerRadius(20)
-                        } else {
                             Text(manager.refreshProgress)
-                                .font(.subheadline)
-                                .bold()
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.purple.opacity(0.85))
-                                .cornerRadius(20)
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.95))
+                                .lineLimit(3)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.teal)
+                        .cornerRadius(12)
                     }
                     
                     // App 列表
