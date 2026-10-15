@@ -49,6 +49,8 @@ class AppManager: ObservableObject {
     
     /// 用戶選擇的需要刷新簽名的 Bundle ID（空 = 全部）
     @Published var selectedRefreshBundleIds: Set<String> = []
+    /// 外部 App 的到期時間 (bundleId -> expiresDate)
+    @Published var externalExpiry: [String: Date] = [:]
     
     /// 是否允許自動刷新外部 App
     @Published var enableExternalAutoRefresh: Bool = false
