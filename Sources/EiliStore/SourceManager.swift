@@ -7,12 +7,14 @@ struct AppSource: Identifiable, Codable {
     var name: String
     var url: String
     var apps: [SourceApp]
+    var lastUpdated: Date?
     
-    init(id: UUID = UUID(), name: String, url: String, apps: [SourceApp] = []) {
+    init(id: UUID = UUID(), name: String, url: String, apps: [SourceApp] = [], lastUpdated: Date? = nil) {
         self.id = id
         self.name = name
         self.url = url
         self.apps = apps
+        self.lastUpdated = lastUpdated
     }
 }
 
@@ -96,6 +98,12 @@ class SourceManager: ObservableObject {
             // TODO: 解析 SideStore 格式的 JSON
             // 現在先記錄獲取成功
             AppLogger.shared.log("✅ 源獲取成功 (\(data.count) bytes)，解析待實現")
+            await MainActor.run {
+                if let idx = self.sources.firstIndex(where: { $0.id == source.id }) {
+                    self.sources[idx].lastUpdated = Date()
+                    self.save()
+                }
+            }
         } catch {
             AppLogger.shared.log("❌ 源獲取失敗: \(error.localizedDescription)")
         }
