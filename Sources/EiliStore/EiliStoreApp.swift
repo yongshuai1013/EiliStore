@@ -69,11 +69,8 @@ struct MyAppsView: View {
                             }
                         } label: {
                             if manager.isRefreshing {
-                                HStack(spacing: 4) {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                    Text("\(Int(manager.refreshFraction * 100))%")
-                                }
+                                ProgressView()
+                                    .scaleEffect(0.7)
                             } else {
                                 Text("全部刷新")
                             }
@@ -138,11 +135,8 @@ struct MyAppsView: View {
                                 }
                             } label: {
                                 if manager.isRefreshingExternal {
-                                    HStack(spacing: 4) {
-                                        ProgressView()
-                                            .scaleEffect(0.7)
-                                        Text("\(Int(manager.refreshFraction * 100))%")
-                                    }
+                                    ProgressView()
+                                        .scaleEffect(0.7)
                                 } else {
                                     Text("全部刷新")
                                 }
