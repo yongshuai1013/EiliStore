@@ -123,7 +123,6 @@ class AppManager: ObservableObject {
     private init() {
         self.selectedRefreshBundleIds = Set(UserDefaults.standard.stringArray(forKey: "selectedRefreshBundleIds") ?? [])
         self.enableExternalAutoRefresh = UserDefaults.standard.bool(forKey: "enableExternalAutoRefresh")
-        self.selectedRefreshBundleIds = Set(UserDefaults.standard.stringArray(forKey: "selectedRefreshBundleIds") ?? [])
         load()
         // 如果是空的，加個示例（僅首次）
         if installedApps.isEmpty {
