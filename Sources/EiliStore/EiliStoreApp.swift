@@ -85,7 +85,7 @@ struct MyAppsView: View {
                         }
                         .font(.caption)
                         .foregroundColor(.teal)
-                        .disabled(manager.isRefreshing || !manager.hasUpdates)
+                        .disabled(manager.isRefreshing)
                     }
                     
                     // 刷新進度
