@@ -164,9 +164,16 @@ struct AppRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // App 圖標（安裝時從 IPA 解出）
+            // App 圖標（安裝時從 IPA 解出；EiliStore 自身從 bundle 讀）
             if let iconPath = app.iconPath,
                let uiImage = UIImage(contentsOfFile: iconPath) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 52, height: 52)
+                    .cornerRadius(12)
+            } else if app.bundleId == Bundle.main.bundleIdentifier,
+                      let uiImage = UIImage(named: "AppIcon") {
                 Image(uiImage: uiImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
