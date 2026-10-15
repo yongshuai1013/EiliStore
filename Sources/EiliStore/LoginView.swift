@@ -86,7 +86,21 @@ struct LoginView: View {
 
             // 調試日誌
             if !debugLog.isEmpty {
-                Section(header: Text("調試日誌")) {
+                Section(header: Text("Session 二維碼")) {
+                NavigationLink(destination: SessionQRView()) {
+                    HStack {
+                        Text("導出/導入 Session")
+                        Spacer()
+                        Image(systemName: "qrcode")
+                            .foregroundColor(.blue)
+                    }
+                }
+                Text("通過二維碼在設備間傳輸登入 Session")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section(header: Text("調試日誌")) {
                     ScrollView {
                         Text(debugLog)
                             .font(.system(.caption, design: .monospaced))
