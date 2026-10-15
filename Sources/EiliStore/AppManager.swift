@@ -184,7 +184,6 @@ class AppManager: ObservableObject {
         let dbBundleIds = Set(installedApps.map { $0.bundleId })
         let externalBids: Set<String> = includeExternal ? selectedRefreshBundleIds.subtracting(dbBundleIds) : []
         guard !toRefresh.isEmpty || !externalBids.isEmpty else {
-            refreshProgress = "沒有需要刷新的 App"
             AppLogger.shared.log("刷新檢查：沒有需要刷新的 App")
             return
         }
