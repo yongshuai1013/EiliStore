@@ -186,7 +186,11 @@ class AppManager: ObservableObject {
     func refreshAll() async {
         // 刷新列表裡所有 App（不只過期的）
         let toRefresh = displayApps
-        guard !toRefresh.isEmpty else {
+        // 外部選中的 Bundle IDs（不在列表裡的）
+        let dbBundleIds = Set(installedApps.map { $0.bundleId })
+        let externalBids = selectedRefreshBundleIds.subtracting(dbBundleIds)
+        
+        guard !toRefresh.isEmpty || !externalBids.isEmpty else {
             refreshProgress = "沒有可刷新的 App"
             AppLogger.shared.log("刷新檢查：列表為空")
             return
