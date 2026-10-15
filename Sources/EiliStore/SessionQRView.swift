@@ -96,54 +96,101 @@ struct QRScannerView: UIViewControllerRepresentable {
     @Environment(\.dismiss) var dismiss
     
     func makeUIViewController(context: Context) -> UIViewController {
-        let vc = UIViewController()
-        let session = AVCaptureSession()
-        
-        guard let device = AVCaptureDevice.default(for: .video),
-              let input = try? AVCaptureDeviceInput(device: device) else {
-            return vc
-        }
-        guard session.canAddInput(input) else { return vc }
-        session.addInput(input)
-        
-        let output = AVCaptureMetadataOutput()
-        guard session.canAddOutput(output) else { return vc }
-        session.addOutput(output)
-        output.setMetadataObjectsDelegate(context.coordinator, queue: .main)
-        output.metadataObjectTypes = [.qr]
-        
-        let preview = AVCaptureVideoPreviewLayer(session: session)
-        preview.frame = vc.view.bounds
-        preview.videoGravity = .resizeAspectFill
-        vc.view.layer.addSublayer(preview)
-        
-        context.coordinator.session = session
-        session.startRunning()
+        let vc = ScannerViewController()
+        vc.onResult = onResult
+        vc.onDismiss = { dismiss() }
         return vc
     }
     
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(onResult: onResult, dismiss: { dismiss() })
+        Coordinator()
     }
     
-    class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
-        var onResult: (String) -> Void
-        var dismiss: () -> Void
-        var session: AVCaptureSession?
-        
-        init(onResult: @escaping (String) -> Void, dismiss: @escaping () -> Void) {
-            self.onResult = onResult
-            self.dismiss = dismiss
+    class Coordinator: NSObject {}
+}
+
+class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    var onResult: ((String) -> Void)?
+    var onDismiss: (() -> Void)?
+    private let session = AVCaptureSession()
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var didFind = false
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        checkPermission()
+    }
+    
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.bounds
+    }
+    
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if session.isRunning {
+            session.stopRunning()
         }
-        
-        func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
-            if let obj = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
-               let str = obj.stringValue {
-                session?.stopRunning()
-                onResult(str)
+    }
+    
+    private func checkPermission() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            setupSession()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                if granted {
+                    DispatchQueue.main.async { self?.setupSession() }
+                } else {
+                    DispatchQueue.main.async { self?.onDismiss?() }
+                }
             }
+        default:
+            onDismiss?()
         }
+    }
+    
+    private func setupSession() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            guard let device = AVCaptureDevice.default(for: .video),
+                  let input = try? AVCaptureDeviceInput(device: device),
+                  self.session.canAddInput(input) else {
+                DispatchQueue.main.async { self.onDismiss?() }
+                return
+            }
+            self.session.addInput(input)
+            
+            let output = AVCaptureMetadataOutput()
+            guard self.session.canAddOutput(output) else {
+                DispatchQueue.main.async { self.onDismiss?() }
+                return
+            }
+            self.session.addOutput(output)
+            output.setMetadataObjectsDelegate(self, queue: .main)
+            output.metadataObjectTypes = [.qr]
+            
+            DispatchQueue.main.async {
+                let preview = AVCaptureVideoPreviewLayer(session: self.session)
+                preview.frame = self.view.bounds
+                preview.videoGravity = .resizeAspectFill
+                self.view.layer.addSublayer(preview)
+                self.previewLayer = preview
+            }
+            self.session.startRunning()
+        }
+    }
+    
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        guard !didFind,
+              let obj = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+              let str = obj.stringValue else { return }
+        didFind = true
+        session.stopRunning()
+        onResult?(str)
+        onDismiss?()
     }
 }
