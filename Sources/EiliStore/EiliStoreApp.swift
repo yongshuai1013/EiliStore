@@ -202,9 +202,9 @@ struct MyAppsView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showAppIDSelection) {
-                AppIDSelectionView()
-            }
+            // TEMP DISABLED: .sheet(isPresented: $showAppIDSelection) {
+//                 AppIDSelectionView()
+//             }
             .task {
                 // App 啟動時檢查是否需要自動刷新
                 await manager.checkAndAutoRefresh()
