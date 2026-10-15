@@ -330,11 +330,12 @@ struct AppRowView: View {
 
     private func expiryColor(days: Int) -> Color {
         switch days {
-        case 2...3: return .orange
-        case 4...5: return .yellow
-        case 6...: return .green
-        default: return .red
+        case 2...3: return Color(red: 1.000, green: 0.584, blue: 0.000) // RefreshOrange
+        case 4...5: return Color(red: 1.000, green: 0.800, blue: 0.000) // RefreshYellow
+        case 6...: return Color(red: 0.204, green: 0.780, blue: 0.349) // RefreshGreen
+        default: return Color(red: 1.000, green: 0.231, blue: 0.188) // RefreshRed
         }
+    }
     }
         if days <= 4 { return .orange }
         return .green
