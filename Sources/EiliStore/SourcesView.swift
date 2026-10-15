@@ -1,86 +1,219 @@
 import SwiftUI
 
-/// 軟體源頁
+/// 軟體源頁（SideStore 卡片風格，青色主題）
 struct SourcesView: View {
     @StateObject private var manager = SourceManager.shared
     @State private var showAddSheet = false
-    @State private var newName = ""
-    @State private var newURL = ""
-    
+
     var body: some View {
         NavigationView {
-            List {
-                if manager.sources.isEmpty {
-                    Section {
-                        Text("還沒有添加軟體源")
+            ScrollView {
+                VStack(spacing: 16) {
+                    if manager.sources.isEmpty {
+                        Text("還沒有添加軟體源，點右上角 + 添加")
                             .foregroundColor(.secondary)
-                    }
-                } else {
-                    ForEach(manager.sources) { source in
-                        NavigationLink(destination: SourceDetailView(source: source)) {
-                            VStack(alignment: .leading) {
-                                Text(source.name)
-                                    .font(.headline)
-                                Text("\(source.apps.count) 個 App")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                            .padding()
+                    } else {
+                        ForEach(manager.sources) { source in
+                            NavigationLink(destination: SourceDetailView(source: source)) {
+                                SourceCardView(source: source)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .contextMenu {
+                                Button("刪除", role: .destructive) {
+                                    manager.removeSource(id: source.id)
+                                }
                             }
                         }
                     }
-                    .onDelete { indexSet in
-                        for index in indexSet {
-                            manager.removeSource(id: manager.sources[index].id)
-                        }
-                    }
                 }
+                .padding()
             }
             .navigationTitle("軟體源")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showAddSheet = true }) {
                         Image(systemName: "plus")
+                            .foregroundColor(.teal)
                     }
                 }
             }
             .sheet(isPresented: $showAddSheet) {
-                NavigationView {
-                    Form {
-                        Section("名稱") {
-                            TextField("源名稱", text: $newName)
-                        }
-                        Section("URL") {
-                            TextField("https://...", text: $newURL)
-                                .autocapitalization(.none)
-                                .keyboardType(.URL)
-                        }
+                AddSourceView()
+            }
+        }
+    }
+}
+
+/// 源卡片
+struct SourceCardView: View {
+    let source: AppSource
+
+    private var lastUpdatedText: String {
+        guard let date = source.lastUpdated else { return "從未" }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy/M/d"
+        return f.string(from: date)
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.white.opacity(0.25))
+                .frame(width: 52, height: 52)
+                .overlay(
+                    Image(systemName: "link")
+                        .foregroundColor(.white)
+                        .font(.title2)
+                )
+            VStack(alignment: .leading, spacing: 4) {
+                Text(source.name)
+                    .font(.headline)
+                    .bold()
+                    .foregroundColor(.white)
+                Text("Last Updated: \(lastUpdatedText)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.85))
+            }
+            Spacer()
+            Text("\(source.apps.count)")
+                .font(.headline)
+                .bold()
+                .foregroundColor(.white)
+                .frame(width: 44, height: 44)
+                .background(Color.white.opacity(0.25))
+                .clipShape(Circle())
+        }
+        .padding()
+        .background(
+            LinearGradient(
+                colors: [.teal, .teal.opacity(0.7)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .cornerRadius(24)
+    }
+}
+
+/// 添加源（SideStore 樣式）
+struct AddSourceView: View {
+    @Environment(\.presentationMode) private var presentationMode
+    @StateObject private var manager = SourceManager.shared
+    @State private var urlText = ""
+
+    private let recommended: [(name: String, subtitle: String, url: String)] = [
+        ("SideStore 官方源", "apps.sidestore.io/apps.json", "https://apps.sidestore.io/apps.json"),
+        ("SideStore Team Picks", "community-apps.sidestore.io/sidecommunity.json", "https://community-apps.sidestore.io/sidecommunity.json"),
+    ]
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Add Source")
+                        .font(.largeTitle)
+                        .bold()
+                    Text("Enter a source's URL below, or add one of the recommended sources.")
+                        .foregroundColor(.secondary)
+
+                    HStack(spacing: 12) {
+                        Image(systemName: "link")
+                            .foregroundColor(.teal)
+                        TextField("apps.sidestore.io", text: $urlText)
+                            .autocapitalization(.none)
+                            .keyboardType(.URL)
                     }
-                    .navigationTitle("添加軟體源")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("取消") { showAddSheet = false }
-                        }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("添加") {
-                                if !newName.isEmpty && !newURL.isEmpty {
-                                    manager.addSource(name: newName, url: newURL)
-                                    newName = ""
-                                    newURL = ""
-                                    showAddSheet = false
-                                }
+                    .padding()
+                    .background(Color.teal.opacity(0.12))
+                    .cornerRadius(24)
+
+                    Button(action: addCustomSource) {
+                        Text("添加")
+                            .bold()
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(urlText.isEmpty ? Color.gray : Color.teal)
+                            .cornerRadius(24)
+                    }
+                    .disabled(urlText.isEmpty)
+
+                    Text("RECOMMENDED SOURCES")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    ForEach(recommended, id: \.url) { rec in
+                        let added = manager.sources.contains(where: { $0.url == rec.url })
+                        HStack(spacing: 14) {
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(Color.white.opacity(0.25))
+                                .frame(width: 52, height: 52)
+                                .overlay(
+                                    Image(systemName: "star.fill")
+                                        .foregroundColor(.white)
+                                        .font(.title2)
+                                )
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(rec.name)
+                                    .font(.headline)
+                                    .bold()
+                                    .foregroundColor(.white)
+                                Text(rec.subtitle)
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.85))
                             }
+                            Spacer()
+                            Button(action: {
+                                if !added {
+                                    manager.addSource(name: rec.name, url: rec.url)
+                                }
+                            }) {
+                                Image(systemName: added ? "checkmark.circle.fill" : "plus.circle.fill")
+                                    .foregroundColor(.white)
+                                    .font(.title2)
+                            }
+                            .disabled(added)
                         }
+                        .padding()
+                        .background(
+                            LinearGradient(
+                                colors: [.teal, .teal.opacity(0.7)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .cornerRadius(24)
                     }
+                }
+                .padding()
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { presentationMode.wrappedValue.dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { presentationMode.wrappedValue.dismiss() }
                 }
             }
         }
+    }
+
+    private func addCustomSource() {
+        var urlString = urlText.trimmingCharacters(in: .whitespaces)
+        if !urlString.hasPrefix("http") {
+            urlString = "https://" + urlString
+        }
+        guard let url = URL(string: urlString), let host = url.host else { return }
+        manager.addSource(name: host, url: urlString)
+        urlText = ""
     }
 }
 
 /// 源詳情頁
 struct SourceDetailView: View {
     let source: AppSource
-    
+
     var body: some View {
         List {
             if source.apps.isEmpty {
