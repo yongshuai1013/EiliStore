@@ -73,6 +73,13 @@ struct MyAppsView: View {
                         .disabled(manager.isRefreshing)
                     }
                     
+                    // 刷新進度條（跟 SideStore 一樣）
+                    if manager.isRefreshing || manager.isRefreshingExternal {
+                        ProgressView(value: manager.refreshFraction)
+                            .progressViewStyle(LinearProgressViewStyle(tint: .teal))
+                            .padding(.horizontal)
+                    }
+                    
                     // 刷新進度（橫幅樣式，跟 SideStore 一樣）
                     if !manager.refreshProgress.isEmpty {
                         Text(manager.refreshProgress)
