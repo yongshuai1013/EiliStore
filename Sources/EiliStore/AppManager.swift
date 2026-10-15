@@ -198,18 +198,12 @@ class AppManager: ObservableObject {
     
     /// 刷新所有即將過期的 App（正確路線：只換 provisioning profile，不重裝）
     /// 參考 SideStore PR #846：refresh should only renew provisioning profiles
-    func refreshAll(manual: Bool = true) async {
-        // 刷新列表裡所有 App（不只過期的）
+    func refreshAll(includeExternal: Bool = false) async {
+        // 刷新列表裡所有 App（不只過期的），列表永遠刷
         let toRefresh = displayApps
-        // 外部選中的 Bundle IDs（不在列表裡的）
-        // 手動刷新總是包含；自動刷新需用戶開啟開關
+        // 外部選中的 Bundle IDs（不在列表裡的），由調用方決定是否包含
         let dbBundleIds = Set(installedApps.map { $0.bundleId })
-        let externalBids: Set<String>
-        if manual || enableExternalAutoRefresh {
-            externalBids = selectedRefreshBundleIds.subtracting(dbBundleIds)
-        } else {
-            externalBids = []
-        }
+        let externalBids: Set<String> = includeExternal ? selectedRefreshBundleIds.subtracting(dbBundleIds) : []
         
         guard !toRefresh.isEmpty || !externalBids.isEmpty else {
             refreshProgress = "沒有可刷新的 App"
@@ -342,7 +336,7 @@ class AppManager: ObservableObject {
         AppLogger.shared.log("App 啟動，檢查 App 過期狀態...")
         if hasUpdates {
             AppLogger.shared.log("發現 \(appsNeedingRefresh.count) 個 App 需要刷新")
-            await refreshAll(manual: false)
+            await refreshAll(includeExternal: enableExternalAutoRefresh)
         } else {
             AppLogger.shared.log("所有 App 簽名有效，無需刷新")
         }
