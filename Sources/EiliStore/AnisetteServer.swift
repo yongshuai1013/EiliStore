@@ -40,6 +40,7 @@ public final class AnisetteServerManager {
     
     /// 內置伺服器（iloader v2.3.8 的兩個，未被 Apple 封鎖）
     public let builtInServers: [AnisetteServer] = [
+        AnisetteServer(id: "builtin-private", name: "私有 (自建)", url: "https://anisette-v3-server-releases.onrender.com"),
         AnisetteServer(id: "builtin-jkcoxson", name: "Jkcoxson (iloader)", url: "https://ani.jkcoxson.com"),
         AnisetteServer(id: "builtin-stikstore2", name: "StikStore Secondary (iloader)", url: "https://ani2.stikstore.app"),
     ]
