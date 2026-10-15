@@ -275,6 +275,7 @@ class AppManager: ObservableObject {
         
         // 5. 對每個 App：拉新 profile → 裝到設備
         for app in toRefresh {
+            currentlyRefreshingBundleId = app.bundleId
             refreshProgress = "正在刷新 \(app.name)..."
             AppLogger.shared.log("正在刷新: \(app.name) (\(app.bundleId))")
             
