@@ -184,10 +184,11 @@ class AppManager: ObservableObject {
     /// 刷新所有即將過期的 App（正確路線：只換 provisioning profile，不重裝）
     /// 參考 SideStore PR #846：refresh should only renew provisioning profiles
     func refreshAll() async {
-        let toRefresh = appsNeedingRefresh
+        // 刷新列表裡所有 App（不只過期的）
+        let toRefresh = displayApps
         guard !toRefresh.isEmpty else {
-            refreshProgress = "沒有需要刷新的 App"
-            AppLogger.shared.log("刷新檢查：沒有需要刷新的 App")
+            refreshProgress = "沒有可刷新的 App"
+            AppLogger.shared.log("刷新檢查：列表為空")
             return
         }
         
