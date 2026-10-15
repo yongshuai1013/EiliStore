@@ -397,6 +397,38 @@ struct SourceAppDetailView: View {
                         .padding(.horizontal)
                 }
 
+                // 截圖
+                if let urls = app.screenshotURLs, !urls.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("預覽")
+                            .font(.headline)
+                            .padding(.horizontal)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(urls, id: \.self) { urlString in
+                                    if let url = URL(string: urlString) {
+                                        AsyncImage(url: url) { phase in
+                                            switch phase {
+                                            case .success(let image):
+                                                image.resizable()
+                                                    .aspectRatio(contentMode: .fit)
+                                            default:
+                                                RoundedRectangle(cornerRadius: 8)
+                                                    .fill(Color.gray.opacity(0.15))
+                                                    .overlay(ProgressView())
+                                            }
+                                        }
+                                        .frame(height: 220)
+                                        .cornerRadius(8)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 // 描述
                 if let desc = app.description, !desc.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
