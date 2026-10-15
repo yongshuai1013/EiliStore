@@ -63,14 +63,6 @@ struct MyAppsView: View {
                             .foregroundColor(.secondary)
                             .textCase(.uppercase)
                         Spacer()
-                        Button(action: { showAppIDSelection = true }) {
-                            Image(systemName: "plus")
-                                .font(.caption)
-                                .foregroundColor(.teal)
-                        }
-                        .sheet(isPresented: $showAppIDSelection) {
-                            AppIDSelectionView()
-                        }
                         Button(manager.isRefreshing ? "刷新中..." : "全部刷新") {
                             if !manager.externalBundleIds.isEmpty {
                                 showRefreshConfirm = true
@@ -200,11 +192,14 @@ struct MyAppsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: {}) {
+                    Button(action: { showAppIDSelection = true }) {
                         Image(systemName: "plus")
                             .foregroundColor(.teal)
                     }
                 }
+            }
+            .sheet(isPresented: $showAppIDSelection) {
+                AppIDSelectionView()
             }
             .task {
                 // App 啟動時檢查是否需要自動刷新
