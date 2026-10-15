@@ -73,6 +73,25 @@ class AppManager: ObservableObject {
         }
     }
     
+    // MARK: - App ID 剩餘名額
+
+    /// 從 Apple 獲取真實 App ID 數量，更新剩餘名額（免費帳號上限 10 個）
+    func refreshAppIDsRemaining() {
+        Task {
+            do {
+                let teams = try await PaxSigningService.shared.fetchTeams()
+                guard let team = teams.first else { return }
+                let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
+                await MainActor.run {
+                    self.appIDsRemaining = max(0, 10 - appIDs.count)
+                    AppLogger.shared.log("App ID 剩餘名額: \(self.appIDsRemaining)（已用 \(appIDs.count)/10）")
+                }
+            } catch {
+                AppLogger.shared.log("❌ 獲取 App ID 數量失敗: \(error.localizedDescription)")
+            }
+        }
+    }
+
     // MARK: - App 管理
     
     func addApp(_ app: InstalledApp) {
