@@ -292,10 +292,12 @@ class AppManager: ObservableObject {
                 try await misagent.installProfile(profile.data)
                 AppLogger.shared.log("  ✅ Profile 已安裝到設備")
                 
-                // 更新過期時間
+                // 更新過期時間：從 profile 解析真實到期日
                 if let index = installedApps.firstIndex(where: { $0.id == app.id }) {
-                    installedApps[index].expiresDate = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
-                    AppLogger.shared.log("  ✅ \(app.name) 刷新完成，有效期延長7天")
+                    let realExpiry = Self.parseExpiry(from: profile.data) ?? Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
+                    installedApps[index].expiresDate = realExpiry
+                    let days = Calendar.current.dateComponents([.day], from: Date(), to: realExpiry).day ?? 0
+                    AppLogger.shared.log("  ✅ \(app.name) 刷新完成，有效期 \(days) 天")
                 }
             } catch {
                 AppLogger.shared.log("  ❌ \(app.name) 刷新失敗: \(error.localizedDescription)")
