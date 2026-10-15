@@ -70,6 +70,8 @@ class AppManager: ObservableObject {
     @Published var isRefreshingExternal = false
     @Published var refreshFraction: Double = 0.0
     @Published var currentlyRefreshingBundleId: String? = nil
+    @Published var refreshTitle: String = ""
+    @Published var isRefreshError: Bool = false
     
     /// 顯示用的 App 列表：目前直接顯示全部
     /// 數據庫裡的都是 EiliStore 自己安裝的，不需要過濾
