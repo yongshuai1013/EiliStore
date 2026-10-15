@@ -51,6 +51,8 @@ class AppManager: ObservableObject {
     @Published var selectedRefreshBundleIds: Set<String> = []
     /// 外部 App 的到期時間 (bundleId -> expiresDate)
     @Published var externalExpiry: [String: Date] = [:]
+    /// 外部 App 的名稱 (bundleId -> name，從 Apple App IDs 來)
+    @Published var externalNames: [String: String] = [:]
     
     /// 是否允許自動刷新外部 App
     @Published var enableExternalAutoRefresh: Bool = false
@@ -167,11 +169,17 @@ class AppManager: ObservableObject {
                         updated = true
                     }
                 }
-                // 外部 App 的到期時間
-                if externalBundleIds.contains(bid), let exp = appID.expirationDate {
+                // 外部 App 的到期時間和名稱
+                if externalBundleIds.contains(bid) {
                     await MainActor.run {
-                        if self.externalExpiry[bid] != exp {
+                        if let exp = appID.expirationDate, self.externalExpiry[bid] != exp {
                             self.externalExpiry[bid] = exp
+                            updated = true
+                        }
+                        // 存名稱
+                        let name = appID.name
+                        if !name.isEmpty, self.externalNames[bid] != name {
+                            self.externalNames[bid] = name
                             updated = true
                         }
                     }
@@ -179,9 +187,12 @@ class AppManager: ObservableObject {
             }
             if updated {
                 save()
-                // 保存外部到期時間
+                // 保存外部到期時間和名稱
                 if let data = try? JSONEncoder().encode(externalExpiry) {
                     UserDefaults.standard.set(data, forKey: "externalExpiry")
+                }
+                if let data = try? JSONEncoder().encode(externalNames) {
+                    UserDefaults.standard.set(data, forKey: "externalNames")
                 }
             }
         } catch {
