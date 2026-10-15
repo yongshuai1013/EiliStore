@@ -35,9 +35,9 @@ struct InstalledApp: Identifiable, Codable {
         return max(0, components.day ?? 0)
     }
     
-    /// 是否即將過期（2天內）
+    /// 是否即將過期（1天內）
     var isExpiringSoon: Bool {
-        daysRemaining <= 2
+        daysRemaining <= 1
     }
 }
 
@@ -363,7 +363,7 @@ class AppManager: ObservableObject {
                 if externalBundleIds.contains(appID.bundleIdentifier),
                    let exp = appID.expirationDate {
                     let days = calendar.dateComponents([.day], from: Date(), to: exp).day ?? 999
-                    if days <= 2 {
+                    if days <= 1 {
                         return true
                     }
                 }
