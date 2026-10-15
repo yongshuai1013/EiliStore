@@ -146,7 +146,24 @@ struct AppRowView: View {
     let app: InstalledApp
 
     var body: some View {
-        HStack {
+        HStack(spacing: 12) {
+            // App 圖標（安裝時從 IPA 解出）
+            if let iconPath = app.iconPath,
+               let uiImage = UIImage(contentsOfFile: iconPath) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 52, height: 52)
+                    .cornerRadius(12)
+            } else {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.teal.opacity(0.18))
+                    .frame(width: 52, height: 52)
+                    .overlay(
+                        Image(systemName: "app.fill")
+                            .foregroundColor(.teal)
+                    )
+            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(app.name)
                     .font(.headline)
