@@ -84,29 +84,68 @@ class SourceManager: ObservableObject {
         save()
     }
     
-    /// 獲取源內容（SideStore 格式的 JSON）
+    /// GitHub 頁面連結轉 raw 連結（貼 github.com/.../blob/... 也能用）
+    static func normalizeURL(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.contains("github.com") && s.contains("/blob/") {
+            s = s.replacingOccurrences(of: "github.com", with: "raw.githubusercontent.com")
+            s = s.replacingOccurrences(of: "/blob/", with: "/")
+        }
+        return s
+    }
+
+    /// 獲取源內容（SideStore/AltStore 格式的 JSON）
     func fetchSource(_ source: AppSource) async {
         AppLogger.shared.log("正在獲取軟體源: \(source.name)...")
-        
-        guard let url = URL(string: source.url) else {
+
+        let urlString = Self.normalizeURL(source.url)
+        guard let url = URL(string: urlString) else {
             AppLogger.shared.log("❌ 源 URL 無效: \(source.url)")
             return
         }
-        
+
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
-            // TODO: 解析 SideStore 格式的 JSON
-            // 現在先記錄獲取成功
-            AppLogger.shared.log("✅ 源獲取成功 (\(data.count) bytes)，解析待實現")
+            let parsed = try parseSourceJSON(data)
             await MainActor.run {
                 if let idx = self.sources.firstIndex(where: { $0.id == source.id }) {
+                    self.sources[idx].apps = parsed.apps
+                    if let name = parsed.name, !name.isEmpty {
+                        self.sources[idx].name = name
+                    }
                     self.sources[idx].lastUpdated = Date()
                     self.save()
                 }
             }
+            AppLogger.shared.log("✅ 源獲取成功: \(source.name)，\(parsed.apps.count) 個 App")
         } catch {
             AppLogger.shared.log("❌ 源獲取失敗: \(error.localizedDescription)")
         }
+    }
+
+    /// 解析 SideStore/AltStore 源 JSON
+    private func parseSourceJSON(_ data: Data) throws -> (name: String?, apps: [SourceApp]) {
+        let decoder = JSONDecoder()
+        let json = try decoder.decode(SourceJSON.self, from: data)
+        var apps: [SourceApp] = []
+        for entry in json.apps ?? [] {
+            // 新格式取 versions[0]，舊格式用平鋪欄位
+            let v = entry.versions?.first
+            let version = v?.version ?? entry.version ?? ""
+            let downloadURL = v?.downloadURL ?? entry.downloadURL ?? ""
+            guard let name = entry.name, !name.isEmpty,
+                  let bundleId = entry.bundleIdentifier, !bundleId.isEmpty,
+                  !downloadURL.isEmpty else { continue }
+            apps.append(SourceApp(
+                name: name,
+                bundleId: bundleId,
+                version: version,
+                downloadURL: downloadURL,
+                iconURL: entry.iconURL,
+                description: entry.localizedDescription ?? entry.subtitle
+            ))
+        }
+        return (json.name, apps)
     }
     
     func refreshAll() async {
@@ -114,4 +153,35 @@ class SourceManager: ObservableObject {
             await fetchSource(source)
         }
     }
+}
+
+// MARK: - SideStore/AltStore 源 JSON 結構
+
+private struct SourceJSON: Decodable {
+    var name: String?
+    var apps: [SourceAppJSON]?
+}
+
+private struct SourceAppJSON: Decodable {
+    var name: String?
+    var bundleIdentifier: String?
+    var developerName: String?
+    var localizedDescription: String?
+    var subtitle: String?
+    var iconURL: String?
+    // 舊格式平鋪欄位
+    var version: String?
+    var versionDate: String?
+    var downloadURL: String?
+    var size: Int?
+    // 新格式版本陣列（第一個為最新）
+    var versions: [SourceVersionJSON]?
+}
+
+private struct SourceVersionJSON: Decodable {
+    var version: String?
+    var date: String?
+    var downloadURL: String?
+    var size: Int?
+    var localizedDescription: String?
 }
