@@ -40,8 +40,6 @@ struct MainTabView: View {
 struct MyAppsView: View {
     @StateObject private var manager = AppManager.shared
     @State private var showAppIDsSheet = false
-    @State private var showAppIDSelection = false
-    @State private var showRefreshConfirm = false
     
     var body: some View {
         NavigationView {
@@ -64,28 +62,13 @@ struct MyAppsView: View {
                             .textCase(.uppercase)
                         Spacer()
                         Button(manager.isRefreshing ? "刷新中..." : "全部刷新") {
-                            if !manager.externalBundleIds.isEmpty {
-                                showRefreshConfirm = true
-                            } else {
-                                Task {
-                                    await manager.refreshAll(includeExternal: false)
-                                }
+                            Task {
+                                await manager.refreshAll()
                             }
-                        }
-                        .alert("刷新簽名", isPresented: $showRefreshConfirm) {
-                            Button("僅列表") {
-                                Task { await manager.refreshAll(includeExternal: false) }
-                            }
-                            Button("包含外部") {
-                                Task { await manager.refreshAll(includeExternal: true) }
-                            }
-                            Button("取消", role: .cancel) {}
-                        } message: {
-                            Text("是否同時刷新 \(manager.externalBundleIds.count) 個外部 App？")
                         }
                         .font(.caption)
                         .foregroundColor(.teal)
-                        .disabled(manager.isRefreshing)
+                        .disabled(manager.isRefreshing || !manager.hasUpdates)
                     }
                     
                     // 刷新進度
@@ -117,44 +100,6 @@ struct MyAppsView: View {
                                 manager.removeApp(bundleId: app.bundleId)
                             }
                         }
-                    }
-                    
-                    // 外部 App（不在列表裡，但選中要刷新的）
-                    if !manager.externalBundleIds.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("外部 App")
-                                    .font(.headline)
-                                Spacer()
-                                Button(manager.enableExternalAutoRefresh ? "自動刷新：開" : "自動刷新：關") {
-                                    manager.enableExternalAutoRefresh.toggle()
-                                    UserDefaults.standard.set(manager.enableExternalAutoRefresh, forKey: "enableExternalAutoRefresh")
-                                }
-                                .font(.caption)
-                                .foregroundColor(.teal)
-                            }
-                            .padding(.horizontal)
-                            ForEach(manager.externalBundleIds, id: \.self) { bid in
-                                HStack {
-                                    Image(systemName: "app.badge")
-                                        .foregroundColor(.orange)
-                                    Text(bid)
-                                        .font(.caption)
-                                        .lineLimit(1)
-                                    Spacer()
-                                }
-                                .padding(.horizontal)
-                                .padding(.vertical, 4)
-                            }
-                            Text("首次開啟自動刷新需確認")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .padding(.horizontal)
-                        }
-                        .padding(.vertical, 8)
-                        .background(Color.orange.opacity(0.08))
-                        .cornerRadius(12)
-                        .padding(.horizontal)
                     }
                     
                     // App ID 剩餘
@@ -196,15 +141,15 @@ struct MyAppsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    // TEMP: Button(action: { showAppIDSelection = true }) {
+                    Button(action: { showAppIDSelection = true }) {
                         Image(systemName: "plus")
                             .foregroundColor(.teal)
                     }
                 }
             }
-            // TEMP DISABLED: .sheet(isPresented: $showAppIDSelection) {
-//                 AppIDSelectionView()
-//             }
+            .sheet(isPresented: $showAppIDSelection) {
+                AppIDSelectionView()
+            }
             .task {
                 // App 啟動時檢查是否需要自動刷新
                 await manager.checkAndAutoRefresh()
