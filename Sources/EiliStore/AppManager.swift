@@ -266,12 +266,12 @@ class AppManager: ObservableObject {
             do {
                 let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
                 if let appID = appIDs.first(where: { $0.bundleIdentifier == bid }) {
-                    let profile = try await PaxSigningService.shared.fetchProfile(for: appID, team: team)
+                    let profile = try await PaxSigningService.shared.provisioningProfile(for: appID, team: team)
                     try await RustMisagentClient.shared.installProfile(profile.data)
                     AppLogger.shared.log("外部刷新成功: " + bid)
                 } else {
-                    let newAppID = try await PaxSigningService.shared.createAppID(bundleId: bid, team: team)
-                    let profile = try await PaxSigningService.shared.fetchProfile(for: newAppID, team: team)
+                    let newAppID = try await PaxSigningService.shared.createAppID(name: bid, bundleIdentifier: bid, for: team)
+                    let profile = try await PaxSigningService.shared.provisioningProfile(for: newAppID, team: team)
                     try await RustMisagentClient.shared.installProfile(profile.data)
                     AppLogger.shared.log("外部創建並刷新成功: " + bid)
                 }
