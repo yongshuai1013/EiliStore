@@ -68,6 +68,7 @@ class AppManager: ObservableObject {
     @Published var appIDsRemaining: Int = 10
     @Published var isRefreshing: Bool = false
     @Published var isRefreshingExternal = false
+    @Published var refreshFraction: Double = 0.0
     
     /// 顯示用的 App 列表：目前直接顯示全部
     /// 數據庫裡的都是 EiliStore 自己安裝的，不需要過濾
@@ -219,6 +220,7 @@ class AppManager: ObservableObject {
     ///   - onlyNeedingRefresh: true=只刷1天內過期的（自動刷新用），false=刷全部（手動用）
     func refreshAll(includeExternal: Bool = false, onlyNeedingRefresh: Bool = false) async {
         let toRefresh = onlyNeedingRefresh ? appsNeedingRefresh : installedApps
+        refreshFraction = 0.0
         // 外部選中的 Bundle IDs（由調用方決定是否包含）
         let dbBundleIds = Set(installedApps.map { $0.bundleId })
         let externalBids: Set<String> = includeExternal ? selectedRefreshBundleIds.subtracting(dbBundleIds) : []
