@@ -180,3 +180,10 @@ public final class PaxHeartbeatService {
         return result == 0
     }
 }
+
+/// 簡單的 endpoint 實現（直接返回 host）
+public class SimpleHeartbeatEndpoint: HeartbeatEndpoint {
+    private let host: String
+    public init(host: String) { self.host = host }
+    public func ip() async throws -> String { return host }
+}
