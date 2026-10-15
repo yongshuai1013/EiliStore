@@ -129,6 +129,31 @@ class AppManager: ObservableObject {
         !appsNeedingRefresh.isEmpty
     }
     
+    /// 從 Apple App IDs 同步過期時間
+    func syncExpiryFromAppIDs() async {
+        do {
+            let teams = try await PaxSigningService.shared.fetchTeams()
+            guard let team = teams.first else { return }
+            let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
+            var updated = false
+            for appID in appIDs {
+                let bid = appID.bundleIdentifier
+                if let idx = installedApps.firstIndex(where: { $0.bundleId == bid }),
+                   let exp = appID.expirationDate {
+                    if installedApps[idx].expiresDate != exp {
+                        installedApps[idx].expiresDate = exp
+                        updated = true
+                    }
+                }
+            }
+            if updated {
+                save()
+            }
+        } catch {
+            // 靜默失敗，保持本地數據
+        }
+    }
+    
     // MARK: - 刷新
     
     /// 刷新所有即將過期的 App（正確路線：只換 provisioning profile，不重裝）
