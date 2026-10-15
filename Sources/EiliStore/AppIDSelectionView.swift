@@ -6,19 +6,19 @@ struct AppIDSelectionView: View {
     @Environment(\.dismiss) var dismiss
     @State private var appIDs: [String] = []
     @State private var isLoading = false
-    
+
     var body: some View {
         NavigationView {
             List {
-                Section(header: Text("選擇需要自動刷新簽名的 App IDs"),
-                        footer: Text("未選中的不會刷新。不選 = 全部刷新。")) {
+                Section(
+                    header: Text("選擇需要自動刷新簽名的 App IDs"),
+                    footer: Text("未選中的不會刷新。不選 = 全部刷新。")
+                ) {
                     if isLoading {
                         ProgressView()
                     } else {
                         ForEach(appIDs.sorted(), id: \.self) { bid in
-                            Button(action: {
-                                toggle(bid)
-                            }) {
+                            Button(action: { toggle(bid) }) {
                                 HStack {
                                     Text(bid)
                                         .font(.caption)
@@ -42,14 +42,11 @@ struct AppIDSelectionView: View {
                 leading: Button("全選") { selectAll() },
                 trailing: Button("完成") { dismiss() }
             )
-            .onAppear {
-                loadAppIDs()
-            }
+            .onAppear { loadAppIDs() }
         }
     }
-    
+
     private func loadAppIDs() {
-        // 用已同步的白名單，如果為空則觸發同步
         if manager.registeredBundleIds.isEmpty {
             isLoading = true
             Task {
@@ -63,7 +60,7 @@ struct AppIDSelectionView: View {
             appIDs = Array(manager.registeredBundleIds)
         }
     }
-    
+
     private func toggle(_ bid: String) {
         if manager.selectedRefreshBundleIds.contains(bid) {
             manager.selectedRefreshBundleIds.remove(bid)
@@ -71,7 +68,7 @@ struct AppIDSelectionView: View {
             manager.selectedRefreshBundleIds.insert(bid)
         }
     }
-    
+
     private func selectAll() {
         if manager.selectedRefreshBundleIds.count == appIDs.count {
             manager.selectedRefreshBundleIds.removeAll()
