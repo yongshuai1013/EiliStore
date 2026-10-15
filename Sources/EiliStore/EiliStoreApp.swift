@@ -192,7 +192,7 @@ struct MyAppsView: View {
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                         ZStack {
-                                            let extBid = externalBundleId(for: extApp)
+                                            let extBid = bid
                                             let isRefreshing = currentlyRefreshingBundleId == extBid
                                             let bgColor = expiryColor(days: days)
                                             RoundedRectangle(cornerRadius: 17.5)
