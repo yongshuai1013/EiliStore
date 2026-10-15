@@ -287,6 +287,64 @@ class AppManager: ObservableObject {
         AppLogger.shared.log("全部刷新完成")
     }
     
+    /// 只刷新外部 App（不碰列表）
+    func refreshExternalOnly() async {
+        let bids = externalBundleIds
+        guard !bids.isEmpty else { return }
+        
+        isRefreshing = true
+        defer { isRefreshing = false }
+        
+        AppLogger.shared.log("開始刷新外部 App...")
+        
+        let teams: [SideSign.Team]
+        do {
+            teams = try await PaxSigningService.shared.fetchTeams()
+        } catch {
+            AppLogger.shared.log("獲取 Team 失敗: " + error.localizedDescription)
+            refreshProgress = "獲取 Team 失敗"
+            return
+        }
+        guard let team = teams.first else {
+            refreshProgress = "沒有可用的 Team"
+            return
+        }
+        
+        guard let pairingFile = findPairingFile() else {
+            refreshProgress = "找不到配對檔"
+            return
+        }
+        
+        let misagent = RustMisagentClient(host: "10.7.0.1", pairingFileURL: pairingFile)
+        do {
+            try await misagent.connect()
+        } catch {
+            AppLogger.shared.log("misagent 連接失敗: " + error.localizedDescription)
+            refreshProgress = "連接設備失敗"
+            return
+        }
+        
+        for bid in bids {
+            AppLogger.shared.log("正在刷新外部: " + bid)
+            do {
+                let appID = try await PaxSigningService.shared.findOrCreateAppID(
+                    bundleIdentifier: bid,
+                    name: bid,
+                    for: team
+                )
+                let profile = try await PaxSigningService.shared.provisioningProfile(for: appID, team: team)
+                try await misagent.installProfile(profile.data)
+                AppLogger.shared.log("外部刷新成功: " + bid)
+            } catch {
+                AppLogger.shared.log("外部刷新失敗 " + bid + ": " + error.localizedDescription)
+            }
+        }
+        
+        misagent.disconnect()
+        refreshProgress = "刷新完成"
+        AppLogger.shared.log("外部刷新完成")
+    }
+    
     /// 查找配對檔
     private func findPairingFile() -> URL? {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
