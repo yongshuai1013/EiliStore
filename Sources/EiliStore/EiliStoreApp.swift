@@ -80,23 +80,15 @@ struct MyAppsView: View {
                         .disabled(manager.isRefreshing)
                     }
                     
-                    // 刷新提示（跟 SideStore 底部大卡片一樣：標題＋多行詳情，EiliStore 主題青色）
+                    // 刷新提示（大圓角卡片，EiliStore 主題青色）：只顯示成功／失敗＋詳情
                     if !manager.refreshProgress.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            if !manager.refreshTitle.isEmpty {
-                                Text(manager.refreshTitle)
-                                    .font(.subheadline)
-                                    .bold()
-                                    .foregroundColor(.white)
-                            }
-                            Text(manager.refreshProgress)
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.95))
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
-                        .background(Color.teal)
-                        .cornerRadius(20)
+                        Text(manager.refreshProgress)
+                            .font(.subheadline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color.teal)
+                            .cornerRadius(20)
                     }
                     
                     // App 列表
