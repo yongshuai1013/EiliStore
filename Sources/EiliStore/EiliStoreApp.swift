@@ -127,6 +127,44 @@ struct MyAppsView: View {
                         }
                     }
                     
+                    // 外部 App（不在列表裡，但選中要刷新的）
+                    if !manager.externalBundleIds.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("外部 App")
+                                    .font(.headline)
+                                Spacer()
+                                Button(manager.enableExternalAutoRefresh ? "自動刷新：開" : "自動刷新：關") {
+                                    manager.enableExternalAutoRefresh.toggle()
+                                    UserDefaults.standard.set(manager.enableExternalAutoRefresh, forKey: "enableExternalAutoRefresh")
+                                }
+                                .font(.caption)
+                                .foregroundColor(.teal)
+                            }
+                            .padding(.horizontal)
+                            ForEach(manager.externalBundleIds, id: \.self) { bid in
+                                HStack {
+                                    Image(systemName: "app.badge")
+                                        .foregroundColor(.orange)
+                                    Text(bid)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                    Spacer()
+                                }
+                                .padding(.horizontal)
+                                .padding(.vertical, 4)
+                            }
+                            Text("首次開啟自動刷新需確認")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal)
+                        }
+                        .padding(.vertical, 8)
+                        .background(Color.orange.opacity(0.08))
+                        .cornerRadius(12)
+                        .padding(.horizontal)
+                    }
+                    
                     // App ID 剩餘
                     VStack(spacing: 4) {
                         Text("\(manager.appIDsRemaining) 個 App ID 剩餘")
