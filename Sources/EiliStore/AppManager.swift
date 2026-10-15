@@ -272,6 +272,25 @@ class AppManager: ObservableObject {
             }
         }
         
+        // 刷新外部選中的 Bundle IDs（不在列表裡的）
+        for bid in externalBids {
+            refreshProgress = "正在刷新 \(bid)..."
+            AppLogger.shared.log("正在刷新外部: \(bid)")
+            do {
+                let appID = try await PaxSigningService.shared.findOrCreateAppID(
+                    bundleIdentifier: bid,
+                    name: bid,
+                    for: team
+                )
+                let profile = try await PaxSigningService.shared.provisioningProfile(for: appID, team: team)
+                AppLogger.shared.log("  新 profile 已下載 (\(profile.data.count) bytes)")
+                try await misagent.installProfile(profile.data)
+                AppLogger.shared.log("  ✅ 外部 \(bid) 刷新完成")
+            } catch {
+                AppLogger.shared.log("  ❌ 外部 \(bid) 刷新失敗: \(error.localizedDescription)")
+            }
+        }
+        
         misagent.disconnect()
         save()
         refreshProgress = "刷新完成"
