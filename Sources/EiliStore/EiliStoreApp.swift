@@ -119,42 +119,46 @@ struct MyAppsView: View {
                         }
                     }
                     
-                    // 外部 App（不在列表裡，但選中要刷新的）
+                    // 外部 App（不在列表裡，但選中要刷新的）— 跟上面列表同樣的卡片樣式
                     if !manager.externalBundleIds.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("外部 App")
-                                    .font(.headline)
-                                Spacer()
-                                Button(manager.enableExternalAutoRefresh ? "自動刷新：開" : "自動刷新：關") {
-                                    manager.enableExternalAutoRefresh.toggle()
-                                    UserDefaults.standard.set(manager.enableExternalAutoRefresh, forKey: "enableExternalAutoRefresh")
-                                }
+                        // 標題行
+                        HStack {
+                            Text("外部 App")
                                 .font(.caption)
-                                .foregroundColor(.teal)
-                            }
-                            .padding(.horizontal)
-                            ForEach(manager.externalBundleIds, id: \.self) { bid in
-                                HStack {
-                                    Image(systemName: "app.badge")
-                                        .foregroundColor(.orange)
-                                    Text(bid)
-                                        .font(.caption)
-                                        .lineLimit(1)
-                                    Spacer()
-                                }
-                                .padding(.horizontal)
-                                .padding(.vertical, 4)
-                            }
-                            Text("首次開啟自動刷新需確認")
-                                .font(.caption2)
                                 .foregroundColor(.secondary)
-                                .padding(.horizontal)
+                                .textCase(.uppercase)
+                            Spacer()
+                            Button(manager.enableExternalAutoRefresh ? "自動刷新：開" : "自動刷新：關") {
+                                manager.enableExternalAutoRefresh.toggle()
+                                UserDefaults.standard.set(manager.enableExternalAutoRefresh, forKey: "enableExternalAutoRefresh")
+                            }
+                            .font(.caption)
+                            .foregroundColor(.teal)
                         }
-                        .padding(.vertical, 8)
-                        .background(Color.orange.opacity(0.08))
-                        .cornerRadius(12)
-                        .padding(.horizontal)
+                        ForEach(manager.externalBundleIds, id: \.self) { bid in
+                            HStack(spacing: 12) {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(Color.teal.opacity(0.18))
+                                    .frame(width: 52, height: 52)
+                                    .overlay(
+                                        Image(systemName: "app.fill")
+                                            .foregroundColor(.teal)
+                                    )
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(bid)
+                                        .font(.headline)
+                                        .bold()
+                                        .lineLimit(1)
+                                    Text("外部")
+                                        .font(.caption)
+                                        .foregroundColor(.teal.opacity(0.75))
+                                }
+                                Spacer()
+                            }
+                            .padding()
+                            .background(Color.teal.opacity(0.08))
+                            .cornerRadius(20)
+                        }
                     }
                     
                     // App ID 剩餘
