@@ -28,8 +28,9 @@ struct SourceApp: Identifiable, Codable {
     var iconURL: String?
     var description: String?
     var developerName: String?
+    var screenshotURLs: [String]?
     
-    init(id: String = UUID().uuidString, name: String, bundleId: String, version: String, downloadURL: String, iconURL: String? = nil, description: String? = nil, developerName: String? = nil) {
+    init(id: String = UUID().uuidString, name: String, bundleId: String, version: String, downloadURL: String, iconURL: String? = nil, description: String? = nil, developerName: String? = nil, screenshotURLs: [String]? = nil) {
         self.id = id
         self.name = name
         self.bundleId = bundleId
@@ -38,6 +39,7 @@ struct SourceApp: Identifiable, Codable {
         self.iconURL = iconURL
         self.description = description
         self.developerName = developerName
+        self.screenshotURLs = screenshotURLs
     }
 }
 
@@ -145,7 +147,8 @@ class SourceManager: ObservableObject {
                 downloadURL: downloadURL,
                 iconURL: entry.iconURL,
                 description: entry.localizedDescription ?? entry.subtitle,
-                developerName: entry.developerName
+                developerName: entry.developerName,
+                screenshotURLs: entry.screenshotURLs
             ))
         }
         return (json.name, apps)
@@ -166,6 +169,7 @@ private struct SourceJSON: Decodable {
 }
 
 private struct SourceAppJSON: Decodable {
+    var screenshotURLs: [String]?
     var name: String?
     var bundleIdentifier: String?
     var developerName: String?
