@@ -67,6 +67,7 @@ class AppManager: ObservableObject {
     }
     @Published var appIDsRemaining: Int = 10
     @Published var isRefreshing: Bool = false
+    @Published var isRefreshingExternal = false
     
     /// 顯示用的 App 列表：目前直接顯示全部
     /// 數據庫裡的都是 EiliStore 自己安裝的，不需要過濾
