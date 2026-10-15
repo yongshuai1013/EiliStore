@@ -34,14 +34,6 @@ struct MainTabView: View {
         }
         .accentColor(.teal)
     }
-    private func findPairingFileURL() -> URL? {
-        let fm = FileManager.default
-        guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
-        let dir = docs.appendingPathComponent("PairingFiles")
-        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return nil }
-        return files.first(where: { $0.pathExtension == "plist" })
-    }
-
 }
 
 // MARK: - 主頁（My Apps 風格，不顯示 Apple ID）
@@ -157,6 +149,14 @@ struct MyAppsView: View {
             }
         }
     }
+    private func findPairingFileURL() -> URL? {
+        let fm = FileManager.default
+        guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+        let dir = docs.appendingPathComponent("PairingFiles")
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return nil }
+        return files.first(where: { $0.pathExtension == "plist" })
+    }
+
 }
 
 struct AppRowView: View {
