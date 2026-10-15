@@ -58,6 +58,10 @@ extension PaxSigningService {
         
         // 查找現有
         let existing = try await portal.listProvisioningProfiles(for: team, session: session)
+        AppLogger.shared.log("現有 profile 數量: \(existing.count)，目標: \(appID.bundleIdentifier)")
+        for p in existing {
+            AppLogger.shared.log("  - \(p.name ?? "?") [\(p.bundleIdentifier ?? "?")]")
+        }
         let matches = existing.filter { $0.bundleIdentifier == appID.bundleIdentifier }
         if let found = matches.first {
             // 如果有多個重複的，刪掉多餘的只留一個
