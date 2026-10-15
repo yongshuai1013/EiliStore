@@ -160,11 +160,34 @@ struct MyAppsView: View {
                                         .font(.headline)
                                         .bold()
                                         .lineLimit(1)
-                                    Text("外部")
-                                        .font(.caption)
-                                        .foregroundColor(.teal.opacity(0.75))
+                                    HStack(spacing: 4) {
+                                        Text("外部")
+                                        if let exp = manager.externalExpiry[bid] {
+                                            let days = Calendar.current.dateComponents([.day], from: Date(), to: exp).day ?? 0
+                                            Text("· \(days) 天")
+                                        }
+                                    }
+                                    .font(.caption)
+                                    .foregroundColor(.teal.opacity(0.75))
                                 }
                                 Spacer()
+                                // 到期天數（跟已安裝一樣）
+                                if let exp = manager.externalExpiry[bid] {
+                                    let days = Calendar.current.dateComponents([.day], from: Date(), to: exp).day ?? 0
+                                    VStack(alignment: .trailing, spacing: 4) {
+                                        Text("剩餘")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        Text("\(days) 天")
+                                            .font(.subheadline)
+                                            .bold()
+                                            .foregroundColor(days <= 1 ? .red : .primary)
+                                    }
+                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, 12)
+                                    .background((days <= 1 ? Color.red : Color.teal).opacity(0.15))
+                                    .cornerRadius(16)
+                                }
                             }
                             .padding()
                             .background(Color.teal.opacity(0.08))
