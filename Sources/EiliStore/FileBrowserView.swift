@@ -37,12 +37,7 @@ final class FileClipboard: ObservableObject {
 }
 
 // MARK: - 檔案剪貼簿（App 內複製／貼上）
-final class FileClipboard: ObservableObject {
-    static let shared = FileClipboard()
-    @Published var copiedURL: URL?
-    private init() {}
-}
-
+final 
 /// 分享項包裝（讓 sheet(item:) 可用）
 struct ShareItem: Identifiable {
     let id = UUID()
