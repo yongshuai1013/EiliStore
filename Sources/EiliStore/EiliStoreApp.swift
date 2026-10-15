@@ -40,6 +40,8 @@ struct MainTabView: View {
 struct MyAppsView: View {
     @StateObject private var manager = AppManager.shared
     @State private var showAppIDsSheet = false
+    @State private var showAppIDSelection = false
+    @State private var showRefreshConfirm = false
     
     var body: some View {
         NavigationView {
