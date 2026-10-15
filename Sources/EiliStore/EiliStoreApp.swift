@@ -173,7 +173,7 @@ struct AppRowView: View {
                     .frame(width: 52, height: 52)
                     .cornerRadius(12)
             } else if app.bundleId == Bundle.main.bundleIdentifier,
-                      let uiImage = UIImage(named: "AppIcon") {
+                      let uiImage = UIImage(named: "EiliStoreIcon") {
                 Image(uiImage: uiImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
