@@ -265,7 +265,7 @@ struct SettingsView: View {
             .navigationTitle("設定")
             .onAppear {
                 if KeychainHelper.loadString(forKey: "paxstore.auth.session") != nil,
-                   let savedID = KeychainHelper.loadString(forKey: "paxstore.apple.id"),
+                   let savedID = KeychainHelper.loadString(forKey: "paxstore.auth.appleID"),
                    !savedID.isEmpty {
                     isLoggedIn = true
                     appleID = savedID
