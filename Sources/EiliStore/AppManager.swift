@@ -49,21 +49,31 @@ class AppManager: ObservableObject {
     @Published var appIDsRemaining: Int = 10
     @Published var isRefreshing: Bool = false
     
-    /// 顯示用的 App 列表：目前直接顯示全部
-    /// 數據庫裡的都是 EiliStore 自己安裝的，不需要過濾
+    /// 已註冊的 Bundle ID 白名單（從 Apple App IDs 獲取）
+    @Published var registeredBundleIds: Set<String> = []
+    
+    /// 顯示用的 App 列表：用 App IDs 白名單過濾簽名
+    /// - 白名單為空時顯示全部（未同步或斷網）
+    /// - EiliStore 自己永遠顯示
     var displayApps: [InstalledApp] {
-        installedApps
+        guard !registeredBundleIds.isEmpty else { return installedApps }
+        let selfBid = Bundle.main.bundleIdentifier ?? ""
+        return installedApps.filter {
+            $0.bundleId == selfBid || registeredBundleIds.contains($0.bundleId)
+        }
     }
     
-    /// 從 Apple App IDs 同步到期日（以 Apple 的 expirationDate 為準）
+    /// 從 Apple App IDs 同步到期日＋白名單（以 Apple 的數據為準）
     func syncExpiryFromAppIDs() async {
         do {
             let teams = try await PaxSigningService.shared.fetchTeams()
             guard let team = teams.first else { return }
             let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
             var updated = false
+            var bundleIds = Set<String>()
             for appID in appIDs {
                 let bid = appID.bundleIdentifier
+                bundleIds.insert(bid)
                 if let idx = installedApps.firstIndex(where: { $0.bundleId == bid }),
                    let exp = appID.expirationDate {
                     if installedApps[idx].expiresDate != exp {
@@ -71,6 +81,13 @@ class AppManager: ObservableObject {
                         updated = true
                     }
                 }
+            }
+            // 更新白名單
+            if bundleIds != registeredBundleIds {
+                await MainActor.run {
+                    self.registeredBundleIds = bundleIds
+                }
+                updated = true
             }
             if updated {
                 saveApps()
