@@ -128,14 +128,14 @@ struct MyAppsView: View {
                                 .foregroundColor(.secondary)
                                 .textCase(.uppercase)
                             Spacer()
-                            Button(manager.isRefreshing ? "刷新中..." : "全部刷新") {
+                            Button(manager.isRefreshingExternal ? "刷新中..." : "全部刷新") {
                                 Task {
                                     await manager.refreshExternalOnly()
                                 }
                             }
                             .font(.caption)
                             .foregroundColor(.teal)
-                            .disabled(manager.isRefreshing)
+                            .disabled(manager.isRefreshingExternal || manager.isRefreshing)
                         }
                         ForEach(manager.externalBundleIds, id: \.self) { bid in
                             HStack(spacing: 12) {
