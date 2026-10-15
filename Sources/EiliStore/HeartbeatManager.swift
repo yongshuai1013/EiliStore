@@ -6,7 +6,6 @@ public class HeartbeatManager {
     public static let shared = HeartbeatManager()
     private init() {}
     
-    private var client: LockdownClient?
     private var heartbeat: PaxHeartbeatService?
     private let lock = NSLock()
     private var _isRunning = false
@@ -63,8 +62,4 @@ public class HeartbeatManager {
         print("[HeartbeatManager] 已停止")
     }
     
-    /// 獲取當前的 lockdownd 客戶端（供其他功能復用，避免重複連接）
-    public func currentClient() -> LockdownClient? {
-        return client
-    }
 }
