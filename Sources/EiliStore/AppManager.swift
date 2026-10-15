@@ -80,6 +80,15 @@ class AppManager: ObservableObject {
     private init() {
         self.selectedRefreshBundleIds = Set(UserDefaults.standard.stringArray(forKey: "selectedRefreshBundleIds") ?? [])
         self.enableExternalAutoRefresh = UserDefaults.standard.bool(forKey: "enableExternalAutoRefresh")
+        // 載入外部 App 數據
+        if let data = UserDefaults.standard.data(forKey: "externalExpiry"),
+           let decoded = try? JSONDecoder().decode([String: Date].self, from: data) {
+            self.externalExpiry = decoded
+        }
+        if let data = UserDefaults.standard.data(forKey: "externalNames"),
+           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            self.externalNames = decoded
+        }
         load()
         // 如果是空的，加個示例（僅首次）
         if installedApps.isEmpty {
