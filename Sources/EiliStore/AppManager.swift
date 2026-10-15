@@ -333,10 +333,12 @@ class AppManager: ObservableObject {
                 try await misagent.installProfile(profile.data)
                 self.externalExpiry[bid] = Calendar.current.date(byAdding: .day, value: 7, to: Date())
                 AppLogger.shared.log("外部刷新成功: " + bid)
+                successCount += 1
                 // 外部進度簡單遞增（避免 bids 作用域問題）
                 refreshFraction += 1.0 / Double(max(externalBundleIds.count, 1))
             } catch {
                 AppLogger.shared.log("外部刷新失敗 " + bid + ": " + error.localizedDescription)
+                failCount += 1
             }
         }
         
@@ -345,7 +347,12 @@ class AppManager: ObservableObject {
         currentlyRefreshingBundleId = nil
         refreshTitle = ""
         isRefreshError = false
-        refreshProgress = "刷新完成"
+        if failCount > 0 {
+            refreshProgress = "刷新完成，\(failCount) 個失敗"
+            isRefreshError = true
+        } else {
+            refreshProgress = "刷新完成"
+        }
         AppLogger.shared.log("全部刷新完成")
     }
     
@@ -364,6 +371,8 @@ class AppManager: ObservableObject {
     
     /// 只刷新外部 App（不碰列表）
     func refreshExternalOnly() async {
+        var successCount = 0
+        var failCount = 0
         let bids = externalBundleIds
         guard !bids.isEmpty else { return }
         
