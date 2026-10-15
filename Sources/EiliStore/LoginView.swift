@@ -185,6 +185,9 @@ struct AccountView: View {
     @Binding var appleID: String
     @Binding var isLoggedIn: Bool
     @State private var showLogoutAlert = false
+    @State private var sessionStatus: String? = nil
+    @State private var sessionValid: Bool? = nil
+    @State private var isChecking = false
 
     var body: some View {
         List {
@@ -195,6 +198,30 @@ struct AccountView: View {
                     Text(appleID)
                         .foregroundColor(.secondary)
                 }
+                HStack {
+                    Text("Session 狀態")
+                    Spacer()
+                    if isChecking {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else if let valid = sessionValid {
+                        Text(valid ? "有效" : "已失效")
+                            .foregroundColor(valid ? .green : .red)
+                            .bold()
+                    } else {
+                        Text("未知")
+                            .foregroundColor(.secondary)
+                    }
+                }
+                if let status = sessionStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Button(action: { checkSession() }) {
+                    Text("檢查登入狀態")
+                }
+                .disabled(isChecking)
             }
             Section {
                 Button("登出") {
@@ -207,6 +234,7 @@ struct AccountView: View {
             }
         }
         .navigationTitle("賬號")
+        .onAppear { checkSession() }
         .alert("確定要登出嗎？", isPresented: $showLogoutAlert) {
             Button("登出", role: .destructive) {
                 PaxAuthService.shared.logout()
@@ -216,6 +244,29 @@ struct AccountView: View {
             Button("取消", role: .cancel) { }
         } message: {
             Text("登出後若 Apple 暫時限制登入，可能無法立即重新登入。")
+        }
+    }
+
+    /// 檢查 session 是否有效（調用輕量 API）
+    private func checkSession() {
+        guard !isChecking else { return }
+        isChecking = true
+        sessionStatus = nil
+        Task {
+            do {
+                let teams = try await PaxSigningService.shared.fetchTeams()
+                await MainActor.run {
+                    self.sessionValid = true
+                    self.sessionStatus = "Session 有效，找到 \(teams.count) 個 Team"
+                    self.isChecking = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.sessionValid = false
+                    self.sessionStatus = "Session 已失效: \(error.localizedDescription)"
+                    self.isChecking = false
+                }
+            }
         }
     }
 }
