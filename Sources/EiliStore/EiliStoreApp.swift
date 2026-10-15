@@ -156,19 +156,17 @@ struct MyAppsView: View {
                                         )
                                 }
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(bid)
+                                    Text(AppIconHelper.shared.appName(for: bid) ?? bid)
                                         .font(.headline)
                                         .bold()
                                         .lineLimit(1)
-                                    HStack(spacing: 4) {
-                                        Text("外部")
-                                        if let exp = manager.externalExpiry[bid] {
-                                            let days = Calendar.current.dateComponents([.day], from: Date(), to: exp).day ?? 0
-                                            Text("· \(days) 天")
-                                        }
-                                    }
-                                    .font(.caption)
-                                    .foregroundColor(.teal.opacity(0.75))
+                                    Text(bid)
+                                        .font(.caption)
+                                        .foregroundColor(.teal.opacity(0.6))
+                                        .lineLimit(1)
+                                    Text("外部")
+                                        .font(.caption)
+                                        .foregroundColor(.teal.opacity(0.75))
                                 }
                                 Spacer()
                                 // 到期天數（跟已安裝一樣）
