@@ -75,8 +75,15 @@ extension PaxSigningService {
         let profileName = "PaxStore \(appID.bundleIdentifier)"
         for p in existing where p.bundleIdentifier == appID.bundleIdentifier || p.name == profileName {
             if let pid = p.identifier {
-                AppLogger.shared.log("刪除重複 profile: \(p.name ?? "")")
-                try? await portal.deleteProvisioningProfile(profileID: pid, team: team, session: session)
+                AppLogger.shared.log("刪除重複 profile: \(p.name ?? "") (\(pid))")
+                do {
+                    try await portal.deleteProvisioningProfile(profileID: pid, team: team, session: session)
+                    AppLogger.shared.log("已刪除: \(pid)")
+                } catch {
+                    AppLogger.shared.log("刪除失敗 \(pid): \(error.localizedDescription)")
+                }
+            } else {
+                AppLogger.shared.log("profile 無 ID，跳過: \(p.name ?? "")")
             }
         }
         // 重新拉取列表確認清乾淨了
