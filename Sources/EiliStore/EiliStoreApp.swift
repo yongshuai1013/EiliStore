@@ -232,8 +232,14 @@ struct SettingsView: View {
         NavigationView {
             List {
                 Section(header: Text("賬號")) {
-                    NavigationLink(destination: LoginView(appleID: $appleID, isLoggedIn: $isLoggedIn)) {
-                        Text(isLoggedIn ? "已登入: \(appleID)" : "Apple ID 登入")
+                    if isLoggedIn {
+                        NavigationLink(destination: AccountView(appleID: $appleID, isLoggedIn: $isLoggedIn)) {
+                            Text("已登入: \(appleID)")
+                        }
+                    } else {
+                        NavigationLink(destination: LoginView(appleID: $appleID, isLoggedIn: $isLoggedIn)) {
+                            Text("Apple ID 登入")
+                        }
                     }
                 }
                 
