@@ -86,7 +86,7 @@ struct MyAppsView: View {
                             .frame(maxWidth: .infinity)
                             .padding()
                     } else {
-                        ForEach(manager.installedApps) { app in
+                        ForEach(manager.displayApps) { app in
                             AppRowView(app: app)
                         }
                         .onDelete { indexSet in
