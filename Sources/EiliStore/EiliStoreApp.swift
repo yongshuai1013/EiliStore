@@ -39,6 +39,7 @@ struct MainTabView: View {
 // MARK: - 主頁（My Apps 風格，不顯示 Apple ID）
 struct MyAppsView: View {
     @StateObject private var manager = AppManager.shared
+    @State private var showAppIDsSheet = false
     
     var body: some View {
         NavigationView {
@@ -106,14 +107,17 @@ struct MyAppsView: View {
                         Text("\(manager.appIDsRemaining) 個 App ID 剩餘")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                        NavigationLink(destination: AppIDsView()) {
-                            Text("查看 App IDs")
-                                .font(.subheadline)
-                                .foregroundColor(.teal)
+                        Button("查看 App IDs") {
+                            showAppIDsSheet = true
                         }
+                        .font(.subheadline)
+                        .foregroundColor(.teal)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 8)
+                    .sheet(isPresented: $showAppIDsSheet) {
+                        AppIDsSheetView()
+                    }
                 }
                 .padding()
             }
