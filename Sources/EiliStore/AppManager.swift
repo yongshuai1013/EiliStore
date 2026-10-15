@@ -53,6 +53,9 @@ class AppManager: ObservableObject {
     /// 是否允許自動刷新外部 App
     @Published var enableExternalAutoRefresh: Bool = false
     
+    /// Apple 上註冊的 Bundle IDs
+    @Published var registeredBundleIds: Set<String> = []
+    
     /// 外部選中的 Bundle IDs（不在數據庫裡的）
     var externalBundleIds: [String] {
         let dbIds = Set(installedApps.map { $0.bundleId })
@@ -149,6 +152,9 @@ class AppManager: ObservableObject {
             let teams = try await PaxSigningService.shared.fetchTeams()
             guard let team = teams.first else { return }
             let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
+            await MainActor.run {
+                self.registeredBundleIds = Set(appIDs.map { $0.bundleIdentifier })
+            }
             var updated = false
             for appID in appIDs {
                 let bid = appID.bundleIdentifier
