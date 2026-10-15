@@ -53,18 +53,10 @@ class AppManager: ObservableObject {
     @Published var registeredBundleIds: Set<String> = []
     
     /// 用戶選擇的需要刷新簽名的 Bundle ID（空 = 全部）
-    @Published var selectedRefreshBundleIds: Set<String> = [] {
-        didSet {
-            UserDefaults.standard.set(Array(selectedRefreshBundleIds), forKey: "selectedRefreshBundleIds")
-        }
-    }
+    @Published var selectedRefreshBundleIds: Set<String> = []
     
     /// 是否允許自動刷新外部 App（用戶第一次確認）
-    @Published var enableExternalAutoRefresh: Bool = false {
-        didSet {
-            UserDefaults.standard.set(enableExternalAutoRefresh, forKey: "enableExternalAutoRefresh")
-        }
-    }
+    @Published var enableExternalAutoRefresh: Bool = false
     
     /// 外部選中的 Bundle IDs（不在數據庫裡的）
     var externalBundleIds: [String] {
