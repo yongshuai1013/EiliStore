@@ -9,7 +9,7 @@ packages:
     version: 0.9.19
   SideSign:
     url: https://github.com/yongshuai1013/SideSign.git
-    revision: da194c60f5366394fb715354391952dd9ca89ac4
+    revision: 0c9fdd9ab023
   CodeSignKit:
     url: https://github.com/mahee96/CodeSignKit.git
     branch: main
