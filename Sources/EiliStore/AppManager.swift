@@ -334,8 +334,15 @@ class AppManager: ObservableObject {
         ensureSelfRegistered()
         
         AppLogger.shared.log("App 啟動，檢查 App 過期狀態...")
-        if hasUpdates {
-            AppLogger.shared.log("發現 \(appsNeedingRefresh.count) 個 App 需要刷新")
+        // 列表有過期的，或外部開啟了自動刷新且有選中的，都觸發
+        let shouldRefreshExternal = enableExternalAutoRefresh && !externalBundleIds.isEmpty
+        if hasUpdates || shouldRefreshExternal {
+            if hasUpdates {
+                AppLogger.shared.log("發現 \(appsNeedingRefresh.count) 個 App 需要刷新")
+            }
+            if shouldRefreshExternal {
+                AppLogger.shared.log("外部自動刷新已開啟，包含 \(externalBundleIds.count) 個外部 App")
+            }
             await refreshAll(includeExternal: enableExternalAutoRefresh)
         } else {
             AppLogger.shared.log("所有 App 簽名有效，無需刷新")
