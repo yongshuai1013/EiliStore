@@ -261,8 +261,8 @@ class AppManager: ObservableObject {
         
         misagent.disconnect()
         save()
-        // 刷新外部選中的 Bundle IDs
-        for bid in externalBids {
+        // 刷新外部選中的 Bundle IDs (TEMP DISABLED)
+        // for bid in externalBids {
             do {
                 let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
                 if let appID = appIDs.first(where: { $0.bundleIdentifier == bid }) {
