@@ -29,7 +29,7 @@ struct SourceApp: Identifiable, Codable {
     var description: String?
     var developerName: String?
     
-    init(id: String = UUID().uuidString, name: String, bundleId: String, version: String, downloadURL: String, iconURL: String? = nil, description: String? = nil) {
+    init(id: String = UUID().uuidString, name: String, bundleId: String, version: String, downloadURL: String, iconURL: String? = nil, description: String? = nil, developerName: String? = nil) {
         self.id = id
         self.name = name
         self.bundleId = bundleId
@@ -37,6 +37,7 @@ struct SourceApp: Identifiable, Codable {
         self.downloadURL = downloadURL
         self.iconURL = iconURL
         self.description = description
+        self.developerName = developerName
     }
 }
 
