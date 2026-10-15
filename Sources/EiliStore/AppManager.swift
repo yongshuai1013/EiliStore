@@ -328,6 +328,19 @@ class AppManager: ObservableObject {
         AppLogger.shared.log("全部刷新完成")
     }
     
+    /// 從 mobileprovision 解析 ExpirationDate
+    static func parseExpiry(from profileData: Data) -> Date? {
+        guard let str = String(data: profileData, encoding: .utf8) ?? String(data: profileData, encoding: .ascii) else {
+            return nil
+        }
+        guard let keyRange = str.range(of: "<key>ExpirationDate</key>") else { return nil }
+        let afterKey = str[keyRange.upperBound...]
+        guard let dateStart = afterKey.range(of: "<date>"),
+              let dateEnd = afterKey.range(of: "</date>") else { return nil }
+        let dateStr = String(afterKey[dateStart.upperBound..<dateEnd.lowerBound])
+        return ISO8601DateFormatter().date(from: dateStr)
+    }
+    
     /// 只刷新外部 App（不碰列表）
     func refreshExternalOnly() async {
         let bids = externalBundleIds
