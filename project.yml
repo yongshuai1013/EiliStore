@@ -15,6 +15,12 @@ packages:
     branch: main
   EMProxy:
     path: Packages/EMProxy
+  swift-nio:
+    url: https://github.com/apple/swift-nio.git
+    version: 2.65.0
+  swift-nio-ssl:
+    url: https://github.com/apple/swift-nio-ssl.git
+    version: 2.26.0
 targets:
   EiliStore:
     type: application
@@ -26,6 +32,8 @@ targets:
       - package: SideSign
       - package: CodeSignKit
       - package: EMProxy
+      - package: swift-nio
+      - package: swift-nio-ssl
       - framework: Libraries/IDeviceFFI.xcframework
         embed: false
     settings:
