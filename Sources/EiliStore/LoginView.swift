@@ -84,9 +84,7 @@ struct LoginView: View {
                 .foregroundColor(.red)
             }
 
-            // 調試日誌
-            if !debugLog.isEmpty {
-                Section(header: Text("Session 二維碼")) {
+            Section(header: Text("Session 二維碼")) {
                 NavigationLink(destination: SessionQRView()) {
                     HStack {
                         Text("導出/導入 Session")
@@ -100,6 +98,8 @@ struct LoginView: View {
                     .foregroundColor(.secondary)
             }
 
+            // 調試日誌
+            if !debugLog.isEmpty {
             Section(header: Text("調試日誌")) {
                     ScrollView {
                         Text(debugLog)
