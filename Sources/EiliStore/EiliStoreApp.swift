@@ -354,7 +354,6 @@ struct AppRowView: View {
                         .padding(.vertical, 10.5)
                         .frame(minWidth: 77, minHeight: 35)
                 }
-                }
             }
         }
         .padding()
