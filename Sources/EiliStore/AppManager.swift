@@ -69,6 +69,7 @@ class AppManager: ObservableObject {
     @Published var isRefreshing: Bool = false
     @Published var isRefreshingExternal = false
     @Published var refreshFraction: Double = 0.0
+    @Published var currentlyRefreshingBundleId: String? = nil
     
     /// 顯示用的 App 列表：目前直接顯示全部
     /// 數據庫裡的都是 EiliStore 自己安裝的，不需要過濾
@@ -328,6 +329,7 @@ class AppManager: ObservableObject {
         
         misagent.disconnect()
         save()
+        currentlyRefreshingBundleId = nil
         refreshProgress = "刷新完成"
         AppLogger.shared.log("全部刷新完成")
     }
