@@ -342,7 +342,7 @@ class AppManager: ObservableObject {
         AppLogger.shared.log("App 啟動，檢查 App 過期狀態...")
         if hasUpdates {
             AppLogger.shared.log("發現 \(appsNeedingRefresh.count) 個 App 需要刷新")
-            await refreshAll()
+            await refreshAll(manual: false)
         } else {
             AppLogger.shared.log("所有 App 簽名有效，無需刷新")
         }
