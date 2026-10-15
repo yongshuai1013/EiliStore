@@ -354,11 +354,6 @@ struct AppRowView: View {
                         .padding(.vertical, 10.5)
                         .frame(minWidth: 77, minHeight: 35)
                 }
-                    if manager.currentlyRefreshingBundleId == app.bundleId {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                            .tint(.white)
-                    }
                 }
             }
         }
