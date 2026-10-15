@@ -329,7 +329,13 @@ struct AppRowView: View {
     }
 
     private func expiryColor(days: Int) -> Color {
-        if days <= 1 { return .red }
+        switch days {
+        case 2...3: return .orange
+        case 4...5: return .yellow
+        case 6...: return .green
+        default: return .red
+        }
+    }
         if days <= 4 { return .orange }
         return .green
     }
