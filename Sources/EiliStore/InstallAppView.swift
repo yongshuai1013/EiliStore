@@ -117,12 +117,26 @@ struct InstallAppView: View {
                     )
                 }
                 
+                // 保存圖標到 Documents/AppIcons/
+                var iconPath: String? = nil
+                if let iconData = appInfo.iconData, !iconData.isEmpty {
+                    let iconsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                        .appendingPathComponent("AppIcons")
+                    try? FileManager.default.createDirectory(at: iconsDir, withIntermediateDirectories: true)
+                    let iconFile = iconsDir.appendingPathComponent("\(appInfo.bundleId).png")
+                    if (try? iconData.write(to: iconFile)) != nil {
+                        iconPath = iconFile.path
+                        logger.log("圖標已保存: \(iconFile.lastPathComponent)")
+                    }
+                }
+
                 let newApp = InstalledApp(
                     name: appInfo.name,
                     bundleId: appInfo.bundleId,
                     team: "未知", // TODO: 從簽名信息獲取
                     expiresDate: Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date(),
-                    ipaPath: savedIPA.path
+                    ipaPath: savedIPA.path,
+                    iconPath: iconPath
                 )
                 await MainActor.run {
                     AppManager.shared.addApp(newApp)
