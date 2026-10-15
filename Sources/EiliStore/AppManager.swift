@@ -247,6 +247,10 @@ class AppManager: ObservableObject {
             teams = try await PaxSigningService.shared.fetchTeams()
         } catch {
             AppLogger.shared.log("❌ 獲取 Team 失敗: \(error.localizedDescription)")
+            refreshTitle = "刷新失敗"
+            isRefreshError = true
+            refreshTitle = "刷新失敗"
+            isRefreshError = true
             refreshProgress = "獲取 Team 失敗"
             return
         }
@@ -271,6 +275,10 @@ class AppManager: ObservableObject {
             AppLogger.shared.log("✅ Misagent 已連接")
         } catch {
             AppLogger.shared.log("❌ Misagent 連接失敗: \(error.localizedDescription)")
+            refreshTitle = "刷新失敗"
+            isRefreshError = true
+            refreshTitle = "刷新失敗"
+            isRefreshError = true
             refreshProgress = "連接設備失敗"
             return
         }
@@ -334,6 +342,8 @@ class AppManager: ObservableObject {
         misagent.disconnect()
         save()
         currentlyRefreshingBundleId = nil
+        refreshTitle = ""
+        isRefreshError = false
         refreshProgress = "刷新完成"
         AppLogger.shared.log("全部刷新完成")
     }
@@ -406,6 +416,8 @@ class AppManager: ObservableObject {
         }
         
         misagent.disconnect()
+        refreshTitle = ""
+        isRefreshError = false
         refreshProgress = "刷新完成"
         AppLogger.shared.log("外部刷新完成")
     }
