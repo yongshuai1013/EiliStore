@@ -53,6 +53,12 @@ struct InstallAppView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
+                    // fileImporter 回傳的是 security-scoped URL，必須先取得訪問權限才能讀取
+                    guard url.startAccessingSecurityScopedResource() else {
+                        logger.log("❌ 無法取得文件訪問權限")
+                        return
+                    }
+                    defer { url.stopAccessingSecurityScopedResource() }
                     // 複製到 App 目錄（fileImporter 的 URL 是臨時的）
                     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                     let dest = docs.appendingPathComponent(url.lastPathComponent)
