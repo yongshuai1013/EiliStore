@@ -67,25 +67,7 @@ struct InstallAppView: View {
             )
         }
     }
-                    defer { url.stopAccessingSecurityScopedResource() }
-                    // 複製到 App 目錄（fileImporter 的 URL 是臨時的）
-                    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-                    let dest = docs.appendingPathComponent(url.lastPathComponent)
-                    try? FileManager.default.removeItem(at: dest)
-                    do {
-                        try FileManager.default.copyItem(at: url, to: dest)
-                        selectedIPA = dest
-                        logger.log("已選擇 IPA: \(url.lastPathComponent)")
-                    } catch {
-                        logger.log("❌ 複製 IPA 失敗: \(error.localizedDescription)")
-                    }
-                }
-            case .failure(let error):
-                logger.log("❌ 選擇文件失敗: \(error.localizedDescription)")
-            }
-        }
-    }
-    
+
     private func startInstall() {
         guard let ipaURL = selectedIPA else { return }
         guard !isInstalling else { return }
