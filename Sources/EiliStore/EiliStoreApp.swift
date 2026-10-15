@@ -282,7 +282,6 @@ struct MyAppsView: View {
         return files.first(where: { $0.pathExtension == "plist" })
     }
 
-}
 
 struct AppRowView: View {
     let app: InstalledApp
