@@ -188,6 +188,12 @@ struct AccountView: View {
     @State private var sessionStatus: String? = nil
     @State private var sessionValid: Bool? = nil
     @State private var isChecking = false
+    private var dateFormatter: DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        f.timeZone = TimeZone(identifier: "Asia/Taipei")
+        return f
+    }
 
     var body: some View {
         List {
@@ -222,6 +228,18 @@ struct AccountView: View {
                     Text("檢查登入狀態")
                 }
                 .disabled(isChecking)
+                HStack {
+                    Text("Session 寫入時間")
+                    Spacer()
+                    if let date = KeychainHelper.sessionCreationDate() {
+                        Text(dateFormatter.string(from: date))
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    } else {
+                        Text("無記錄")
+                            .foregroundColor(.secondary)
+                    }
+                }
             }
             Section {
                 Button("登出") {
