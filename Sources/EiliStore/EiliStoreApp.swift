@@ -125,6 +125,10 @@ struct MyAppsView: View {
             .navigationBarTitleDisplayMode(.large)
             .onAppear {
                 KeepAlive.shared.start()
+                // 同步 App 到期日（以 Apple App IDs 為準）
+                Task {
+                    await AppManager.shared.syncExpiryFromAppIDs()
+                }
                 // 自動啟動常駐心跳（如果有配對檔）
                 Task {
                     if let pairingURL = findPairingFileURL(),
