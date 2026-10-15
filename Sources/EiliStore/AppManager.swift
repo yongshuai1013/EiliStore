@@ -304,7 +304,6 @@ class AppManager: ObservableObject {
                 
                 // 裝到設備（這就是刷新的核心，3-5 秒）
                 try await misagent.installProfile(profile.data)
-                self.externalExpiry[bid] = Calendar.current.date(byAdding: .day, value: 7, to: Date())
                 AppLogger.shared.log("  ✅ Profile 已安裝到設備")
                 
                 // 更新過期時間：從 profile 解析真實到期日
