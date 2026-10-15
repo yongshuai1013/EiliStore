@@ -261,6 +261,25 @@ class AppManager: ObservableObject {
         
         misagent.disconnect()
         save()
+        // 刷新外部選中的 Bundle IDs
+        for bid in externalBids {
+            do {
+                let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
+                if let appID = appIDs.first(where: { $0.bundleIdentifier == bid }) {
+                    let profile = try await PaxSigningService.shared.fetchProfile(for: appID, team: team)
+                    try await RustMisagentClient.shared.installProfile(profile.data)
+                    AppLogger.shared.log("外部刷新成功: " + bid)
+                } else {
+                    let newAppID = try await PaxSigningService.shared.createAppID(bundleId: bid, team: team)
+                    let profile = try await PaxSigningService.shared.fetchProfile(for: newAppID, team: team)
+                    try await RustMisagentClient.shared.installProfile(profile.data)
+                    AppLogger.shared.log("外部創建並刷新成功: " + bid)
+                }
+            } catch {
+                AppLogger.shared.log("外部刷新失敗 " + bid + ": " + error.localizedDescription)
+            }
+        }
+        
         refreshProgress = "刷新完成"
         AppLogger.shared.log("全部刷新完成")
     }
