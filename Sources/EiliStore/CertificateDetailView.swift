@@ -180,7 +180,6 @@ struct CertificateDetailView: View {
         if hasPrivateKey {
             buttons.append(.default(Text("P12 含私鑰 (.p12)")) { exportP12() })
         }
-        buttons.append(.default(Text("下載描述檔 (.mobileprovision)")) { showProfileDownload = true })
         buttons.append(.cancel(Text("取消")))
         return buttons
     }
