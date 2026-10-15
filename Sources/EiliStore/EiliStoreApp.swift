@@ -137,46 +137,28 @@ struct MyAppsView: View {
 
 struct AppRowView: View {
     let app: InstalledApp
-    
+
     var body: some View {
-        HStack(spacing: 12) {
-            // 圖標
-            RoundedRectangle(cornerRadius: 14)
-                .fill(LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: 56, height: 56)
-                .overlay(
-                    Image(systemName: app.iconName)
-                        .foregroundColor(.white)
-                        .font(.title2)
-                )
-            
-            // 名稱和團隊
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(app.name)
-                        .font(.headline)
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundColor(.teal)
-                        .font(.caption)
-                }
-                Text(app.team)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(app.name)
+                    .font(.headline)
+                    .bold()
+                Text(app.bundleId)
+                    .font(.caption)
+                    .foregroundColor(.teal.opacity(0.75))
             }
-            
             Spacer()
-            
-            // 到期徽章
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("過期於")
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("剩餘")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-                Text("\(app.daysRemaining) 天後")
+                Text("\(app.daysRemaining) 天")
                     .font(.subheadline)
                     .bold()
                     .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
                     .background(expiryColor(days: app.daysRemaining))
                     .cornerRadius(20)
             }
@@ -185,7 +167,7 @@ struct AppRowView: View {
         .background(Color.teal.opacity(0.08))
         .cornerRadius(20)
     }
-    
+
     private func expiryColor(days: Int) -> Color {
         if days <= 2 { return .red }
         if days <= 5 { return .orange }
@@ -234,6 +216,9 @@ struct SettingsView: View {
                 Section(header: Text("證書")) {
                     NavigationLink(destination: CertificateView()) {
                         Text("證書管理")
+                    }
+                    NavigationLink(destination: AppIDsView()) {
+                        Text("App ID 管理")
                     }
                 }
                 
