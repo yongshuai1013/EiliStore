@@ -447,7 +447,8 @@ class AppManager: ObservableObject {
             externalNeedsRefresh = await checkExternalExpiry()
         }
         if hasUpdates || externalNeedsRefresh {
-            await refreshAll(includeExternal: enableExternalAutoRefresh, onlyNeedingRefresh: true)
+            // 自動觸發了就全刷（不只刷快過期的）
+            await refreshAll(includeExternal: enableExternalAutoRefresh, onlyNeedingRefresh: false)
         } else {
             AppLogger.shared.log("所有 App 簽名有效，無需刷新")
         }
