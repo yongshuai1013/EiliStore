@@ -198,23 +198,14 @@ struct MyAppsView: View {
                                         Text("剩餘")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
-                                        // 天數膠囊本身就是進度條（跟上面列表一樣）
-                                        ZStack {
-                                            RoundedRectangle(cornerRadius: 20)
-                                                .fill(Color.yellow.opacity(0.25))
-                                            GeometryReader { geo in
-                                                RoundedRectangle(cornerRadius: 20)
-                                                    .fill(Color.yellow)
-                                                    .frame(width: geo.size.width * min(max(Double(days) / 7.0, 0), 1))
-                                            }
-                                            Text("\(days) 天")
-                                                .font(.subheadline)
-                                                .bold()
-                                                .foregroundColor(.white)
-                                                .padding(.horizontal, 14)
-                                                .padding(.vertical, 8)
-                                        }
-                                        .frame(width: 90, height: 36)
+                                        Text("\(days) 天")
+                                            .font(.subheadline)
+                                            .bold()
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 14)
+                                            .padding(.vertical, 8)
+                                            .background(Color.yellow)
+                                            .cornerRadius(20)
                                     }
                                     .padding(.vertical, 8)
                                     .padding(.horizontal, 12)
@@ -331,33 +322,22 @@ struct AppRowView: View {
                 Text("剩餘")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-                // 天數膠囊本身就是進度條（像 SideStore）
+                // 天數膠囊（純色，像 SideStore；刷新時顯示轉圈）
                 ZStack {
-                    // 底色（track）
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(expiryColor(days: app.daysRemaining).opacity(0.3))
-                    // 進度填充（黃色，按剩餘天數比例）
-                    GeometryReader { geo in
-                        RoundedRectangle(cornerRadius: 20)
-                            .fill(Color.yellow)
-                            .frame(width: geo.size.width * min(max(Double(app.daysRemaining) / 7.0, 0), 1))
+                    Text("\(app.daysRemaining) 天")
+                        .font(.subheadline)
+                        .bold()
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Color.yellow)
+                        .cornerRadius(20)
+                    if manager.currentlyRefreshingBundleId == app.bundleId {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .tint(.white)
                     }
-                    // 文字＋轉圈
-                    HStack(spacing: 6) {
-                        Text("\(app.daysRemaining) 天")
-                            .font(.subheadline)
-                            .bold()
-                            .foregroundColor(.white)
-                        if manager.currentlyRefreshingBundleId == app.bundleId {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                                .tint(.white)
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
                 }
-                .frame(width: 90, height: 36)
             }
         }
         .padding()
