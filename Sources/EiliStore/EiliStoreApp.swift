@@ -125,6 +125,14 @@ struct MyAppsView: View {
             .navigationBarTitleDisplayMode(.large)
             .onAppear {
                 KeepAlive.shared.start()
+                // 自動啟動常駐心跳（如果有配對檔）
+                Task {
+                    if let pairingURL = findPairingFileURL(),
+                       await VPNConnectionChecker.shared.checkConnection() {
+                        let host = VPNConnectionChecker.shared.effectiveGatewayHost
+                        try? await HeartbeatManager.shared.start(pairingFileURL: pairingURL, host: host)
+                    }
+                }
                 manager.refreshAppIDsRemaining()
             }
             .toolbar {
@@ -297,4 +305,13 @@ struct MainTabView_Previews: PreviewProvider {
     static var previews: some View {
         MainTabView()
     }
+
+    private func findPairingFileURL() -> URL? {
+        let fm = FileManager.default
+        guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+        let dir = docs.appendingPathComponent("PairingFiles")
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return nil }
+        return files.first(where: { $0.pathExtension == "plist" })
+    }
+
 }
