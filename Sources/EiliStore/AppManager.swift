@@ -165,9 +165,22 @@ class AppManager: ObservableObject {
                         updated = true
                     }
                 }
+                // 外部 App 的到期時間
+                if externalBundleIds.contains(bid), let exp = appID.expirationDate {
+                    await MainActor.run {
+                        if self.externalExpiry[bid] != exp {
+                            self.externalExpiry[bid] = exp
+                            updated = true
+                        }
+                    }
+                }
             }
             if updated {
                 save()
+                // 保存外部到期時間
+                if let data = try? JSONEncoder().encode(externalExpiry) {
+                    UserDefaults.standard.set(data, forKey: "externalExpiry")
+                }
             }
         } catch {
             // 靜默失敗，保持本地數據
