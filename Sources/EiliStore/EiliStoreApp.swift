@@ -80,15 +80,17 @@ struct MyAppsView: View {
                         .disabled(manager.isRefreshing)
                     }
                     
-                    // 刷新提示（大圓角卡片，EiliStore 主題青色）：只顯示成功／失敗＋詳情
+                    // 刷新提示（中等尺寸，EiliStore 主題青色）
                     if !manager.refreshProgress.isEmpty {
                         Text(manager.refreshProgress)
-                            .font(.subheadline)
+                            .font(.caption)
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
                             .background(Color.teal)
-                            .cornerRadius(20)
+                            .cornerRadius(14)
+                            .lineLimit(4)
                     }
                     
                     // App 列表
