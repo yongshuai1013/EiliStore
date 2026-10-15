@@ -37,6 +37,31 @@ public enum KeychainHelper {
         return result as? Data
     }
     
+    /// 只讀 Keychain 項目的元數據（創建時間等），不返回敏感內容
+    /// 用於診斷 session 何時寫入，不洩露 session 本身
+    public static func metadata(forKey key: String) -> [String: Any]? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else { return nil }
+        return result as? [String: Any]
+    }
+
+    /// session 的創建時間（診斷用，不讀取內容）
+    public static func sessionCreationDate() -> Date? {
+        guard let meta = metadata(forKey: "paxstore.auth.session"),
+              let date = meta[kSecAttrCreationDate as String] as? Date else {
+            return nil
+        }
+        return date
+    }
+
     @discardableResult
     public static func delete(forKey key: String) -> Bool {
         let query: [String: Any] = [
