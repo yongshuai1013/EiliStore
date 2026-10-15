@@ -36,13 +36,25 @@ final class FileClipboard: ObservableObject {
     private init() {}
 }
 
+// MARK: - 檔案剪貼簿（App 內複製／貼上）
+final class FileClipboard: ObservableObject {
+    static let shared = FileClipboard()
+    @Published var copiedURL: URL?
+    private init() {}
+}
+
+/// 分享項包裝（讓 sheet(item:) 可用）
+struct ShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 struct FileBrowserView: View {
     let directory: URL
     @State private var items: [URL] = []
     @StateObject private var clipboard = FileClipboard.shared
 
-    @State private var shareURL: URL?
-    @State private var showShare = false
+    @State private var shareItem: ShareItem?
     @State private var renameURL: URL?
     @State private var renameText = ""
     @State private var showRenameAlert = false
@@ -53,59 +65,12 @@ struct FileBrowserView: View {
             ForEach(items, id: \.self) { url in
                 if isDirectory(url) {
                     NavigationLink(destination: FileBrowserView(directory: url)) {
-                        HStack {
-                            Image(systemName: "folder.fill")
-                                .foregroundColor(.blue)
-                            Text(url.lastPathComponent)
-                        }
+                        fileRow(url: url, isDir: true)
                     }
-                    .contextMenu {
-                        Button(action: { beginRename(url) }) {
-                            Label("重新命名", systemImage: "pencil")
-                        }
-                        Button(role: .destructive, action: {
-                            try? FileManager.default.removeItem(at: url)
-                            load()
-                        }) {
-                            Label("刪除", systemImage: "trash")
-                        }
-                    }
+                    .contextMenu { folderMenu(url) }
                 } else {
-                    HStack {
-                        Image(systemName: "doc.fill")
-                            .foregroundColor(.gray)
-                        VStack(alignment: .leading) {
-                            Text(url.lastPathComponent)
-                                .lineLimit(1)
-                            Text(fileSizeString(url))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        Button {
-                            shareFile(url)
-                        } label: {
-                            Image(systemName: "square.and.arrow.up")
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                    .contextMenu {
-                        Button(action: { clipboard.copiedURL = url }) {
-                            Label("複製", systemImage: "doc.on.doc")
-                        }
-                        Button(action: { beginRename(url) }) {
-                            Label("重新命名", systemImage: "pencil")
-                        }
-                        Button(action: { shareFile(url) }) {
-                            Label("分享", systemImage: "square.and.arrow.up")
-                        }
-                        Button(role: .destructive, action: {
-                            try? FileManager.default.removeItem(at: url)
-                            load()
-                        }) {
-                            Label("刪除", systemImage: "trash")
-                        }
-                    }
+                    fileRow(url: url, isDir: false)
+                        .contextMenu { fileMenu(url) }
                 }
             }
             .onDelete(perform: delete)
@@ -118,19 +83,16 @@ struct FileBrowserView: View {
                 }
             }
         }
-        .sheet(isPresented: $showShare) {
-            if let url = shareURL, FileManager.default.fileExists(atPath: url.path) {
-                ShareSheet(url: url)
-            } else {
-                Text("檔案不存在，無法分享")
-            }
+        // 用 sheet(item:) 確保 URL 非空，避免白屏
+        .sheet(item: $shareItem) { item in
+            ShareSheet(url: item.url)
         }
         .alert("重新命名", isPresented: $showRenameAlert) {
             TextField("名稱", text: $renameText)
             Button("確定") { doRename() }
             Button("取消", role: .cancel) { }
         }
-        .alert("錯誤", isPresented: Binding(
+        .alert("提示", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
         )) {
@@ -141,18 +103,103 @@ struct FileBrowserView: View {
         .onAppear { load() }
     }
 
-    private func shareFile(_ url: URL) {
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            errorMessage = "檔案不存在"
-            return
+    // MARK: - 行 UI（仿系統檔案 App）
+
+    @ViewBuilder
+    private func fileRow(url: URL, isDir: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: iconName(for: url, isDir: isDir))
+                .font(.title2)
+                .foregroundColor(isDir ? .blue : iconColor(for: url))
+                .frame(width: 32)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(url.lastPathComponent)
+                    .lineLimit(1)
+                Text(isDir ? "資料夾" : fileSizeString(url))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            if !isDir {
+                Button {
+                    shareItem = ShareItem(url: url)
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .foregroundColor(.teal)
+                }
+                .buttonStyle(.borderless)
+            }
         }
-        shareURL = url
-        showShare = true
+        .padding(.vertical, 4)
     }
+
+    private func iconName(for url: URL, isDir: Bool) -> String {
+        if isDir { return "folder.fill" }
+        switch url.pathExtension.lowercased() {
+        case "ipa": return "app.badge.fill"
+        case "plist": return "doc.text.fill"
+        case "json": return "curlybraces"
+        case "txt", "log": return "doc.text"
+        case "png", "jpg", "jpeg", "gif", "webp": return "photo.fill"
+        case "mp4", "mov": return "video.fill"
+        case "mp3", "m4a", "wav": return "music.note"
+        case "zip": return "archivebox.fill"
+        case "crt", "cer", "p12": return "lock.doc.fill"
+        default: return "doc.fill"
+        }
+    }
+
+    private func iconColor(for url: URL) -> Color {
+        switch url.pathExtension.lowercased() {
+        case "ipa": return .teal
+        case "png", "jpg", "jpeg", "gif", "webp": return .green
+        case "mp4", "mov": return .purple
+        case "mp3", "m4a", "wav": return .pink
+        default: return .gray
+        }
+    }
+
+    // MARK: - 長按選單
+
+    @ViewBuilder
+    private func fileMenu(_ url: URL) -> some View {
+        Button(action: { clipboard.copiedURL = url }) {
+            Label("複製", systemImage: "doc.on.doc")
+        }
+        Button(action: { beginRename(url) }) {
+            Label("重新命名", systemImage: "pencil")
+        }
+        Button(action: { shareItem = ShareItem(url: url) }) {
+            Label("分享", systemImage: "square.and.arrow.up")
+        }
+        Button(role: .destructive, action: {
+            try? FileManager.default.removeItem(at: url)
+            load()
+        }) {
+            Label("刪除", systemImage: "trash")
+        }
+    }
+
+    @ViewBuilder
+    private func folderMenu(_ url: URL) -> some View {
+        Button(action: { beginRename(url) }) {
+            Label("重新命名", systemImage: "pencil")
+        }
+        Button(role: .destructive, action: {
+            try? FileManager.default.removeItem(at: url)
+            load()
+        }) {
+            Label("刪除", systemImage: "trash")
+        }
+    }
+
+    // MARK: - 操作
 
     private func beginRename(_ url: URL) {
         renameURL = url
-        // 檔案保留副檔名，資料夾直接改名
         if isDirectory(url) {
             renameText = url.lastPathComponent
         } else {
@@ -187,11 +234,6 @@ struct FileBrowserView: View {
 
     private func paste() {
         guard let src = clipboard.copiedURL else { return }
-        guard FileManager.default.fileExists(atPath: src.path) else {
-            errorMessage = "來源檔案不存在"
-            clipboard.copiedURL = nil
-            return
-        }
         var dest = directory.appendingPathComponent(src.lastPathComponent)
         var n = 1
         while FileManager.default.fileExists(atPath: dest.path) {
@@ -203,6 +245,8 @@ struct FileBrowserView: View {
         }
         do {
             try FileManager.default.copyItem(at: src, to: dest)
+            // 貼上成功後清空剪貼簿
+            clipboard.copiedURL = nil
             load()
         } catch {
             errorMessage = error.localizedDescription
