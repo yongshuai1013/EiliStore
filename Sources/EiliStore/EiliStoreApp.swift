@@ -63,14 +63,37 @@ struct MyAppsView: View {
                             .foregroundColor(.secondary)
                             .textCase(.uppercase)
                         Spacer()
+                        Button(action: { showAppIDSelection = true }) {
+                            Image(systemName: "plus")
+                                .font(.caption)
+                                .foregroundColor(.teal)
+                        }
+                        .sheet(isPresented: $showAppIDSelection) {
+                            AppIDSelectionView()
+                        }
                         Button(manager.isRefreshing ? "刷新中..." : "全部刷新") {
-                            Task {
-                                await manager.refreshAll()
+                            if !manager.externalBundleIds.isEmpty {
+                                showRefreshConfirm = true
+                            } else {
+                                Task {
+                                    await manager.refreshAll(includeExternal: false)
+                                }
                             }
+                        }
+                        .alert("刷新簽名", isPresented: $showRefreshConfirm) {
+                            Button("僅列表") {
+                                Task { await manager.refreshAll(includeExternal: false) }
+                            }
+                            Button("包含外部") {
+                                Task { await manager.refreshAll(includeExternal: true) }
+                            }
+                            Button("取消", role: .cancel) {}
+                        } message: {
+                            Text("是否同時刷新外部 App？")
                         }
                         .font(.caption)
                         .foregroundColor(.teal)
-                        .disabled(manager.isRefreshing || !manager.hasUpdates)
+                        .disabled(manager.isRefreshing)
                     }
                     
                     // 刷新進度
