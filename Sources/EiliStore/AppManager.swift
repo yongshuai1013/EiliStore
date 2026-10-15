@@ -48,6 +48,11 @@ class AppManager: ObservableObject {
     @Published var installedApps: [InstalledApp] = []
     @Published var appIDsRemaining: Int = 10
     @Published var isRefreshing: Bool = false
+    
+    /// 顯示用的 App 列表：過濾掉未簽名／巨魔安裝的（team 為未知或空）
+    var displayApps: [InstalledApp] {
+        installedApps.filter { !$0.team.isEmpty && $0.team != "未知" }
+    }
     @Published var refreshProgress: String = ""
     
     private let storageKey = "EiliStore.InstalledApps"
