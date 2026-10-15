@@ -49,77 +49,16 @@ class AppManager: ObservableObject {
     @Published var appIDsRemaining: Int = 10
     @Published var isRefreshing: Bool = false
     
-    /// 已註冊的 Bundle ID 白名單（從 Apple App IDs 獲取）
-    @Published var registeredBundleIds: Set<String> = []
-    
-    /// 用戶選擇的需要刷新簽名的 Bundle ID（空 = 全部）
-    @Published var selectedRefreshBundleIds: Set<String> = []
-    
-    /// 是否允許自動刷新外部 App
-    @Published var enableExternalAutoRefresh: Bool = false
-    
-    /// 外部選中的 Bundle IDs（不在數據庫裡的）
-    var externalBundleIds: [String] {
-        let dbIds = Set(installedApps.map { $0.bundleId })
-        return selectedRefreshBundleIds.subtracting(dbIds).sorted()
-    } {
-        didSet {
-            UserDefaults.standard.set(Array(selectedRefreshBundleIds), forKey: "selectedRefreshBundleIds")
-        }
-    }
-    
-    /// 顯示用的 App 列表：用 App IDs 白名單過濾簽名
-    /// - 白名單為空時顯示全部（未同步或斷網）
-    /// - EiliStore 自己永遠顯示
+    /// 顯示用的 App 列表：目前直接顯示全部
+    /// 數據庫裡的都是 EiliStore 自己安裝的，不需要過濾
     var displayApps: [InstalledApp] {
-        guard !registeredBundleIds.isEmpty else { return installedApps }
-        let selfBid = Bundle.main.bundleIdentifier ?? ""
-        return installedApps.filter {
-            $0.bundleId == selfBid || registeredBundleIds.contains($0.bundleId)
-        }
-    }
-    
-    /// 從 Apple App IDs 同步到期日＋白名單（以 Apple 的數據為準）
-    func syncExpiryFromAppIDs() async {
-        do {
-            let teams = try await PaxSigningService.shared.fetchTeams()
-            guard let team = teams.first else { return }
-            let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
-            var updated = false
-            var bundleIds = Set<String>()
-            for appID in appIDs {
-                let bid = appID.bundleIdentifier
-                bundleIds.insert(bid)
-                if let idx = installedApps.firstIndex(where: { $0.bundleId == bid }),
-                   let exp = appID.expirationDate {
-                    if installedApps[idx].expiresDate != exp {
-                        installedApps[idx].expiresDate = exp
-                        updated = true
-                    }
-                }
-            }
-            // 更新白名單
-            if bundleIds != registeredBundleIds {
-                await MainActor.run {
-                    self.registeredBundleIds = bundleIds
-                }
-                updated = true
-            }
-            if updated {
-                save()
-            }
-        } catch {
-            // 靜默失敗，保持本地數據
-        }
+        installedApps
     }
     @Published var refreshProgress: String = ""
     
     private let storageKey = "EiliStore.InstalledApps"
     
     private init() {
-        self.selectedRefreshBundleIds = Set(UserDefaults.standard.stringArray(forKey: "selectedRefreshBundleIds") ?? [])
-        self.enableExternalAutoRefresh = UserDefaults.standard.bool(forKey: "enableExternalAutoRefresh")
-        self.selectedRefreshBundleIds = Set(UserDefaults.standard.stringArray(forKey: "selectedRefreshBundleIds") ?? [])
         load()
         // 如果是空的，加個示例（僅首次）
         if installedApps.isEmpty {
@@ -194,19 +133,11 @@ class AppManager: ObservableObject {
     
     /// 刷新所有即將過期的 App（正確路線：只換 provisioning profile，不重裝）
     /// 參考 SideStore PR #846：refresh should only renew provisioning profiles
-    func refreshAll(includeExternal: Bool = false) async {
-        // 刷新列表裡所有 App（不只過期的）
-        let toRefresh = displayApps
-        // 外部選中的 Bundle IDs（由調用方決定是否包含）
-        let dbBundleIds = Set(installedApps.map { $0.bundleId })
-        let externalBids: Set<String> = includeExternal ? selectedRefreshBundleIds.subtracting(dbBundleIds) : []
-        // 外部選中的 Bundle IDs（不在列表裡的）
-        let dbBundleIds = Set(installedApps.map { $0.bundleId })
-        let externalBids = selectedRefreshBundleIds.subtracting(dbBundleIds)
-        
-        guard !toRefresh.isEmpty || !externalBids.isEmpty else {
-            refreshProgress = "沒有可刷新的 App"
-            AppLogger.shared.log("刷新檢查：列表為空")
+    func refreshAll() async {
+        let toRefresh = appsNeedingRefresh
+        guard !toRefresh.isEmpty else {
+            refreshProgress = "沒有需要刷新的 App"
+            AppLogger.shared.log("刷新檢查：沒有需要刷新的 App")
             return
         }
         
@@ -286,25 +217,6 @@ class AppManager: ObservableObject {
             }
         }
         
-        // 刷新外部選中的 Bundle IDs（不在列表裡的）
-        for bid in externalBids {
-            refreshProgress = "正在刷新 \(bid)..."
-            AppLogger.shared.log("正在刷新外部: \(bid)")
-            do {
-                let appID = try await PaxSigningService.shared.findOrCreateAppID(
-                    bundleIdentifier: bid,
-                    name: bid,
-                    for: team
-                )
-                let profile = try await PaxSigningService.shared.provisioningProfile(for: appID, team: team)
-                AppLogger.shared.log("  新 profile 已下載 (\(profile.data.count) bytes)")
-                try await misagent.installProfile(profile.data)
-                AppLogger.shared.log("  ✅ 外部 \(bid) 刷新完成")
-            } catch {
-                AppLogger.shared.log("  ❌ 外部 \(bid) 刷新失敗: \(error.localizedDescription)")
-            }
-        }
-        
         misagent.disconnect()
         save()
         refreshProgress = "刷新完成"
@@ -328,44 +240,14 @@ class AppManager: ObservableObject {
     }
     
     /// 檢查並自動刷新（App 啟動時調用）
-    /// 檢查外部選中的 App 是否快過期（1天內）
-    private func checkExternalExpiry() async -> Bool {
-        do {
-            let teams = try await PaxSigningService.shared.fetchTeams()
-            guard let team = teams.first else { return false }
-            let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
-            let calendar = Calendar.current
-            for appID in appIDs {
-                if externalBundleIds.contains(appID.bundleIdentifier),
-                   let exp = appID.expirationDate {
-                    let days = calendar.dateComponents([.day], from: Date(), to: exp).day ?? 999
-                    if days <= 1 {
-                        return true
-                    }
-                }
-            }
-        } catch {
-        }
-        return false
-    }
-    
     func checkAndAutoRefresh() async {
         // 1. 確保 EiliStore 自己在列表裡（用於自刷新）
         ensureSelfRegistered()
         
         AppLogger.shared.log("App 啟動，檢查 App 過期狀態...")
-        var externalNeedsRefresh = false
-        if enableExternalAutoRefresh && !externalBundleIds.isEmpty {
-            externalNeedsRefresh = await checkExternalExpiry()
-        }
-        if hasUpdates || externalNeedsRefresh {
-            if hasUpdates {
-                AppLogger.shared.log("發現過期 App，開始刷新")
-            }
-            if externalNeedsRefresh {
-                AppLogger.shared.log("外部 App 快過期，觸發刷新")
-            }
-            await refreshAll(includeExternal: enableExternalAutoRefresh)
+        if hasUpdates {
+            AppLogger.shared.log("發現 \(appsNeedingRefresh.count) 個 App 需要刷新")
+            await refreshAll()
         } else {
             AppLogger.shared.log("所有 App 簽名有效，無需刷新")
         }
