@@ -325,6 +325,22 @@ class AppManager: ObservableObject {
         // 刷新外部選中的 Bundle IDs（只換 profile，不重裝）
         for bid in externalBids {
             AppLogger.shared.log("正在刷新外部: " + bid)
+                refreshFraction = 0.0
+                // 平滑動畫：慢慢增長到 0.9
+                Task {
+                    for i in 1...9 {
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        if currentlyRefreshingBundleId == bid {
+                            await MainActor.run {
+                                withAnimation(.linear(duration: 0.3)) {
+                                    refreshFraction = Double(i) / 10.0
+                                }
+                            }
+                        } else {
+                            break
+                        }
+                    }
+                }
             do {
                 let appID = try await PaxSigningService.shared.findOrCreateAppID(
                     bundleIdentifier: bid,
