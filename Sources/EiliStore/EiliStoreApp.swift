@@ -50,9 +50,19 @@ struct MainTabView: View {
 struct MyAppsView: View {
     @StateObject private var manager = AppManager.shared
     @State private var showAppIDsSheet = false
-    @State private var showAppIDSelection = false
+    @State private var activeHomeSheet: HomeSheet?
+    @State private var isImportingExternalIcon = false
+    @State private var showIconImportResult = false
+    @State private var iconImportMessage = ""
     @State private var showRefreshToast = false
     @State private var refreshToastGeneration = UUID()
+
+    private enum HomeSheet: String, Identifiable {
+        case appIDSelection
+        case importIcon
+
+        var id: String { rawValue }
+    }
     
     var body: some View {
         NavigationView {
@@ -115,8 +125,8 @@ struct MyAppsView: View {
                         }
                     }
                     
-                    // 外部 App（不在列表裡，但選中要刷新的）— 跟上面列表同樣的卡片樣式
-                    if !manager.externalBundleIds.isEmpty {
+                    // 外部 App（包含只匯入圖示的項目）— 跟上面列表同樣的卡片樣式
+                    if !manager.externalDisplayBundleIds.isEmpty {
                         // 標題行
                         HStack {
                             Text("外部 App")
@@ -124,26 +134,35 @@ struct MyAppsView: View {
                                 .foregroundColor(.secondary)
                                 .textCase(.uppercase)
                             Spacer()
-                            Button {
-                                Task {
-                                    await manager.refreshExternalOnly()
+                            if !manager.externalBundleIds.isEmpty {
+                                Button {
+                                    Task {
+                                        await manager.refreshExternalOnly()
+                                    }
+                                } label: {
+                                    if manager.isRefreshingExternal || manager.isRefreshing {
+                                        ProgressView()
+                                            .scaleEffect(0.7)
+                                    } else {
+                                        Text("全部刷新")
+                                    }
                                 }
-                            } label: {
-                                if manager.isRefreshingExternal || manager.isRefreshing {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                } else {
-                                    Text("全部刷新")
-                                }
+                                .font(.caption)
+                                .foregroundColor(.teal)
+                                .disabled(manager.isRefreshingExternal || manager.isRefreshing)
                             }
-                            .font(.caption)
-                            .foregroundColor(.teal)
-                            .disabled(manager.isRefreshingExternal || manager.isRefreshing)
                         }
-                        ForEach(manager.externalBundleIds, id: \.self) { bid in
+                        ForEach(manager.externalDisplayBundleIds, id: \.self) { bid in
                             HStack(spacing: 12) {
-                                // 嘗試從已安裝 App 拿圖標
-                                if let uiImage = AppIconHelper.shared.icon(for: bid) {
+                                // 匯入的圖示優先，其次嘗試從已安裝 App 取得圖示。
+                                if let iconPath = manager.externalIconPaths[bid],
+                                   let uiImage = UIImage(contentsOfFile: iconPath) {
+                                    Image(uiImage: uiImage)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                        .frame(width: 52, height: 52)
+                                        .cornerRadius(12)
+                                } else if let uiImage = AppIconHelper.shared.icon(for: bid) {
                                     Image(uiImage: uiImage)
                                         .resizable()
                                         .aspectRatio(contentMode: .fill)
@@ -173,7 +192,8 @@ struct MyAppsView: View {
                                 }
                                 Spacer()
                                 // 到期天數（跟已安裝一樣）
-                                if let exp = manager.externalExpiry[bid] {
+                                if manager.externalBundleIds.contains(bid),
+                                   let exp = manager.externalExpiry[bid] {
                                     let days = Calendar.current.dateComponents([.day], from: Date(), to: exp).day ?? 0
                                     Button {
                                         Task { await manager.refreshExternalApp(bundleId: bid) }
@@ -251,14 +271,49 @@ struct MyAppsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showAppIDSelection = true }) {
-                        Image(systemName: "plus")
-                            .foregroundColor(.teal)
+                    Menu {
+                        Button {
+                            activeHomeSheet = .appIDSelection
+                        } label: {
+                            Label("選擇需要刷新的 App ID", systemImage: "checkmark.circle")
+                        }
+                        Button {
+                            activeHomeSheet = .importIcon
+                        } label: {
+                            Label("從 IPA 匯入圖示", systemImage: "square.and.arrow.down")
+                        }
+                    } label: {
+                        if isImportingExternalIcon {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "plus")
+                                .foregroundColor(.teal)
+                        }
                     }
+                    .disabled(isImportingExternalIcon)
                 }
             }
-            .sheet(isPresented: $showAppIDSelection) {
-                AppIDSelectionView()
+            .sheet(item: $activeHomeSheet) { sheet in
+                switch sheet {
+                case .appIDSelection:
+                    AppIDSelectionView()
+                case .importIcon:
+                    DocumentPicker(
+                        onPick: { url in
+                            activeHomeSheet = nil
+                            importExternalIcon(from: url)
+                        },
+                        onCancel: {
+                            activeHomeSheet = nil
+                        }
+                    )
+                }
+            }
+            .alert("IPA 圖示匯入", isPresented: $showIconImportResult) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text(iconImportMessage)
             }
             .task {
                 // App 啟動時檢查是否需要自動刷新
@@ -287,6 +342,39 @@ struct MyAppsView: View {
             .onChange(of: manager.isRefreshing) { _ in self.showRefreshToastIfFinished() }
             .onChange(of: manager.isRefreshingExternal) { _ in self.showRefreshToastIfFinished() }
             .onChange(of: manager.refreshProgress) { _ in self.showRefreshToastIfFinished() }
+        }
+    }
+
+    private func importExternalIcon(from ipaURL: URL) {
+        guard !isImportingExternalIcon else { return }
+        isImportingExternalIcon = true
+
+        Task {
+            do {
+                let parsed = try await Task.detached(priority: .userInitiated) {
+                    let info = try IPAParser.parse(ipaURL: ipaURL)
+                    return (name: info.name, bundleId: info.bundleId, iconData: info.iconData)
+                }.value
+
+                guard let iconData = parsed.iconData else {
+                    throw ExternalIconImportError.missingIcon
+                }
+                try manager.saveExternalIcon(bundleId: parsed.bundleId, iconData: iconData)
+                iconImportMessage = "已匯入「\(parsed.name)」的圖示，並關聯至 \(parsed.bundleId)。未安裝或簽名 IPA。"
+            } catch {
+                iconImportMessage = "匯入失敗：\(error.localizedDescription)"
+            }
+
+            isImportingExternalIcon = false
+            showIconImportResult = true
+        }
+    }
+
+    private enum ExternalIconImportError: LocalizedError {
+        case missingIcon
+
+        var errorDescription: String? {
+            "IPA 中找不到可匯入的 App 圖示"
         }
     }
 

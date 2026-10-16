@@ -54,6 +54,8 @@ class AppManager: ObservableObject {
     @Published var externalExpiry: [String: Date] = [:]
     /// 外部 App 的名稱 (bundleId -> name，從 Apple App IDs 來)
     @Published var externalNames: [String: String] = [:]
+    /// 從 IPA 匯入的外部 App 圖示路徑（以 Bundle ID 關聯）。
+    @Published var externalIconPaths: [String: String] = [:]
     
     /// 是否允許自動刷新外部 App
     @Published var enableExternalAutoRefresh: Bool = false
@@ -66,6 +68,13 @@ class AppManager: ObservableObject {
         guard !selectedRefreshBundleIds.isEmpty else { return [] }
         let dbIds = Set(installedApps.flatMap { bundleIdentifiersForRefresh($0) })
         return selectedRefreshBundleIds.subtracting(dbIds).sorted()
+    }
+
+    /// 首頁顯示的外部 App：包含已選擇刷新的 ID，以及只匯入圖示的 ID。
+    /// 匯入圖示本身不會把 App 加入簽名刷新清單。
+    var externalDisplayBundleIds: [String] {
+        let dbIds = Set(installedApps.flatMap { bundleIdentifiersForRefresh($0) })
+        return Set(externalBundleIds).union(externalIconPaths.keys).subtracting(dbIds).sorted()
     }
     @Published var appIDsRemaining: Int = 10
     @Published var isRefreshing: Bool = false
@@ -97,6 +106,10 @@ class AppManager: ObservableObject {
            let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
             self.externalNames = decoded
         }
+        if let data = UserDefaults.standard.data(forKey: "externalIconPaths"),
+           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            self.externalIconPaths = decoded
+        }
         load()
         // 如果是空的，加個示例（僅首次）
         if installedApps.isEmpty {
@@ -126,6 +139,42 @@ class AppManager: ObservableObject {
         }
         if let data = try? JSONEncoder().encode(externalNames) {
             UserDefaults.standard.set(data, forKey: "externalNames")
+        }
+    }
+
+    /// 保存 IPA 中解析出的圖示，僅以 Bundle ID 關聯，不安裝或簽名 IPA。
+    func saveExternalIcon(bundleId: String, iconData: Data) throws {
+        guard !bundleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              bundleId != "unknown" else {
+            throw ExternalIconError.invalidBundleIdentifier
+        }
+
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let iconsDirectory = documents.appendingPathComponent("AppIcons", isDirectory: true)
+        try FileManager.default.createDirectory(at: iconsDirectory, withIntermediateDirectories: true)
+
+        let iconURL = iconsDirectory.appendingPathComponent("external-\(UUID().uuidString).png")
+        try iconData.write(to: iconURL, options: .atomic)
+
+        if let previousPath = externalIconPaths[bundleId] {
+            let previousURL = URL(fileURLWithPath: previousPath).standardizedFileURL
+            if previousURL.deletingLastPathComponent() == iconsDirectory.standardizedFileURL {
+                try? FileManager.default.removeItem(at: previousURL)
+            }
+        }
+
+        externalIconPaths[bundleId] = iconURL.path
+        if let data = try? JSONEncoder().encode(externalIconPaths) {
+            UserDefaults.standard.set(data, forKey: "externalIconPaths")
+        }
+        AppLogger.shared.log("已匯入外部 App 圖示: \(bundleId)")
+    }
+
+    enum ExternalIconError: LocalizedError {
+        case invalidBundleIdentifier
+
+        var errorDescription: String? {
+            "IPA 中找不到有效的 Bundle ID"
         }
     }
     
