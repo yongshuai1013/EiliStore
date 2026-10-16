@@ -6,16 +6,21 @@ struct AppIDSelectionView: View {
     @Environment(\.dismiss) var dismiss
     @State private var appIDs: [String] = []
     @State private var isLoading = false
+    @State private var errorMessage: String?
 
     var body: some View {
         NavigationView {
             List {
                 Section(
                     header: Text("選擇需要自動刷新簽名的 App IDs"),
-                    footer: Text("未選中的不會刷新。不選 = 全部刷新。")
+                    footer: Text("只有勾選的外部 App IDs 會加入刷新；未勾選的記錄不會刷新。")
                 ) {
                     if isLoading {
                         ProgressView()
+                    } else if let errorMessage {
+                        Text("載入 App IDs 失敗：\(errorMessage)")
+                            .font(.caption)
+                            .foregroundColor(.red)
                     } else {
                         ForEach(appIDs.sorted(), id: \.self) { bid in
                             Button(action: { toggle(bid) }) {
@@ -47,17 +52,21 @@ struct AppIDSelectionView: View {
     }
 
     private func loadAppIDs() {
-        if manager.registeredBundleIds.isEmpty {
-            isLoading = true
-            Task {
-                await manager.syncExpiryFromAppIDs()
+        isLoading = true
+        errorMessage = nil
+        Task {
+            do {
+                let result = try await manager.syncAppIDsFromApple()
                 await MainActor.run {
-                    appIDs = Array(manager.registeredBundleIds)
+                    appIDs = result.map(\.bundleIdentifier)
+                    isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
                     isLoading = false
                 }
             }
-        } else {
-            appIDs = Array(manager.registeredBundleIds)
         }
     }
 

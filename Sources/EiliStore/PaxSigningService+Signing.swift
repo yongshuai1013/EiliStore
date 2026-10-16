@@ -120,6 +120,18 @@ extension PaxSigningService {
         guard let newProfileID = newProfile.identifier else { throw SigningError.profileFailed("新 Profile 缺少 ID") }
         return try await portal.downloadProvisioningProfile(profileID: newProfileID, team: team, session: session)
     }
+
+    /// 刷新已安裝 App 時，使用 Apple 的 team profile API 取得新 profile。
+    /// 這和一般簽 IPA 時重用／建立 portal 手動 profile 的流程分開；不會刪除 Apple 端資料。
+    public func refreshProvisioningProfile(for appID: SideSign.AppID, team: SideSign.Team) async throws -> SideSign.ProvisioningProfile {
+        let (_, session) = try await sessionWithFreshAnisette()
+        return try await SideSign.DeveloperPortal.shared.downloadProvisioningProfile(
+            for: appID,
+            isTeamProfile: true,
+            team: team,
+            session: session
+        )
+    }
     
     /// 註冊設備
     public func registerDevice(udid: String, name: String, for team: SideSign.Team) async throws -> SideSign.Device {

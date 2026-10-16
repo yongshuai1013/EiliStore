@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import SideSign
+import ZIPFoundation
 
 /// 已安裝 App 的數據模型
 struct InstalledApp: Identifiable, Codable {
@@ -47,7 +48,7 @@ class AppManager: ObservableObject {
     
     @Published var installedApps: [InstalledApp] = []
     
-    /// 用戶選擇的需要刷新簽名的 Bundle ID（空 = 全部）
+    /// 用戶選擇的需要自動刷新簽名的外部 Bundle ID。
     @Published var selectedRefreshBundleIds: Set<String> = []
     /// 外部 App 的到期時間 (bundleId -> expiresDate)
     @Published var externalExpiry: [String: Date] = [:]
@@ -62,7 +63,8 @@ class AppManager: ObservableObject {
     
     /// 外部選中的 Bundle IDs（不在數據庫裡的）
     var externalBundleIds: [String] {
-        let dbIds = Set(installedApps.map { $0.bundleId })
+        guard !selectedRefreshBundleIds.isEmpty else { return [] }
+        let dbIds = Set(installedApps.flatMap { bundleIdentifiersForRefresh($0) })
         return selectedRefreshBundleIds.subtracting(dbIds).sorted()
     }
     @Published var appIDsRemaining: Int = 10
@@ -81,6 +83,7 @@ class AppManager: ObservableObject {
     @Published var refreshProgress: String = ""
     
     private let storageKey = "EiliStore.InstalledApps"
+    private var refreshBundleIDCache: [UUID: [String]] = [:]
     
     private init() {
         self.selectedRefreshBundleIds = Set(UserDefaults.standard.stringArray(forKey: "selectedRefreshBundleIds") ?? [])
@@ -132,13 +135,8 @@ class AppManager: ObservableObject {
     func refreshAppIDsRemaining() {
         Task {
             do {
-                let teams = try await PaxSigningService.shared.fetchTeams()
-                guard let team = teams.first else { return }
-                let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
-                await MainActor.run {
-                    self.appIDsRemaining = max(0, 10 - appIDs.count)
-                    AppLogger.shared.log("App ID 剩餘名額: \(self.appIDsRemaining)（已用 \(appIDs.count)/10）")
-                }
+                let appIDs = try await syncAppIDsFromApple()
+                AppLogger.shared.log("App ID 剩餘名額: \(self.appIDsRemaining)（已用 \(appIDs.count)/10）")
             } catch {
                 AppLogger.shared.log("❌ 獲取 App ID 數量失敗: \(error.localizedDescription)")
             }
@@ -150,6 +148,7 @@ class AppManager: ObservableObject {
     func addApp(_ app: InstalledApp) {
         // 如果已存在同 bundleId，先移除
         installedApps.removeAll { $0.bundleId == app.bundleId }
+        refreshBundleIDCache.removeAll()
         installedApps.append(app)
         save()
         AppLogger.shared.log("已添加 App: \(app.name) (\(app.bundleId))")
@@ -160,6 +159,7 @@ class AppManager: ObservableObject {
             AppLogger.shared.log("已移除 App: \(app.name)")
         }
         installedApps.removeAll { $0.bundleId == bundleId }
+        refreshBundleIDCache.removeAll()
         save()
     }
     
@@ -173,38 +173,33 @@ class AppManager: ObservableObject {
         !appsNeedingRefresh.isEmpty
     }
     
-    /// 從 Apple App IDs 同步識別資料；簽名到期日只從 provisioning profile 取得。
-    func syncExpiryFromAppIDs() async {
-        do {
-            let teams = try await PaxSigningService.shared.fetchTeams()
-            guard let team = teams.first else { return }
-            let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
-            await MainActor.run {
-                self.registeredBundleIds = Set(appIDs.map { $0.bundleIdentifier })
-            }
-            var namesUpdated = false
-            for appID in appIDs {
-                let bid = appID.bundleIdentifier
-                // App ID 的日期不是設備上實際安裝之 provisioning profile 的到期日。
-                // 只同步外部 App 名稱，避免啟動時把本地保存的 profile 日期覆蓋回舊值。
-                if externalBundleIds.contains(bid) {
-                    let updatedName = await MainActor.run { () -> Bool in
-                        let name = appID.name
-                        if !name.isEmpty, self.externalNames[bid] != name {
-                            self.externalNames[bid] = name
-                            return true
-                        }
-                        return false
-                    }
-                    namesUpdated = namesUpdated || updatedName
-                }
-            }
-            if namesUpdated {
-                saveExternalMetadata()
-            }
-        } catch {
-            // 靜默失敗，保持本地數據
+    /// 同步 Apple Developer Portal 的 App ID 記錄；不會覆寫裝置 profile 的簽名到期日。
+    func syncAppIDsFromApple() async throws -> [SideSign.AppID] {
+        let teams = try await PaxSigningService.shared.fetchTeams()
+        guard let team = teams.first else { throw SigningError.noTeamFound }
+        let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
+
+        await MainActor.run {
+            self.registeredBundleIds = Set(appIDs.map { $0.bundleIdentifier })
+            self.appIDsRemaining = max(0, 10 - appIDs.count)
         }
+
+        let selectedExternalIDs = await MainActor.run { Set(self.externalBundleIds) }
+        var namesUpdated = false
+        for appID in appIDs where selectedExternalIDs.contains(appID.bundleIdentifier) {
+            let updatedName = await MainActor.run { () -> Bool in
+                guard !appID.name.isEmpty, self.externalNames[appID.bundleIdentifier] != appID.name else {
+                    return false
+                }
+                self.externalNames[appID.bundleIdentifier] = appID.name
+                return true
+            }
+            namesUpdated = namesUpdated || updatedName
+        }
+        if namesUpdated {
+            await MainActor.run { self.saveExternalMetadata() }
+        }
+        return appIDs
     }
     
     // MARK: - 刷新
@@ -223,19 +218,17 @@ class AppManager: ObservableObject {
     /// 參考 SideStore PR #846：refresh should only renew provisioning profiles
     /// - Parameters:
     ///   - includeExternal: 是否包含外部 App
-    ///   - onlyNeedingRefresh: true=只刷1天內過期的（自動刷新用），false=刷全部（手動用）
+    ///   - onlyNeedingRefresh: true=只刷即將過期的（自動刷新用），false=刷全部（手動用）
     ///   - onlyBundleId: 指定只刷新一個已安裝 App；nil 時維持批次刷新
     func refreshAll(includeExternal: Bool = false, onlyNeedingRefresh: Bool = false, onlyBundleId: String? = nil) async {
         var failCount = 0
-        var expiryDateFailureCount = 0
         let appsToConsider = onlyNeedingRefresh ? appsNeedingRefresh : installedApps
         let toRefresh = onlyBundleId.map { bundleId in
             appsToConsider.filter { $0.bundleId == bundleId }
         } ?? appsToConsider
         refreshFraction = 0.0
         // 外部選中的 Bundle IDs（由調用方決定是否包含）
-        let dbBundleIds = Set(installedApps.map { $0.bundleId })
-        let selectedExternalBids = selectedRefreshBundleIds.subtracting(dbBundleIds)
+        let selectedExternalBids = Set(externalBundleIds)
         let externalBids: Set<String>
         if includeExternal {
             if let onlyBundleId {
@@ -321,44 +314,45 @@ class AppManager: ObservableObject {
             refreshFraction = 0.0
             refreshProgress = "正在刷新 \(app.name)..."
             AppLogger.shared.log("正在刷新: \(app.name) (\(app.bundleId))")
-            
-            do {
-                // 找或創建 App ID
-                let appID = try await PaxSigningService.shared.findOrCreateAppID(
-                    bundleIdentifier: app.bundleId,
-                    name: app.name,
-                    for: team
-                )
-                refreshFraction = 0.3
-                AppLogger.shared.log("  App ID: \(appID.name)")
-                
-                // 下載新的 provisioning profile
-                let profile = try await PaxSigningService.shared.provisioningProfile(for: appID, team: team)
-                refreshFraction = 0.65
-                AppLogger.shared.log("  新 profile 已下載 (\(profile.data.count) bytes)")
-                
-                // 裝到設備（這就是刷新的核心，3-5 秒）
-                try await misagent.installProfile(profile.data)
-                refreshFraction = 0.9
-                AppLogger.shared.log("  ✅ Profile 已安裝到設備")
-                
-                // 更新過期時間：從 profile 解析真實到期日
-                if let index = installedApps.firstIndex(where: { $0.id == app.id }) {
-                    if let realExpiry = Self.parseExpiry(from: profile.data) {
-                        installedApps[index].expiresDate = realExpiry
+
+            let bundleIDs = bundleIdentifiersForRefresh(app)
+            for (index, bundleID) in bundleIDs.enumerated() {
+                let progressBase = Double(index) / Double(max(bundleIDs.count, 1))
+                let progressSpan = 1.0 / Double(max(bundleIDs.count, 1))
+                refreshFraction = progressBase
+                AppLogger.shared.log("  更新 profile: \(bundleID)")
+                do {
+                    // 找或創建 App ID
+                    let appID = try await PaxSigningService.shared.findOrCreateAppID(
+                        bundleIdentifier: bundleID,
+                        name: bundleID == app.bundleId ? app.name : bundleID,
+                        for: team
+                    )
+                    refreshFraction = progressBase + progressSpan * 0.3
+                    AppLogger.shared.log("  App ID: \(appID.name)")
+
+                    // 使用 Apple team profile API 取得新 profile，再只安裝 profile，不重裝 App。
+                    let profile = try await PaxSigningService.shared.refreshProvisioningProfile(for: appID, team: team)
+                    refreshFraction = progressBase + progressSpan * 0.7
+                    AppLogger.shared.log("  新 profile 已取得 (\(profile.data.count) bytes)")
+
+                    try await misagent.installProfile(profile.data)
+                    refreshFraction = progressBase + progressSpan
+                    AppLogger.shared.log("  ✅ Profile 已安裝: \(bundleID)")
+
+                    // 主頁顯示的是主 App 已安裝 profile 的日期，不是 Apple App ID 的日期。
+                    if bundleID == app.bundleId,
+                       let installedIndex = installedApps.firstIndex(where: { $0.id == app.id }) {
+                        installedApps[installedIndex].expiresDate = profile.expirationDate
                         save()
-                        let days = Calendar.current.dateComponents([.day], from: Date(), to: realExpiry).day ?? 0
-                        AppLogger.shared.log("  ✅ \(app.name) 刷新完成，有效期 \(days) 天")
-                    } else {
-                        expiryDateFailureCount += 1
-                        AppLogger.shared.log("  ⚠️ Profile 已安裝，但無法解析到期日；保留原有日期")
+                        let days = Calendar.current.dateComponents([.day], from: Date(), to: profile.expirationDate).day ?? 0
+                        AppLogger.shared.log("  ✅ \(app.name) profile 有效期更新為 \(days) 天")
                     }
+                } catch {
+                    AppLogger.shared.log("  ❌ Profile 刷新失敗 \(bundleID): \(error.localizedDescription)")
+                    failCount += 1
+                    // 某個 extension 失敗時仍繼續刷新其餘 profiles 和 App。
                 }
-                refreshFraction = 1.0
-            } catch {
-                AppLogger.shared.log("  ❌ \(app.name) 刷新失敗: \(error.localizedDescription)")
-                failCount += 1
-                // 繼續下一個，不中斷
             }
         }
         
@@ -374,18 +368,13 @@ class AppManager: ObservableObject {
                     for: team
                 )
                 refreshFraction = 0.35
-                let profile = try await PaxSigningService.shared.provisioningProfile(for: appID, team: team)
+                let profile = try await PaxSigningService.shared.refreshProvisioningProfile(for: appID, team: team)
                 refreshFraction = 0.7
                 try await misagent.installProfile(profile.data)
-                if let realExpiry = Self.parseExpiry(from: profile.data) {
-                    self.externalExpiry[bid] = realExpiry
-                    saveExternalMetadata()
-                    let days = Calendar.current.dateComponents([.day], from: Date(), to: realExpiry).day ?? 0
-                    AppLogger.shared.log("外部刷新成功 \(bid)，profile 有效期 \(days) 天")
-                } else {
-                    expiryDateFailureCount += 1
-                    AppLogger.shared.log("外部 Profile 已安裝，但無法解析到期日: " + bid)
-                }
+                self.externalExpiry[bid] = profile.expirationDate
+                saveExternalMetadata()
+                let days = Calendar.current.dateComponents([.day], from: Date(), to: profile.expirationDate).day ?? 0
+                AppLogger.shared.log("外部刷新成功 \(bid)，profile 有效期 \(days) 天")
                 refreshFraction = 1.0
             } catch {
                 AppLogger.shared.log("外部刷新失敗 " + bid + ": " + error.localizedDescription)
@@ -397,37 +386,18 @@ class AppManager: ObservableObject {
         save()
         currentlyRefreshingBundleId = nil
         refreshTitle = ""
-        let issueCount = failCount + expiryDateFailureCount
-        isRefreshError = issueCount > 0
-        if failCount > 0, expiryDateFailureCount > 0 {
-            refreshProgress = "刷新完成，\(failCount) 個失敗，\(expiryDateFailureCount) 個日期未讀取"
-        } else if failCount > 0 {
+        isRefreshError = failCount > 0
+        if failCount > 0 {
             refreshProgress = "刷新完成，\(failCount) 個失敗"
-        } else if expiryDateFailureCount > 0 {
-            refreshProgress = "刷新完成，但 \(expiryDateFailureCount) 個 profile 到期日未讀取"
         } else {
             refreshProgress = "刷新完成"
         }
         AppLogger.shared.log("全部刷新完成")
     }
     
-    /// 從 mobileprovision 解析 ExpirationDate
-    static func parseExpiry(from profileData: Data) -> Date? {
-        guard let str = String(data: profileData, encoding: .utf8) ?? String(data: profileData, encoding: .ascii) else {
-            return nil
-        }
-        guard let keyRange = str.range(of: "<key>ExpirationDate</key>") else { return nil }
-        let afterKey = str[keyRange.upperBound...]
-        guard let dateStart = afterKey.range(of: "<date>"),
-              let dateEnd = afterKey.range(of: "</date>") else { return nil }
-        let dateStr = String(afterKey[dateStart.upperBound..<dateEnd.lowerBound])
-        return ISO8601DateFormatter().date(from: dateStr)
-    }
-    
     /// 只刷新外部 App（不碰列表）
     func refreshExternalOnly() async {
         var failCount = 0
-        var expiryDateFailureCount = 0
         let bids = externalBundleIds
         guard !bids.isEmpty else { return }
         
@@ -489,18 +459,13 @@ class AppManager: ObservableObject {
                     for: team
                 )
                 refreshFraction = 0.35
-                let profile = try await PaxSigningService.shared.provisioningProfile(for: appID, team: team)
+                let profile = try await PaxSigningService.shared.refreshProvisioningProfile(for: appID, team: team)
                 refreshFraction = 0.7
                 try await misagent.installProfile(profile.data)
-                if let realExpiry = Self.parseExpiry(from: profile.data) {
-                    externalExpiry[bid] = realExpiry
-                    saveExternalMetadata()
-                    let days = Calendar.current.dateComponents([.day], from: Date(), to: realExpiry).day ?? 0
-                    AppLogger.shared.log("外部刷新成功 \(bid)，profile 有效期 \(days) 天")
-                } else {
-                    expiryDateFailureCount += 1
-                    AppLogger.shared.log("外部 Profile 已安裝，但無法解析到期日: " + bid)
-                }
+                externalExpiry[bid] = profile.expirationDate
+                saveExternalMetadata()
+                let days = Calendar.current.dateComponents([.day], from: Date(), to: profile.expirationDate).day ?? 0
+                AppLogger.shared.log("外部刷新成功 \(bid)，profile 有效期 \(days) 天")
                 refreshFraction = 1.0
             } catch {
                 AppLogger.shared.log("外部刷新失敗: " + error.localizedDescription)
@@ -512,18 +477,63 @@ class AppManager: ObservableObject {
         saveExternalMetadata()
         currentlyRefreshingBundleId = nil
         refreshTitle = ""
-        let issueCount = failCount + expiryDateFailureCount
-        isRefreshError = issueCount > 0
-        if failCount > 0, expiryDateFailureCount > 0 {
-            refreshProgress = "刷新完成，\(failCount) 個失敗，\(expiryDateFailureCount) 個日期未讀取"
-        } else if failCount > 0 {
+        isRefreshError = failCount > 0
+        if failCount > 0 {
             refreshProgress = "刷新完成，\(failCount) 個失敗"
-        } else if expiryDateFailureCount > 0 {
-            refreshProgress = "刷新完成，但 \(expiryDateFailureCount) 個 profile 到期日未讀取"
         } else {
             refreshProgress = "刷新完成"
         }
         AppLogger.shared.log("外部刷新完成")
+    }
+
+    /// 讀出已保存 IPA 的主 App 與巢狀 App/appex Bundle IDs；失敗時至少刷新主 App。
+    private func bundleIdentifiersForRefresh(_ app: InstalledApp) -> [String] {
+        if let cachedBundleIDs = refreshBundleIDCache[app.id] { return cachedBundleIDs }
+        guard let ipaPath = app.ipaPath else {
+            refreshBundleIDCache[app.id] = [app.bundleId]
+            return [app.bundleId]
+        }
+        let ipaURL = URL(fileURLWithPath: ipaPath)
+        guard FileManager.default.fileExists(atPath: ipaURL.path) else {
+            refreshBundleIDCache[app.id] = [app.bundleId]
+            return [app.bundleId]
+        }
+
+        let workDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EiliStore-Refresh-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: workDirectory) }
+            try FileManager.default.unzipItem(at: ipaURL, to: workDirectory)
+
+            let payloadURL = workDirectory.appendingPathComponent("Payload", isDirectory: true)
+            let rootApps = try FileManager.default.contentsOfDirectory(at: payloadURL, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "app" }
+            guard let rootApp = rootApps.first else {
+                refreshBundleIDCache[app.id] = [app.bundleId]
+                return [app.bundleId]
+            }
+
+            var bundleIDs: Set<String> = [app.bundleId]
+            if let enumerator = FileManager.default.enumerator(at: rootApp, includingPropertiesForKeys: nil) {
+                for case let bundleURL as URL in enumerator
+                where bundleURL.pathExtension == "app" || bundleURL.pathExtension == "appex" {
+                    let infoURL = bundleURL.appendingPathComponent("Info.plist")
+                    guard let data = try? Data(contentsOf: infoURL),
+                          let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                          let bundleID = plist["CFBundleIdentifier"] as? String,
+                          !bundleID.isEmpty else { continue }
+                    bundleIDs.insert(bundleID)
+                }
+            }
+            let resolvedBundleIDs = bundleIDs.sorted()
+            refreshBundleIDCache[app.id] = resolvedBundleIDs
+            return resolvedBundleIDs
+        } catch {
+            AppLogger.shared.log("無法從 IPA 解析擴充套件 Bundle IDs，改為只刷新主 App：\(error.localizedDescription)")
+            refreshBundleIDCache[app.id] = [app.bundleId]
+            return [app.bundleId]
+        }
     }
     
     /// 查找配對檔
@@ -564,7 +574,11 @@ class AppManager: ObservableObject {
         ensureSelfRegistered()
         
         // 同步外部 App 名稱；到期日以已安裝 profile 的本地記錄為準。
-        await syncExpiryFromAppIDs()
+        do {
+            _ = try await syncAppIDsFromApple()
+        } catch {
+            AppLogger.shared.log("同步 Apple App IDs 失敗，保留本機資料: \(error.localizedDescription)")
+        }
         
         AppLogger.shared.log("App 啟動，檢查 App 過期狀態...")
         var externalNeedsRefresh = false
