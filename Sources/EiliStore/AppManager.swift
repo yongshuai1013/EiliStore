@@ -318,6 +318,7 @@ class AppManager: ObservableObject {
                 refreshFraction = Double(idx + 1) / Double(max(toRefresh.count, 1))
             } catch {
                 AppLogger.shared.log("  ❌ \(app.name) 刷新失敗: \(error.localizedDescription)")
+                failCount += 1
                 // 繼續下一個，不中斷
             }
         }

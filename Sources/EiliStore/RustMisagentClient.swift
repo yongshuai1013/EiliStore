@@ -138,8 +138,11 @@ public class RustMisagentClient {
     }
     
     private func errorMessage(from err: UnsafeMutablePointer<IdeviceFfiError>) -> String {
-        // 復用 InstallationProxy 的錯誤提取邏輯
-        // 簡化：直接返回通用信息
-        return "FFI error"
+        let code = err.pointee.code
+        let subCode = err.pointee.sub_code
+        if let cmsg = err.pointee.message {
+            return "[\(code):\(subCode)] \(String(cString: cmsg))"
+        }
+        return "[\(code):\(subCode)] unknown FFI error"
     }
 }
