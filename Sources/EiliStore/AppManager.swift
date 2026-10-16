@@ -222,6 +222,8 @@ class AppManager: ObservableObject {
     ///   - includeExternal: 是否包含外部 App
     ///   - onlyNeedingRefresh: true=只刷1天內過期的（自動刷新用），false=刷全部（手動用）
     func refreshAll(includeExternal: Bool = false, onlyNeedingRefresh: Bool = false) async {
+        var successCount = 0
+        var failCount = 0
         let toRefresh = onlyNeedingRefresh ? appsNeedingRefresh : installedApps
         refreshFraction = 0.0
         // 外部選中的 Bundle IDs（由調用方決定是否包含）
