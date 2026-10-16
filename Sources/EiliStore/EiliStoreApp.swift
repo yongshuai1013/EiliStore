@@ -189,17 +189,21 @@ struct MyAppsView: View {
                                                         .fill(bgColor)
                                                         .frame(width: max(0, geo.size.width * manager.refreshFraction))
                                                 }
+                                                .transition(.opacity)
                                                 ProgressView()
                                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                                     .scaleEffect(0.8)
+                                                    .transition(.opacity)
                                             }
                                             Text("\(days) 天")
                                                 .font(.system(size: 14, weight: .bold))
                                                 .foregroundColor(isRefreshing ? .clear : .white)
                                                 .padding(.horizontal, 14)
-                                                .padding(.vertical, 10.5)
+                                                .padding(.vertical, 8)
                                         }
-                                        .frame(minWidth: 77, minHeight: 35)
+                                        .frame(width: 77, height: 35)
+                                        .animation(.linear(duration: 0.25), value: manager.refreshFraction)
+                                        .animation(.easeInOut(duration: 0.2), value: manager.currentlyRefreshingBundleId)
                                     }
                                     .buttonStyle(PlainButtonStyle())
                                     .disabled(manager.isRefreshing || manager.isRefreshingExternal)
@@ -376,19 +380,23 @@ struct AppRowView: View {
                                     .fill(bgColor)
                                     .frame(width: max(0, geo.size.width * manager.refreshFraction))
                             }
+                            .transition(.opacity)
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                 .scaleEffect(0.8)
+                                .transition(.opacity)
                         }
                         Text("\(app.daysRemaining) 天")
-                            .font(.subheadline)
+                            .font(.system(size: 14, weight: .bold))
                             .bold()
                             .foregroundColor(isRefreshing ? .clear : .white)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                     }
-                    .frame(minWidth: 77, minHeight: 35)
+                    .frame(width: 77, height: 35)
                     .contentShape(RoundedRectangle(cornerRadius: 17.5))
+                    .animation(.linear(duration: 0.25), value: manager.refreshFraction)
+                    .animation(.easeInOut(duration: 0.2), value: manager.currentlyRefreshingBundleId)
                 }
                 .buttonStyle(PlainButtonStyle())
                 .disabled(manager.isRefreshing)
