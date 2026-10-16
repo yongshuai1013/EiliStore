@@ -70,11 +70,25 @@ class AppManager: ObservableObject {
         return selectedRefreshBundleIds.subtracting(dbIds).sorted()
     }
 
+    /// 可供 IPA 圖標手動配對的目標：只包含既有外部項目，不包含已安裝 APP。
+    var externalIconTargetBundleIds: [String] {
+        let installedBundleIds = installedApps.flatMap { bundleIdentifiersForRefresh($0) }
+        return externalBundleIds.filter { bundleId in
+            !installedBundleIds.contains {
+                $0.caseInsensitiveCompare(bundleId) == .orderedSame
+            }
+        }
+    }
+
     /// 首頁顯示的外部 App：包含已選擇刷新的 ID，以及只匯入圖示的 ID。
     /// 匯入圖示本身不會把 App 加入簽名刷新清單。
     var externalDisplayBundleIds: [String] {
-        let dbIds = Set(installedApps.flatMap { bundleIdentifiersForRefresh($0) })
-        return Set(externalBundleIds).union(externalIconPaths.keys).subtracting(dbIds).sorted()
+        let dbIds = installedApps.flatMap { bundleIdentifiersForRefresh($0) }
+        return Set(externalBundleIds).union(externalIconPaths.keys)
+            .filter { bundleId in
+                !dbIds.contains { $0.caseInsensitiveCompare(bundleId) == .orderedSame }
+            }
+            .sorted()
     }
     @Published var appIDsRemaining: Int = 10
     @Published var isRefreshing: Bool = false
@@ -143,7 +157,7 @@ class AppManager: ObservableObject {
     }
 
     /// 保存 IPA 中解析出的圖示，僅以 Bundle ID 關聯，不安裝或簽名 IPA。
-    func saveExternalIcon(bundleId: String, iconData: Data) throws {
+    func saveExternalIcon(bundleId: String, iconData: Data, removingSourceBundleId: String? = nil) throws {
         guard !bundleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               bundleId != "unknown" else {
             throw ExternalIconError.invalidBundleIdentifier
@@ -156,18 +170,66 @@ class AppManager: ObservableObject {
         let iconURL = iconsDirectory.appendingPathComponent("external-\(UUID().uuidString).png")
         try iconData.write(to: iconURL, options: .atomic)
 
-        if let previousPath = externalIconPaths[bundleId] {
-            let previousURL = URL(fileURLWithPath: previousPath).standardizedFileURL
-            if previousURL.deletingLastPathComponent() == iconsDirectory.standardizedFileURL {
-                try? FileManager.default.removeItem(at: previousURL)
+        let appIndex = installedApps.firstIndex {
+            $0.bundleId.caseInsensitiveCompare(bundleId) == .orderedSame
+        }
+        let sourceBundleId = removingSourceBundleId.flatMap {
+            $0.caseInsensitiveCompare(bundleId) == .orderedSame ? nil : $0
+        }
+        let matchingIconKeys = externalIconPaths.keys.filter { key in
+            key.caseInsensitiveCompare(bundleId) == .orderedSame ||
+            sourceBundleId.map { key.caseInsensitiveCompare($0) == .orderedSame } == true
+        }
+        var obsoletePaths = matchingIconKeys.compactMap { externalIconPaths[$0] }
+        if let appIndex {
+            if let previousPath = installedApps[appIndex].iconPath {
+                obsoletePaths.append(previousPath)
             }
+            installedApps[appIndex].iconPath = iconURL.path
+            save()
+        }
+        // 移除目標／來源的舊映射，避免大小寫變體或舊匯入來源留下重複卡片。
+        for key in matchingIconKeys {
+            externalIconPaths.removeValue(forKey: key)
+        }
+        if appIndex == nil {
+            externalIconPaths[bundleId] = iconURL.path
         }
 
-        externalIconPaths[bundleId] = iconURL.path
+        for path in Set(obsoletePaths) {
+            let previousURL = URL(fileURLWithPath: path).standardizedFileURL
+            guard previousURL.deletingLastPathComponent() == iconsDirectory.standardizedFileURL,
+                  !installedApps.contains(where: { $0.iconPath == path }),
+                  !externalIconPaths.values.contains(path) else { continue }
+            try? FileManager.default.removeItem(at: previousURL)
+        }
+
         if let data = try? JSONEncoder().encode(externalIconPaths) {
             UserDefaults.standard.set(data, forKey: "externalIconPaths")
         }
         AppLogger.shared.log("已匯入外部 App 圖示: \(bundleId)")
+    }
+
+    /// 供舊版已匯入資料與 Bundle ID 大小寫不同時，既有 APP 卡片仍能顯示圖示。
+    func externalIconPath(for bundleId: String) -> String? {
+        if let exactPath = externalIconPaths[bundleId] {
+            return exactPath
+        }
+        return externalIconPaths.first {
+            $0.key.caseInsensitiveCompare(bundleId) == .orderedSame
+        }?.value
+    }
+
+    /// 自動匹配只認已安裝 APP 或既有外部刷新項目，不把舊版匯入圖標所建立的孤立列視為 APP。
+    func existingIconTargetBundleId(for bundleId: String) -> String? {
+        if let installedApp = installedApps.first(where: {
+            $0.bundleId.caseInsensitiveCompare(bundleId) == .orderedSame
+        }) {
+            return installedApp.bundleId
+        }
+        return externalIconTargetBundleIds.first {
+            $0.caseInsensitiveCompare(bundleId) == .orderedSame
+        }
     }
 
     enum ExternalIconError: LocalizedError {

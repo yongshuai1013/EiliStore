@@ -47,10 +47,17 @@ struct MainTabView: View {
 }
 
 // MARK: - 主頁（My Apps 風格，不顯示 Apple ID）
+private struct PendingExternalIconImport {
+    let name: String
+    let bundleId: String
+    let iconData: Data
+}
+
 struct MyAppsView: View {
     @StateObject private var manager = AppManager.shared
     @State private var showAppIDsSheet = false
     @State private var activeHomeSheet: HomeSheet?
+    @State private var pendingIconImport: PendingExternalIconImport?
     @State private var isImportingExternalIcon = false
     @State private var showIconImportResult = false
     @State private var iconImportMessage = ""
@@ -60,6 +67,7 @@ struct MyAppsView: View {
     private enum HomeSheet: String, Identifiable {
         case appIDSelection
         case importIcon
+        case iconTargetSelection
 
         var id: String { rawValue }
     }
@@ -155,7 +163,7 @@ struct MyAppsView: View {
                         ForEach(manager.externalDisplayBundleIds, id: \.self) { bid in
                             HStack(spacing: 12) {
                                 // 匯入的圖示優先，其次嘗試從已安裝 App 取得圖示。
-                                if let iconPath = manager.externalIconPaths[bid],
+                                if let iconPath = manager.externalIconPath(for: bid),
                                    let uiImage = UIImage(contentsOfFile: iconPath) {
                                     Image(uiImage: uiImage)
                                         .resizable()
@@ -308,6 +316,28 @@ struct MyAppsView: View {
                             activeHomeSheet = nil
                         }
                     )
+                case .iconTargetSelection:
+                    if let pending = pendingIconImport {
+                        ExternalIconTargetPicker(
+                            sourceName: pending.name,
+                            sourceBundleId: pending.bundleId,
+                            targetBundleIds: manager.externalIconTargetBundleIds.filter {
+                                $0.caseInsensitiveCompare(pending.bundleId) != .orderedSame
+                            },
+                            externalNames: manager.externalNames,
+                            onSelect: { targetBundleId in
+                                activeHomeSheet = nil
+                                pendingIconImport = nil
+                                completeExternalIconAssociation(pending, targetBundleId: targetBundleId)
+                            },
+                            onCancel: {
+                                activeHomeSheet = nil
+                                pendingIconImport = nil
+                            }
+                        )
+                    } else {
+                        EmptyView()
+                    }
                 }
             }
             .alert("IPA 圖示匯入", isPresented: $showIconImportResult) {
@@ -359,22 +389,67 @@ struct MyAppsView: View {
                 guard let iconData = parsed.iconData else {
                     throw ExternalIconImportError.missingIcon
                 }
-                try manager.saveExternalIcon(bundleId: parsed.bundleId, iconData: iconData)
-                iconImportMessage = "已匯入「\(parsed.name)」的圖示，並關聯至 \(parsed.bundleId)。未安裝或簽名 IPA。"
+                guard !parsed.bundleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      parsed.bundleId != "unknown" else {
+                    throw ExternalIconImportError.invalidBundleIdentifier
+                }
+
+                if let matchedBundleId = manager.existingIconTargetBundleId(for: parsed.bundleId) {
+                    try manager.saveExternalIcon(bundleId: matchedBundleId, iconData: iconData)
+                    iconImportMessage = "已匯入「\(parsed.name)」的圖示，並自動配對至既有項目 \(matchedBundleId)。未安裝或簽名 IPA。"
+                    showIconImportResult = true
+                } else {
+                    let targets = manager.externalIconTargetBundleIds.filter {
+                        $0.caseInsensitiveCompare(parsed.bundleId) != .orderedSame
+                    }
+                    guard !targets.isEmpty else {
+                        throw ExternalIconImportError.noExistingExternalTargets
+                    }
+                    pendingIconImport = PendingExternalIconImport(
+                        name: parsed.name,
+                        bundleId: parsed.bundleId,
+                        iconData: iconData
+                    )
+                    activeHomeSheet = .iconTargetSelection
+                }
             } catch {
                 iconImportMessage = "匯入失敗：\(error.localizedDescription)"
+                showIconImportResult = true
             }
 
             isImportingExternalIcon = false
-            showIconImportResult = true
         }
+    }
+
+    private func completeExternalIconAssociation(_ pending: PendingExternalIconImport, targetBundleId: String) {
+        do {
+            try manager.saveExternalIcon(
+                bundleId: targetBundleId,
+                iconData: pending.iconData,
+                removingSourceBundleId: pending.bundleId
+            )
+            let targetName = manager.externalNames[targetBundleId] ?? targetBundleId
+            iconImportMessage = "已將「\(pending.name)」的圖示關聯至既有外部 App「\(targetName)」（\(targetBundleId)）。來源 Bundle ID 不會新增為另一列；Apple App ID、刷新清單與名稱均未更改。"
+        } catch {
+            iconImportMessage = "圖示配對失敗：\(error.localizedDescription)"
+        }
+        showIconImportResult = true
     }
 
     private enum ExternalIconImportError: LocalizedError {
         case missingIcon
+        case invalidBundleIdentifier
+        case noExistingExternalTargets
 
         var errorDescription: String? {
-            "IPA 中找不到可匯入的 App 圖示"
+            switch self {
+            case .missingIcon:
+                return "IPA 中找不到可匯入的 App 圖示"
+            case .invalidBundleIdentifier:
+                return "IPA 中找不到有效的 Bundle ID"
+            case .noExistingExternalTargets:
+                return "目前沒有可配對的既有外部 App；圖標未匯入，也未更動刷新清單。"
+            }
         }
     }
 
@@ -408,6 +483,68 @@ struct MyAppsView: View {
 
 }
 
+private struct ExternalIconTargetPicker: View {
+    let sourceName: String
+    let sourceBundleId: String
+    let targetBundleIds: [String]
+    let externalNames: [String: String]
+    let onSelect: (String) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    Text("IPA 來源 Bundle ID：\(sourceBundleId)。只會將圖標關聯至所選既有項目，不會新增來源列或更改刷新清單與名稱。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+
+                    if targetBundleIds.isEmpty {
+                        Text("目前沒有可選擇的既有外部 App。")
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(targetBundleIds, id: \.self) { bundleId in
+                            Button {
+                                onSelect(bundleId)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "app.fill")
+                                        .foregroundColor(.teal)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(externalNames[bundleId] ?? bundleId)
+                                            .font(.headline)
+                                            .foregroundColor(.primary)
+                                        Text(bundleId)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                    }
+                } header: {
+                    Text("IPA：\(sourceName)")
+                }
+            }
+            .listStyle(InsetGroupedListStyle())
+            .navigationTitle("選擇圖標目標")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消", action: onCancel)
+                }
+            }
+        }
+    }
+}
+
 struct AppRowView: View {
     let app: InstalledApp
     @ObservedObject var manager: AppManager
@@ -415,8 +552,15 @@ struct AppRowView: View {
     var body: some View {
         HStack(spacing: 12) {
             // App 圖標（安裝時從 IPA 解出；EiliStore 自身從 bundle 讀）
-            if let iconPath = app.iconPath,
+            if let iconPath = manager.externalIconPath(for: app.bundleId),
                let uiImage = UIImage(contentsOfFile: iconPath) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 52, height: 52)
+                    .cornerRadius(12)
+            } else if let iconPath = app.iconPath,
+                      let uiImage = UIImage(contentsOfFile: iconPath) {
                 Image(uiImage: uiImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
