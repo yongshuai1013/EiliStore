@@ -90,9 +90,7 @@ struct AppIDsSheetView: View {
 
     private func expiryColor(for appID: SideSign.AppID) -> Color {
         guard let days = daysUntil(appID.expirationDate) else { return .gray }
-        if days <= 2 { return .red }
-        if days <= 4 { return .orange }
-        return .teal
+        return expiryColor(days: days)
     }
 
     private func loadAppIDs() {
