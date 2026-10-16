@@ -211,11 +211,8 @@ struct MyAppsView: View {
                                                 .padding(.horizontal, 14)
                                                 .padding(.vertical, 10.5)
                                                 .frame(minWidth: 77, minHeight: 35)
-                                        }                                    }
-                                    .padding(.vertical, 8)
-                                    .padding(.horizontal, 12)
-                                    .background((days <= 1 ? Color.red : Color.teal).opacity(0.15))
-                                    .cornerRadius(16)
+                                        }
+                                    }
                                 }
                             }
                             .padding()
