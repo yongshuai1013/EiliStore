@@ -51,7 +51,8 @@ struct MyAppsView: View {
     @StateObject private var manager = AppManager.shared
     @State private var showAppIDsSheet = false
     @State private var showAppIDSelection = false
-    @State private var showRefreshConfirm = false
+    @State private var showRefreshToast = false
+    @State private var refreshToastGeneration = UUID()
     
     var body: some View {
         NavigationView {
@@ -88,19 +89,6 @@ struct MyAppsView: View {
                         .font(.caption)
                         .foregroundColor(.teal)
                         .disabled(manager.isRefreshing)
-                    }
-                    
-                    // 刷新提示（細膠囊，EiliStore 主題青色，跟 SideStore 底部一樣）
-                    if !manager.refreshProgress.isEmpty {
-                        Text(manager.refreshProgress)
-                            .font(.subheadline)
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                            .background(Color.teal)
-                            .cornerRadius(25)
-                            .lineLimit(1)
                     }
                     
                     // App 列表
@@ -141,7 +129,7 @@ struct MyAppsView: View {
                                     await manager.refreshExternalOnly()
                                 }
                             } label: {
-                                if manager.isRefreshingExternal {
+                                if manager.isRefreshingExternal || manager.isRefreshing {
                                     ProgressView()
                                         .scaleEffect(0.7)
                                 } else {
@@ -187,20 +175,20 @@ struct MyAppsView: View {
                                 // 到期天數（跟已安裝一樣）
                                 if let exp = manager.externalExpiry[bid] {
                                     let days = Calendar.current.dateComponents([.day], from: Date(), to: exp).day ?? 0
-                                    ZStack {
-                                            let extBid = bid
-                                            let isRefreshing = manager.currentlyRefreshingBundleId == extBid
+                                    Button {
+                                        Task { await manager.refreshExternalApp(bundleId: bid) }
+                                    } label: {
+                                        ZStack {
+                                            let isRefreshing = manager.currentlyRefreshingBundleId == bid
                                             let bgColor = expiryColor(days: days)
                                             RoundedRectangle(cornerRadius: 17.5)
                                                 .fill(isRefreshing ? bgColor.opacity(0.15) : bgColor)
-                                                
                                             if isRefreshing {
                                                 GeometryReader { geo in
                                                     RoundedRectangle(cornerRadius: 17.5)
                                                         .fill(bgColor)
                                                         .frame(width: max(0, geo.size.width * manager.refreshFraction))
                                                 }
-                                                
                                                 ProgressView()
                                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                                     .scaleEffect(0.8)
@@ -210,9 +198,12 @@ struct MyAppsView: View {
                                                 .foregroundColor(isRefreshing ? .clear : .white)
                                                 .padding(.horizontal, 14)
                                                 .padding(.vertical, 10.5)
-                                                
                                         }
+                                        .frame(minWidth: 77, minHeight: 35)
                                     }
+                                    .buttonStyle(PlainButtonStyle())
+                                    .disabled(manager.isRefreshing || manager.isRefreshingExternal)
+                                    .accessibilityLabel("刷新 \(manager.externalNames[bid] ?? bid)")
                                 }
                             }
                             .padding()
@@ -269,8 +260,52 @@ struct MyAppsView: View {
                 // App 啟動時檢查是否需要自動刷新
                 await manager.checkAndAutoRefresh()
             }
+            .overlay(alignment: .bottom) {
+                if showRefreshToast {
+                    HStack(spacing: 10) {
+                        Image(systemName: manager.isRefreshError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        Text(manager.refreshProgress)
+                            .lineLimit(2)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Capsule().fill(manager.isRefreshError ? Color.red : Color.teal))
+                    .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 14)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            .onChange(of: manager.isRefreshing) { _ in self.showRefreshToastIfFinished() }
+            .onChange(of: manager.isRefreshingExternal) { _ in self.showRefreshToastIfFinished() }
+            .onChange(of: manager.refreshProgress) { _ in self.showRefreshToastIfFinished() }
         }
     }
+
+    private func showRefreshToastIfFinished() {
+        guard !manager.isRefreshing, !manager.isRefreshingExternal,
+              !manager.refreshProgress.isEmpty else { return }
+
+        let generation = UUID()
+        refreshToastGeneration = generation
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            showRefreshToast = true
+        }
+
+        let duration: TimeInterval = manager.isRefreshError ? 8 : 4
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            guard self.refreshToastGeneration == generation,
+                  !self.manager.isRefreshing, !self.manager.isRefreshingExternal else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
+                self.showRefreshToast = false
+            }
+        }
+    }
+
     private func findPairingFileURL() -> URL? {
         let fm = FileManager.default
         guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
