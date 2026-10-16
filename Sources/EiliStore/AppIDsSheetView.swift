@@ -90,7 +90,7 @@ struct AppIDsSheetView: View {
 
     private func expiryColor(for appID: SideSign.AppID) -> Color {
         guard let days = daysUntil(appID.expirationDate) else { return .gray }
-        return expiryColor(days: days)
+        return EiliStore.expiryColor(days: days)
     }
 
     private func loadAppIDs() {
