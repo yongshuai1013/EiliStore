@@ -216,26 +216,43 @@ class AppManager: ObservableObject {
     
     // MARK: - 刷新
     
+    /// 刷新單一已安裝 App，供有效期按鈕直接呼叫。
+    func refreshApp(_ app: InstalledApp) async {
+        await refreshAll(includeExternal: false, onlyBundleId: app.bundleId)
+    }
+
     /// 刷新 App（正確路線：只換 provisioning profile，不重裝）
     /// 參考 SideStore PR #846：refresh should only renew provisioning profiles
     /// - Parameters:
     ///   - includeExternal: 是否包含外部 App
     ///   - onlyNeedingRefresh: true=只刷1天內過期的（自動刷新用），false=刷全部（手動用）
-    func refreshAll(includeExternal: Bool = false, onlyNeedingRefresh: Bool = false) async {
+    ///   - onlyBundleId: 指定只刷新一個已安裝 App；nil 時維持批次刷新
+    func refreshAll(includeExternal: Bool = false, onlyNeedingRefresh: Bool = false, onlyBundleId: String? = nil) async {
         var successCount = 0
         var failCount = 0
-        let toRefresh = onlyNeedingRefresh ? appsNeedingRefresh : installedApps
+        let appsToConsider = onlyNeedingRefresh ? appsNeedingRefresh : installedApps
+        let toRefresh = onlyBundleId.map { bundleId in
+            appsToConsider.filter { $0.bundleId == bundleId }
+        } ?? appsToConsider
         refreshFraction = 0.0
         // 外部選中的 Bundle IDs（由調用方決定是否包含）
         let dbBundleIds = Set(installedApps.map { $0.bundleId })
-        let externalBids: Set<String> = includeExternal ? selectedRefreshBundleIds.subtracting(dbBundleIds) : []
+        let externalBids: Set<String> = includeExternal && onlyBundleId == nil ? selectedRefreshBundleIds.subtracting(dbBundleIds) : []
         guard !toRefresh.isEmpty || !externalBids.isEmpty else {
             AppLogger.shared.log("刷新檢查：沒有需要刷新的 App")
             return
         }
         
         isRefreshing = true
-        defer { isRefreshing = false }
+        if let onlyBundleId {
+            currentlyRefreshingBundleId = onlyBundleId
+        }
+        defer {
+            isRefreshing = false
+            if onlyBundleId != nil {
+                currentlyRefreshingBundleId = nil
+            }
+        }
         
         AppLogger.shared.log("開始刷新 \(toRefresh.count) 個 App（只換 profile，不重裝）...")
         

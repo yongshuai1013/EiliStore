@@ -323,34 +323,40 @@ struct AppRowView: View {
                 Text("剩餘")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-                // 天數膠囊（照抄 SideStore PillButton）
-                ZStack {
-                    let isRefreshing = manager.currentlyRefreshingBundleId == app.bundleId
-                    let bgColor = expiryColor(days: app.daysRemaining)
-                    RoundedRectangle(cornerRadius: 17.5)
-                        .fill(isRefreshing ? bgColor.opacity(0.15) : bgColor)
-                        
-                    if isRefreshing {
-                        // 進度填充（像 SideStore 的 UIProgressView）
-                        GeometryReader { geo in
-                            RoundedRectangle(cornerRadius: 17.5)
-                                .fill(bgColor)
-                                .frame(width: max(0, geo.size.width * manager.refreshFraction))
-                        }
-                        
-                        // 白色轉圈（像 SideStore 的 activityIndicator）
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(0.8)
+                // 對照 SideStore 的 PillButton：點有效期膠囊即可刷新此 App。
+                Button {
+                    Task {
+                        await manager.refreshApp(app)
                     }
-                    // 刷新時文字隱藏（SideStore 設成 clear）
-                    Text("\(app.daysRemaining) 天")
-                        .font(.subheadline)
-                        .bold()
-                        .foregroundColor(isRefreshing ? .clear : .white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
+                } label: {
+                    ZStack {
+                        let isRefreshing = manager.currentlyRefreshingBundleId == app.bundleId
+                        let bgColor = expiryColor(days: app.daysRemaining)
+                        RoundedRectangle(cornerRadius: 17.5)
+                            .fill(isRefreshing ? bgColor.opacity(0.15) : bgColor)
+                        if isRefreshing {
+                            GeometryReader { geo in
+                                RoundedRectangle(cornerRadius: 17.5)
+                                    .fill(bgColor)
+                                    .frame(width: max(0, geo.size.width * manager.refreshFraction))
+                            }
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                        }
+                        Text("\(app.daysRemaining) 天")
+                            .font(.subheadline)
+                            .bold()
+                            .foregroundColor(isRefreshing ? .clear : .white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                    }
+                    .frame(minWidth: 77, minHeight: 35)
+                    .contentShape(RoundedRectangle(cornerRadius: 17.5))
                 }
+                .buttonStyle(PlainButtonStyle())
+                .disabled(manager.isRefreshing)
+                .accessibilityLabel("刷新 \(app.name)")
             }
         }
         .padding()
