@@ -61,12 +61,14 @@ struct MyAppsView: View {
     @State private var isImportingExternalIcon = false
     @State private var showIconImportResult = false
     @State private var iconImportMessage = ""
+    @State private var iconChangeTargetBundleId: String?
     @State private var showRefreshToast = false
     @State private var refreshToastGeneration = UUID()
 
     private enum HomeSheet: String, Identifiable {
         case appIDSelection
         case importIcon
+        case changeIcon
         case iconTargetSelection
 
         var id: String { rawValue }
@@ -118,7 +120,10 @@ struct MyAppsView: View {
                             .padding()
                     } else {
                         ForEach(manager.displayApps) { app in
-                            AppRowView(app: app, manager: manager)
+                            AppRowView(app: app, manager: manager) {
+                                iconChangeTargetBundleId = app.bundleId
+                                activeHomeSheet = .changeIcon
+                            }
                         }
                         .onDelete { indexSet in
                             for index in indexSet {
@@ -241,6 +246,31 @@ struct MyAppsView: View {
                             .padding()
                             .background(Color.teal.opacity(0.08))
                             .cornerRadius(20)
+                            .appCardContextMenu(
+                                info: AppCardInfo(
+                                    name: manager.externalNames[bid] ?? bid,
+                                    bundleId: bid,
+                                    team: nil,
+                                    expiresDate: manager.externalExpiry[bid],
+                                    isExternal: true,
+                                    hasSavedIPA: nil,
+                                    hasImportedIcon: manager.externalIconPath(for: bid) != nil
+                                ),
+                                canRefresh: manager.externalBundleIds.contains {
+                                    $0.caseInsensitiveCompare(bid) == .orderedSame
+                                },
+                                isBusy: manager.isRefreshing || manager.isRefreshingExternal,
+                                onRefresh: {
+                                    guard let refreshBundleId = manager.externalBundleIds.first(where: {
+                                        $0.caseInsensitiveCompare(bid) == .orderedSame
+                                    }) else { return }
+                                    Task { await manager.refreshExternalApp(bundleId: refreshBundleId) }
+                                },
+                                onChangeIcon: {
+                                    iconChangeTargetBundleId = bid
+                                    activeHomeSheet = .changeIcon
+                                }
+                            )
                         }
                     }
                     
@@ -316,6 +346,22 @@ struct MyAppsView: View {
                             activeHomeSheet = nil
                         }
                     )
+                case .changeIcon:
+                    if let targetBundleId = iconChangeTargetBundleId {
+                        DocumentPicker(
+                            onPick: { url in
+                                activeHomeSheet = nil
+                                iconChangeTargetBundleId = nil
+                                importExternalIcon(from: url, targetBundleId: targetBundleId)
+                            },
+                            onCancel: {
+                                activeHomeSheet = nil
+                                iconChangeTargetBundleId = nil
+                            }
+                        )
+                    } else {
+                        EmptyView()
+                    }
                 case .iconTargetSelection:
                     if let pending = pendingIconImport {
                         ExternalIconTargetPicker(
@@ -375,7 +421,7 @@ struct MyAppsView: View {
         }
     }
 
-    private func importExternalIcon(from ipaURL: URL) {
+    private func importExternalIcon(from ipaURL: URL, targetBundleId: String? = nil) {
         guard !isImportingExternalIcon else { return }
         isImportingExternalIcon = true
 
@@ -394,7 +440,23 @@ struct MyAppsView: View {
                     throw ExternalIconImportError.invalidBundleIdentifier
                 }
 
-                if let matchedBundleId = manager.existingIconTargetBundleId(for: parsed.bundleId) {
+                if let targetBundleId {
+                    let installedTarget = manager.installedApps.first {
+                        $0.bundleId.caseInsensitiveCompare(targetBundleId) == .orderedSame
+                    }
+                    let externalTarget = manager.externalDisplayBundleIds.first {
+                        $0.caseInsensitiveCompare(targetBundleId) == .orderedSame
+                    }
+                    guard installedTarget != nil || externalTarget != nil else {
+                        throw ExternalIconImportError.invalidIconTarget
+                    }
+                    try manager.saveExternalIcon(bundleId: targetBundleId, iconData: iconData)
+                    let targetName = installedTarget?.name
+                        ?? manager.externalNames.first(where: { $0.key.caseInsensitiveCompare(targetBundleId) == .orderedSame })?.value
+                        ?? targetBundleId
+                    iconImportMessage = "已將「\(parsed.name)」的圖示套用到「\(targetName)」卡片。這只變更 EiliStore 清單顯示，不會安裝或簽名 IPA，也不會更改裝置主畫面圖示。"
+                    showIconImportResult = true
+                } else if let matchedBundleId = manager.existingIconTargetBundleId(for: parsed.bundleId) {
                     try manager.saveExternalIcon(bundleId: matchedBundleId, iconData: iconData)
                     iconImportMessage = "已匯入「\(parsed.name)」的圖示，並自動配對至既有項目 \(matchedBundleId)。未安裝或簽名 IPA。"
                     showIconImportResult = true
@@ -439,6 +501,7 @@ struct MyAppsView: View {
     private enum ExternalIconImportError: LocalizedError {
         case missingIcon
         case invalidBundleIdentifier
+        case invalidIconTarget
         case noExistingExternalTargets
 
         var errorDescription: String? {
@@ -447,6 +510,8 @@ struct MyAppsView: View {
                 return "IPA 中找不到可匯入的 App 圖示"
             case .invalidBundleIdentifier:
                 return "IPA 中找不到有效的 Bundle ID"
+            case .invalidIconTarget:
+                return "目標 App 已不存在，無法變更卡片圖示"
             case .noExistingExternalTargets:
                 return "目前沒有可配對的既有外部 App；圖標未匯入，也未更動刷新清單。"
             }
@@ -548,6 +613,7 @@ private struct ExternalIconTargetPicker: View {
 struct AppRowView: View {
     let app: InstalledApp
     @ObservedObject var manager: AppManager
+    let onChangeIcon: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -638,8 +704,158 @@ struct AppRowView: View {
         .padding()
         .background(Color.teal.opacity(0.08))
         .cornerRadius(20)
+        .appCardContextMenu(
+            info: AppCardInfo(
+                name: app.name,
+                bundleId: app.bundleId,
+                team: app.team,
+                expiresDate: app.expiresDate,
+                isExternal: false,
+                hasSavedIPA: app.ipaPath.map { FileManager.default.fileExists(atPath: $0) } ?? false,
+                hasImportedIcon: manager.externalIconPath(for: app.bundleId) != nil ||
+                    (app.iconPath.map { FileManager.default.fileExists(atPath: $0) } ?? false)
+            ),
+            canRefresh: true,
+            isBusy: manager.isRefreshing || manager.isRefreshingExternal,
+            onRefresh: {
+                Task { await manager.refreshApp(app) }
+            },
+            onChangeIcon: onChangeIcon
+        )
     }
 
+}
+
+private struct AppCardInfo {
+    let name: String
+    let bundleId: String
+    let team: String?
+    let expiresDate: Date?
+    let isExternal: Bool
+    let hasSavedIPA: Bool?
+    let hasImportedIcon: Bool
+}
+
+private struct AppCardContextMenuModifier: ViewModifier {
+    let info: AppCardInfo
+    let canRefresh: Bool
+    let isBusy: Bool
+    let onRefresh: () -> Void
+    let onChangeIcon: () -> Void
+    @State private var isShowingInfo = false
+
+    func body(content: Content) -> some View {
+        content
+            .contextMenu {
+                Button(action: onRefresh) {
+                    Label(
+                        canRefresh ? "刷新" : "刷新（尚未加入刷新清單）",
+                        systemImage: "arrow.clockwise"
+                    )
+                }
+                .disabled(!canRefresh || isBusy)
+
+                Button {} label: {
+                    Label("重新簽名（尚未支援）", systemImage: "signature")
+                }
+                .disabled(true)
+
+                Button {} label: {
+                    Label("重新安裝（尚未支援）", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(true)
+
+                Button {} label: {
+                    Label("描述檔（尚未支援）", systemImage: "doc.plaintext")
+                }
+                .disabled(true)
+
+                Button(action: onChangeIcon) {
+                    Label("變更卡片圖示", systemImage: "photo")
+                }
+
+                Button {
+                    isShowingInfo = true
+                } label: {
+                    Label("資訊", systemImage: "info.circle")
+                }
+            }
+            .sheet(isPresented: $isShowingInfo) {
+                AppCardInfoSheet(info: info)
+            }
+    }
+}
+
+private extension View {
+    func appCardContextMenu(
+        info: AppCardInfo,
+        canRefresh: Bool,
+        isBusy: Bool,
+        onRefresh: @escaping () -> Void,
+        onChangeIcon: @escaping () -> Void
+    ) -> some View {
+        modifier(AppCardContextMenuModifier(
+            info: info,
+            canRefresh: canRefresh,
+            isBusy: isBusy,
+            onRefresh: onRefresh,
+            onChangeIcon: onChangeIcon
+        ))
+    }
+}
+
+private struct AppCardInfoSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let info: AppCardInfo
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section(header: Text("App")) {
+                    detailRow("名稱", value: info.name)
+                    detailRow("Bundle ID", value: info.bundleId)
+                    detailRow("類型", value: info.isExternal ? "外部 App" : "EiliStore 安裝")
+                }
+
+                Section(header: Text("本機紀錄")) {
+                    detailRow("Team", value: info.team.flatMap { $0 == "未知" || $0.isEmpty ? nil : $0 } ?? "未記錄")
+                    if let expiresDate = info.expiresDate {
+                        detailRow("記錄的到期日", value: expiresDate.formatted(date: .long, time: .omitted))
+                    } else {
+                        detailRow("記錄的到期日", value: "未記錄")
+                    }
+                    detailRow("匯入的卡片圖示", value: info.hasImportedIcon ? "有" : "沒有")
+                    if let hasSavedIPA = info.hasSavedIPA {
+                        detailRow("保存的 IPA", value: hasSavedIPA ? "可用" : "不存在")
+                    }
+                }
+
+                Section {
+                    Text("到期日是 EiliStore 的本機資料，不代表已讀取裝置上的 provisioning profile 檔案。變更卡片圖示只影響 EiliStore 清單，不會更改裝置主畫面圖示。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("App 資訊")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func detailRow(_ title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .foregroundColor(.secondary)
+            Spacer(minLength: 16)
+            Text(value)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+    }
 }
 
 // MARK: - 軟體源（已移至 SourcesView.swift）
