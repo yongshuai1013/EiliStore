@@ -84,18 +84,18 @@ struct LoginView: View {
                 .foregroundColor(.red)
             }
 
-            Section(header: Text("Session 二維碼")) {
+            Section(
+                header: Text("Session 二維碼"),
+                footer: Text("透過二維碼在設備間移轉已保存的登入 Session；請勿分享二維碼。")
+            ) {
                 NavigationLink(destination: SessionQRView()) {
                     HStack {
                         Text("導出/導入 Session")
                         Spacer()
                         Image(systemName: "qrcode")
-                            .foregroundColor(.blue)
+                            .foregroundColor(.teal)
                     }
                 }
-                Text("通過二維碼在設備間傳輸登入 Session")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
 
             // 調試日誌
@@ -255,28 +255,25 @@ struct AccountView: View {
                     }
                 }
             }
-            Section {
-                Section(header: Text("Session 二維碼")) {
+            Section(
+                header: Text("Session 二維碼"),
+                footer: Text("導出備份後，可在更換設備時掃描導入。二維碼包含敏感登入資料，請妥善保管。")
+            ) {
                 NavigationLink(destination: SessionQRView()) {
                     HStack {
                         Text("導出/導入 Session")
                         Spacer()
                         Image(systemName: "qrcode")
-                            .foregroundColor(.blue)
+                            .foregroundColor(.teal)
                     }
                 }
-                Text("導出備份，換設備時掃碼導入")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
-            
-            Button("登出") {
+
+            Section(footer: Text("登出會清除本地登入狀態，下次登入需要重新驗證。")) {
+                Button("登出") {
                     showLogoutAlert = true
                 }
                 .foregroundColor(.red)
-            }
-            Section(footer: Text("登出會清除本地登入狀態，下次登入需要重新驗證。")) {
-                EmptyView()
             }
         }
         .navigationTitle("賬號")
