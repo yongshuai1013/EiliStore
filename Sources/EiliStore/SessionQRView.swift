@@ -68,7 +68,7 @@ public struct SessionQRView: View {
                             .interpolation(.none)
                             .resizable()
                             .scaledToFit()
-                            .frame(maxWidth: 280)
+                            .frame(maxWidth: 320)
                             .aspectRatio(1, contentMode: .fit)
                             .padding(10)
                             .background(Color.white)

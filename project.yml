@@ -38,6 +38,7 @@ targets:
       path: Sources/EiliStore/Info.plist
       properties:
         CFBundleDisplayName: EiliStore
+        NSCameraUsageDescription: "掃描 Session 二維碼需要使用相機"
         UILaunchStoryboardName: LaunchScreen
         UIBackgroundModes:
           - audio
