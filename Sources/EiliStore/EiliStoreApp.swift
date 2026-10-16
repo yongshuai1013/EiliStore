@@ -189,7 +189,7 @@ struct MyAppsView: View {
                                     let days = Calendar.current.dateComponents([.day], from: Date(), to: exp).day ?? 0
                                     ZStack {
                                             let extBid = bid
-                                            let isRefreshing = currentlyRefreshingBundleId == extBid
+                                            let isRefreshing = manager.currentlyRefreshingBundleId == extBid
                                             let bgColor = expiryColor(days: days)
                                             RoundedRectangle(cornerRadius: 17.5)
                                                 .fill(isRefreshing ? bgColor.opacity(0.15) : bgColor)
@@ -198,7 +198,7 @@ struct MyAppsView: View {
                                                 GeometryReader { geo in
                                                     RoundedRectangle(cornerRadius: 17.5)
                                                         .fill(bgColor)
-                                                        .frame(width: max(0, geo.size.width * refreshFraction))
+                                                        .frame(width: max(0, geo.size.width * manager.refreshFraction))
                                                 }
                                                 .frame(minWidth: 77, minHeight: 35)
                                                 ProgressView()
@@ -328,7 +328,7 @@ struct AppRowView: View {
                     .foregroundColor(.secondary)
                 // 天數膠囊（照抄 SideStore PillButton）
                 ZStack {
-                    let isRefreshing = currentlyRefreshingBundleId == app.bundleId
+                    let isRefreshing = manager.currentlyRefreshingBundleId == app.bundleId
                     let bgColor = expiryColor(days: app.daysRemaining)
                     RoundedRectangle(cornerRadius: 17.5)
                         .fill(isRefreshing ? bgColor.opacity(0.15) : bgColor)
@@ -338,7 +338,7 @@ struct AppRowView: View {
                         GeometryReader { geo in
                             RoundedRectangle(cornerRadius: 17.5)
                                 .fill(bgColor)
-                                .frame(width: max(0, geo.size.width * refreshFraction))
+                                .frame(width: max(0, geo.size.width * manager.refreshFraction))
                         }
                         .frame(minWidth: 77, minHeight: 35)
                         // 白色轉圈（像 SideStore 的 activityIndicator）
