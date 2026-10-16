@@ -193,14 +193,14 @@ struct MyAppsView: View {
                                             let bgColor = expiryColor(days: days)
                                             RoundedRectangle(cornerRadius: 17.5)
                                                 .fill(isRefreshing ? bgColor.opacity(0.15) : bgColor)
-                                                .frame(width: 77, height: 35)
+                                                
                                             if isRefreshing {
                                                 GeometryReader { geo in
                                                     RoundedRectangle(cornerRadius: 17.5)
                                                         .fill(bgColor)
                                                         .frame(width: max(0, geo.size.width * manager.refreshFraction))
                                                 }
-                                                .frame(width: 77, height: 35)
+                                                
                                                 ProgressView()
                                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                                     .scaleEffect(0.8)
@@ -210,7 +210,7 @@ struct MyAppsView: View {
                                                 .foregroundColor(isRefreshing ? .clear : .white)
                                                 .padding(.horizontal, 14)
                                                 .padding(.vertical, 10.5)
-                                                .frame(width: 77, height: 35)
+                                                
                                         }
                                     }
                                 }
@@ -329,7 +329,7 @@ struct AppRowView: View {
                     let bgColor = expiryColor(days: app.daysRemaining)
                     RoundedRectangle(cornerRadius: 17.5)
                         .fill(isRefreshing ? bgColor.opacity(0.15) : bgColor)
-                        .frame(width: 77, height: 35)
+                        
                     if isRefreshing {
                         // 進度填充（像 SideStore 的 UIProgressView）
                         GeometryReader { geo in
@@ -337,7 +337,7 @@ struct AppRowView: View {
                                 .fill(bgColor)
                                 .frame(width: max(0, geo.size.width * manager.refreshFraction))
                         }
-                        .frame(width: 77, height: 35)
+                        
                         // 白色轉圈（像 SideStore 的 activityIndicator）
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -345,11 +345,11 @@ struct AppRowView: View {
                     }
                     // 刷新時文字隱藏（SideStore 設成 clear）
                     Text("\(app.daysRemaining) 天")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.subheadline)
+                        .bold()
                         .foregroundColor(isRefreshing ? .clear : .white)
                         .padding(.horizontal, 14)
-                        .padding(.vertical, 10.5)
-                        .frame(width: 77, height: 35)
+                        .padding(.vertical, 8)
                 }
             }
         }
