@@ -1,148 +1,25 @@
 import SwiftUI
 import SideSign
 
-/// Apple ID 登入頁
+/// 保留舊入口，但共用可取消的登入流程，避免兩套 2FA 行為分歧。
+@MainActor
 struct SignInView: View {
     @State private var appleID = ""
-    @State private var password = ""
-    @State private var isLoading = false
-    @State private var errorMessage: String?
     @State private var isLoggedIn = false
-    @State private var show2FAPrompt = false
-    @State private var twoFACode = ""
-    @StateObject private var logger = AppLogger.shared
-    @State private var codeProvider: TwoFACodeProvider?
-    
+
     var body: some View {
-        Form {
-            Section("Apple ID") {
-                TextField("Apple ID", text: $appleID)
-                    .textContentType(.emailAddress)
-                    .autocapitalization(.none)
-                    .disabled(isLoading || isLoggedIn)
-                if !isLoggedIn {
-                    SecureField("密碼", text: $password)
-                        .textContentType(.password)
-                        .disabled(isLoading)
-                }
-            }
-            
-            if let error = errorMessage {
-                Section {
-                    Text(error)
-                        .foregroundColor(.red)
-                        .font(.caption)
-                }
-            }
-            
-            Section {
-                if isLoggedIn {
-                    HStack {
-                        Spacer()
-                        Text("已登入: \(appleID)")
-                            .foregroundColor(.teal)
-                        Spacer()
-                    }
-                    Button("登出", role: .destructive) {
-                        isLoggedIn = false
-                        appleID = ""
-                        password = ""
-                        logger.log("已登出")
-                    }
-                } else {
-                    Button(action: doLogin) {
-                        HStack {
-                            Spacer()
-                            if isLoading {
-                                ProgressView()
-                            } else {
-                                Text("登入")
-                            }
-                            Spacer()
-                        }
-                    }
-                    .disabled(appleID.isEmpty || password.isEmpty || isLoading)
-                }
-            }
-            
-            Section("說明") {
-                Text("登入後可用於簽名 IPA。帳號信息保存在 Keychain。")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        Group {
+            if isLoggedIn {
+                AccountView(appleID: $appleID, isLoggedIn: $isLoggedIn)
+            } else {
+                LoginView(appleID: $appleID, isLoggedIn: $isLoggedIn)
             }
         }
-        .navigationTitle("Apple ID 登入")
-        .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            if KeychainHelper.loadString(forKey: "paxstore.auth.session") != nil,
-               let savedID = KeychainHelper.loadString(forKey: "paxstore.auth.appleID"),
-               !savedID.isEmpty {
-                isLoggedIn = true
+            if PaxAuthService.shared.hasSavedSession,
+               let savedID = PaxAuthService.shared.currentAppleID, !savedID.isEmpty {
                 appleID = savedID
-            }
-        }
-        .alert("輸入驗證碼", isPresented: $show2FAPrompt) {
-            TextField("6位驗證碼", text: $twoFACode)
-                .keyboardType(.numberPad)
-            Button("提交") {
-                codeProvider?.submitCode(twoFACode)
-                twoFACode = ""
-            }
-            Button("取消", role: .cancel) {
-                // TODO: 取消登入
-            }
-        } message: {
-            Text("請輸入發送到您設備的驗證碼")
-        }
-    }
-    
-    private func doLogin() {
-        isLoading = true
-        errorMessage = nil
-        logger.log("開始登入: \(appleID)")
-        
-        Task {
-            do {
-                let authService = PaxAuthService.shared
-                let provider = TwoFACodeProvider()
-                
-                // 設置日誌和 2FA 回調
-                provider.onLog = { msg in
-                    AppLogger.shared.log("[登入] \(msg)")
-                }
-                provider.onCodeRequired = { [self] in
-                    Task { @MainActor in
-                        self.codeProvider = provider
-                        self.show2FAPrompt = true
-                    }
-                }
-                
-                let success = try await authService.login(
-                    appleID: appleID,
-                    password: password,
-                    codeProvider: provider
-                )
-                
-                if success {
-                    KeychainHelper.saveString(appleID, forKey: "paxstore.auth.appleID")
-                    await MainActor.run {
-                        isLoggedIn = true
-                        isLoading = false
-                        logger.log("✅ 登入成功: \(appleID)")
-                    }
-                } else {
-                    await MainActor.run {
-                        errorMessage = "登入失敗"
-                        isLoading = false
-                        logger.log("❌ 登入失敗")
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    isLoading = false
-                    logger.log("❌ 登入失敗: \(error.localizedDescription)")
-                }
+                isLoggedIn = true
             }
         }
     }
