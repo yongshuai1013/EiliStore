@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import ZIPFoundation
+import SideSign
 
 /// IPA 解析：從 IPA 提取 bundle ID、名稱、圖標
 struct IPAParser {
@@ -9,6 +10,7 @@ struct IPAParser {
         let bundleId: String
         let version: String
         let iconData: Data?
+        let expirationDate: Date?
     }
     
     /// 解析 IPA，返回 App 信息
@@ -39,12 +41,29 @@ struct IPAParser {
             ?? plist["CFBundleName"] as? String
             ?? appURL.deletingPathExtension().lastPathComponent
         let version = plist["CFBundleShortVersionString"] as? String ?? "1.0"
+
+        // Provisioning profiles are CMS-wrapped; use SideSign's parser so the
+        // embedded profile's ExpirationDate is read from the profile plist.
+        let profileURL = appURL.appendingPathComponent("embedded.mobileprovision")
+        let expirationDate: Date?
+        if let profileData = try? Data(contentsOf: profileURL),
+           let profile = try? SideSign.ProvisioningProfile(data: profileData) {
+            expirationDate = profile.expirationDate
+        } else {
+            expirationDate = nil
+        }
         
         // 直接讀 PNG 或從編譯後的 Assets.car 載入 AppIcon；解析只讀取 IPA，
         // 不驗證其簽章，也不會安裝或簽名 App。
         let iconData = extractIconData(from: appURL, plist: plist)
 
-        return AppInfo(name: name, bundleId: bundleId, version: version, iconData: iconData)
+        return AppInfo(
+            name: name,
+            bundleId: bundleId,
+            version: version,
+            iconData: iconData,
+            expirationDate: expirationDate
+        )
     }
 
     private static func extractIconData(from appURL: URL, plist: [String: Any]) -> Data? {

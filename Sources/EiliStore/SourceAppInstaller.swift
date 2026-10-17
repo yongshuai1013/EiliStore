@@ -164,10 +164,11 @@ final class SourceAppInstaller: ObservableObject {
         try await signer.signApp(at: appURL, provisioningProfiles: profiles)
 
         // 重打包
+        let packagedIPA = try FileManager.default.zipAppBundle(at: appURL, compressionLevel: .none)
         let signedIPA = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(appURL.deletingPathExtension().lastPathComponent)-signed.ipa")
         try? FileManager.default.removeItem(at: signedIPA)
-        try zipPayload(payload, to: signedIPA)
+        try FileManager.default.moveItem(at: packagedIPA, to: signedIPA)
 
         await MainActor.run { self.progress = 0.7 }
         return signedIPA
@@ -212,37 +213,6 @@ final class SourceAppInstaller: ObservableObject {
         }
     }
 
-    private func zipPayload(_ payload: URL, to dest: URL) throws {
-        guard let archive = Archive(url: dest, accessMode: .create) else {
-            throw InstallError.signingFailed("無法創建 ZIP")
-        }
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(at: payload, includingPropertiesForKeys: [.isDirectoryKey]) else {
-            throw InstallError.signingFailed("無法遍歷 Payload")
-        }
-        let emptyProvider: (Int64, Int) throws -> Data = { _, _ in Data() }
-        try archive.addEntry(with: "Payload", type: .directory, uncompressedSize: 0, modificationDate: Date(), permissions: 0o755, provider: emptyProvider)
-        for case let url as URL in enumerator {
-            let rel = "Payload/" + url.path.replacingOccurrences(of: payload.path + "/", with: "")
-            let vals = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            if vals?.isSymbolicLink == true {
-                let linkDest = (try? fm.destinationOfSymbolicLink(atPath: url.path)) ?? ""
-                let destData = linkDest.data(using: .utf8) ?? Data()
-                let provider: (Int64, Int) throws -> Data = { pos, size in
-                    let start = Int(pos)
-                    let end = min(start + size, destData.count)
-                    guard start < end else { return Data() }
-                    return destData[start..<end]
-                }
-                try archive.addEntry(with: rel, type: .symlink, uncompressedSize: Int64(destData.count), modificationDate: Date(), permissions: 0o777, provider: provider)
-            } else if vals?.isDirectory == true {
-                try archive.addEntry(with: rel, type: .directory, uncompressedSize: 0, modificationDate: Date(), permissions: 0o755, provider: emptyProvider)
-            } else {
-                try archive.addEntry(with: rel, relativeTo: payload.deletingLastPathComponent(), compressionMethod: .deflate)
-            }
-        }
-    }
-
     // MARK: - 登記
 
     private func registerInstalledApp(signedIPA: URL, sourceApp: SourceApp) {
@@ -255,8 +225,10 @@ final class SourceAppInstaller: ObservableObject {
         // 解析 + 圖標
         var iconPath: String? = nil
         var displayName = sourceApp.name
+        var profileExpirationDate: Date?
         if let info = try? IPAParser.parse(ipaURL: savedIPA) {
             displayName = info.name
+            profileExpirationDate = info.expirationDate
             if let iconData = info.iconData, !iconData.isEmpty {
                 let iconsDir = docs.appendingPathComponent("AppIcons")
                 try? FileManager.default.createDirectory(at: iconsDir, withIntermediateDirectories: true)
@@ -267,11 +239,20 @@ final class SourceAppInstaller: ObservableObject {
             }
         }
 
+        let expiresDate = profileExpirationDate
+            ?? Calendar.current.date(byAdding: .day, value: 7, to: Date())
+            ?? Date()
+        if profileExpirationDate == nil {
+            AppLogger.shared.log("⚠️ IPA 沒有可讀取的內嵌 profile 到期日，沿用 7 天預設")
+        } else {
+            AppLogger.shared.log("已讀取 profile 到期日: \(expiresDate)")
+        }
+
         let newApp = InstalledApp(
             name: displayName,
             bundleId: sourceApp.bundleId,
             team: "未知",
-            expiresDate: Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date(),
+            expiresDate: expiresDate,
             ipaPath: savedIPA.path,
             iconPath: iconPath
         )

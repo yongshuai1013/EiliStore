@@ -126,7 +126,8 @@ struct InstallAppView: View {
                         name: ipaURL.deletingPathExtension().lastPathComponent,
                         bundleId: "unknown.\(ipaURL.deletingPathExtension().lastPathComponent)",
                         version: "1.0",
-                        iconData: nil
+                        iconData: nil,
+                        expirationDate: nil
                     )
                 }
                 
@@ -143,11 +144,20 @@ struct InstallAppView: View {
                     }
                 }
 
+                let expiresDate = appInfo.expirationDate
+                    ?? Calendar.current.date(byAdding: .day, value: 7, to: Date())
+                    ?? Date()
+                if appInfo.expirationDate == nil {
+                    logger.log("⚠️ IPA 沒有可讀取的內嵌 profile 到期日，沿用 7 天預設")
+                } else {
+                    logger.log("已讀取 profile 到期日: \(expiresDate)")
+                }
+
                 let newApp = InstalledApp(
                     name: appInfo.name,
                     bundleId: appInfo.bundleId,
                     team: "未知", // TODO: 從簽名信息獲取
-                    expiresDate: Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date(),
+                    expiresDate: expiresDate,
                     ipaPath: savedIPA.path,
                     iconPath: iconPath
                 )
