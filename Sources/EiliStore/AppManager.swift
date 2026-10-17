@@ -106,11 +106,39 @@ class AppManager: ObservableObject {
     @Published var refreshProgress: String = ""
     
     private let storageKey = "EiliStore.InstalledApps"
+    private let appIDSnapshotKey = "EiliStore.AppIDSnapshot.v1"
+    @Published private var appIDSnapshot: AppIDSnapshot?
+    private var appIDSyncTask: Task<[SideSign.AppID], Error>?
     private var refreshBundleIDCache: [UUID: [String]] = [:]
+
+    private var appIDAccountIdentifier: String? {
+        KeychainHelper.loadCodable(SideSign.AuthSession.self, forKey: "paxstore.auth.session")?.account.identifier
+    }
+
+    /// 只呈現目前登入帳戶的快取，不讓另一個帳戶的記錄出現在清單。
+    var cachedAppIDs: [SideSign.AppID] {
+        guard let snapshot = appIDSnapshot,
+              snapshot.accountIdentifier == appIDAccountIdentifier else { return [] }
+        return snapshot.appIDs
+    }
+
+    var appIDsLastSyncedAt: Date? {
+        guard let snapshot = appIDSnapshot,
+              snapshot.accountIdentifier == appIDAccountIdentifier else { return nil }
+        return snapshot.syncedAt
+    }
     
     private init() {
         self.selectedRefreshBundleIds = Set(UserDefaults.standard.stringArray(forKey: "selectedRefreshBundleIds") ?? [])
         self.enableExternalAutoRefresh = UserDefaults.standard.bool(forKey: "enableExternalAutoRefresh")
+        if let data = UserDefaults.standard.data(forKey: appIDSnapshotKey),
+           let snapshot = try? JSONDecoder().decode(AppIDSnapshot.self, from: data) {
+            self.appIDSnapshot = snapshot
+            if snapshot.accountIdentifier == appIDAccountIdentifier {
+                self.registeredBundleIds = Set(snapshot.records.map(\.bundleIdentifier))
+                self.appIDsRemaining = max(0, 10 - snapshot.records.count)
+            }
+        }
         // 載入外部 App 數據
         if let data = UserDefaults.standard.data(forKey: "externalExpiry"),
            let decoded = try? JSONDecoder().decode([String: Date].self, from: data) {
@@ -285,32 +313,40 @@ class AppManager: ObservableObject {
     }
     
     /// 同步 Apple Developer Portal 的 App ID 記錄；不會覆寫裝置 profile 的簽名到期日。
+    /// 合併同時發起的同步，避免較舊回應覆寫新快照。失敗時不清除快取。
+    @MainActor
     func syncAppIDsFromApple() async throws -> [SideSign.AppID] {
-        let teams = try await PaxSigningService.shared.fetchTeams()
-        guard let team = teams.first else { throw SigningError.noTeamFound }
-        let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
+        if let task = appIDSyncTask { return try await task.value }
+        guard let accountIdentifier = appIDAccountIdentifier else { throw SigningError.notLoggedIn }
 
-        await MainActor.run {
+        let task = Task { @MainActor () async throws -> [SideSign.AppID] in
+            let teams = try await PaxSigningService.shared.fetchTeams()
+            guard let team = teams.first else { throw SigningError.noTeamFound }
+            let appIDs = try await PaxSigningService.shared.fetchAppIDs(for: team)
+            guard self.appIDAccountIdentifier == accountIdentifier else { throw AppIDSyncError.accountChanged }
+
+            let snapshot = try AppIDSnapshot(
+                appIDs: appIDs,
+                accountIdentifier: accountIdentifier,
+                teamIdentifier: team.identifier
+            )
+            // 先完成編碼，再一起套用：只取代本地 Portal 記錄，絕不呼叫遠端刪除。
+            let data = try JSONEncoder().encode(snapshot)
+            UserDefaults.standard.set(data, forKey: self.appIDSnapshotKey)
+            self.appIDSnapshot = snapshot
             self.registeredBundleIds = Set(appIDs.map { $0.bundleIdentifier })
             self.appIDsRemaining = max(0, 10 - appIDs.count)
-        }
 
-        let selectedExternalIDs = await MainActor.run { Set(self.externalBundleIds) }
-        var namesUpdated = false
-        for appID in appIDs where selectedExternalIDs.contains(appID.bundleIdentifier) {
-            let updatedName = await MainActor.run { () -> Bool in
-                guard !appID.name.isEmpty, self.externalNames[appID.bundleIdentifier] != appID.name else {
-                    return false
-                }
+            // 名稱可供所有既有外部項目使用，但不自動加入首頁或刷新選擇。
+            for appID in appIDs {
                 self.externalNames[appID.bundleIdentifier] = appID.name
-                return true
             }
-            namesUpdated = namesUpdated || updatedName
+            self.saveExternalMetadata()
+            return appIDs
         }
-        if namesUpdated {
-            await MainActor.run { self.saveExternalMetadata() }
-        }
-        return appIDs
+        appIDSyncTask = task
+        defer { appIDSyncTask = nil }
+        return try await task.value
     }
     
     // MARK: - 刷新

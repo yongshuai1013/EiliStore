@@ -4,9 +4,11 @@ import SideSign
 /// Apple Developer Portal App IDs 清單（唯讀；日期與裝置 profile 到期日分開顯示）
 struct AppIDsSheetView: View {
     @Environment(\.presentationMode) private var presentationMode
-    @State private var appIDs: [SideSign.AppID] = []
+    @ObservedObject private var manager = AppManager.shared
     @State private var isLoading = true
     @State private var errorMessage: String?
+
+    private var appIDs: [SideSign.AppID] { manager.cachedAppIDs }
 
     private var sortedAppIDs: [SideSign.AppID] {
         appIDs.sorted {
@@ -32,6 +34,16 @@ struct AppIDsSheetView: View {
                     Text("此處的日期是 Apple App ID 記錄的到期日，與「我的 App」顯示的已安裝 provisioning profile 簽名效期不同；刷新簽名時會以新取得的 profile 到期日更新主頁。")
                         .foregroundColor(.secondary)
 
+                    Text("同步會更新本地記錄的名稱、功能和到期日，補齊新記錄並清理已不存在的本地記錄；不會刪除 Apple 上的 App ID，也不會更改刷新選擇。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    if let syncedAt = manager.appIDsLastSyncedAt {
+                        Text("上次成功同步：\(syncedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
                     if isLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity)
@@ -41,6 +53,11 @@ struct AppIDsSheetView: View {
                         Text("同步失敗：\(errorMessage)")
                             .foregroundColor(.red)
                             .font(.caption)
+                        if manager.appIDsLastSyncedAt != nil {
+                            Text("以下保留上次成功同步的記錄，並非最新的 Apple 清單。")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     if appIDs.isEmpty {
@@ -89,6 +106,10 @@ struct AppIDsSheetView: View {
             .refreshable { await loadAppIDs() }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("同步") { Task { await loadAppIDs() } }
+                        .disabled(isLoading)
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("完成") {
                         presentationMode.wrappedValue.dismiss()
@@ -124,9 +145,8 @@ struct AppIDsSheetView: View {
             errorMessage = nil
         }
         do {
-            let result = try await AppManager.shared.syncAppIDsFromApple()
+            _ = try await manager.syncAppIDsFromApple()
             await MainActor.run {
-                appIDs = result
                 isLoading = false
             }
         } catch {
