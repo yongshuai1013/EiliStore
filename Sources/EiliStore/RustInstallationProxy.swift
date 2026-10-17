@@ -1,6 +1,11 @@
 import Foundation
 import IDevice
 
+public enum InstallationPackageType: Equatable {
+    case ipa
+    case developerApp
+}
+
 /// 用 SideStore/idevice Rust FFI 實現的 InstallationProxy（真實現）
 public class RustInstallationProxy {
     private var provider: OpaquePointer?
@@ -112,9 +117,12 @@ public class RustInstallationProxy {
         }.value
     }
     
-    /// 安裝（packagePath 是設備上的路徑，如 /PublicStaging/xxx.app）
-    /// 仿 SideInstaller：傳 PackageType=Developer，裝已解壓的 .app
-    public func install(packagePath: String, progress: @escaping (String, Int) -> Void) async throws {
+    /// 安裝設備上的 IPA 檔案，或已解壓的 .app bundle。
+    public func install(
+        packagePath: String,
+        packageType: InstallationPackageType = .developerApp,
+        progress: @escaping (String, Int) -> Void
+    ) async throws {
         guard let client = proxyClient else {
             throw NSError(domain: "RustInstall", code: -10, userInfo: [NSLocalizedDescriptionKey: "未連接"])
         }
@@ -125,15 +133,21 @@ public class RustInstallationProxy {
         
         return try await Task.detached(priority: .userInitiated) {
             try RustFFILock.shared.withLock {
-            // 構造 options plist（PackageType=Developer，仿 SideInstaller）
-            let options = plist_new_dict()
-            "Developer".withCString { valPtr in
-                let val = plist_new_string(valPtr)
-                "PackageType".withCString { keyPtr in
-                    plist_dict_set_item(options, keyPtr, val)
+            // Developer 僅適用於直接安裝 .app 目錄；IPA 使用一般 package install。
+            let options = packageType == .developerApp ? plist_new_dict() : nil
+            if let options {
+                "Developer".withCString { valPtr in
+                    let val = plist_new_string(valPtr)
+                    "PackageType".withCString { keyPtr in
+                        plist_dict_set_item(options, keyPtr, val)
+                    }
                 }
             }
-            defer { plist_free(options) }
+            defer {
+                if let options {
+                    plist_free(options)
+                }
+            }
             
             // 調用 install（傳 options）
             let err: UnsafeMutablePointer<IdeviceFfiError>? = packagePath.withCString { cstr in

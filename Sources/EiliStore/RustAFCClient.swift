@@ -139,55 +139,62 @@ public class RustAFCClient {
         guard let client = afcClient else {
             throw NSError(domain: "RustAFC", code: -10, userInfo: [NSLocalizedDescriptionKey: "未連接"])
         }
-        
-        let fileData = try Data(contentsOf: localURL)
-        let total = Int64(fileData.count)
-        
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: localURL.path)
+        let total = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+
         return try await Task.detached(priority: .userInitiated) {
+            let input = try FileHandle(forReadingFrom: localURL)
+            defer { try? input.close() }
+
             try RustFFILock.shared.withLock {
-            // 1. 打開遠程文件（寫模式：AfcWr = 4）
-            var fileHandle: OpaquePointer?
-            if let err = remotePath.withCString({ cstr in
-                afc_file_open(client, cstr, AfcWr, &fileHandle)
-            }) {
-                let msg = self.errorMessage(from: err)
-                idevice_error_free(err)
-                throw NSError(domain: "RustAFC", code: -11, userInfo: [NSLocalizedDescriptionKey: "打開遠程文件失敗: \(msg)"])
-            }
-            guard let handle = fileHandle else {
-                throw NSError(domain: "RustAFC", code: -12, userInfo: [NSLocalizedDescriptionKey: "文件句柄為空"])
-            }
-            
-            // 2. 分塊寫入（仿 minimuxer：單個 withUnsafeBytes + 指針算術）
-            let chunkSize = 1024 * 64 // 64KB
-            try fileData.withUnsafeBytes { ptr in
-                guard let base = ptr.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
-                    throw NSError(domain: "RustAFC", code: -13, userInfo: [NSLocalizedDescriptionKey: "無法獲取數據指針"])
+                // 1. 打開遠程文件（寫模式：AfcWr = 4）
+                var remoteHandle: OpaquePointer?
+                if let err = remotePath.withCString({ cstr in
+                    afc_file_open(client, cstr, AfcWr, &remoteHandle)
+                }) {
+                    let msg = self.errorMessage(from: err)
+                    idevice_error_free(err)
+                    throw NSError(domain: "RustAFC", code: -11, userInfo: [NSLocalizedDescriptionKey: "打開遠程文件失敗: \(msg)"])
                 }
-                var offset = 0
-                while offset < fileData.count {
-                    let bytesToWrite = min(chunkSize, fileData.count - offset)
-                    let chunkPtr = base.advanced(by: offset)
-                    if let err = afc_file_write(handle, chunkPtr, bytesToWrite) {
+                guard let handle = remoteHandle else {
+                    throw NSError(domain: "RustAFC", code: -12, userInfo: [NSLocalizedDescriptionKey: "文件句柄為空"])
+                }
+
+                var remoteHandleOpen = true
+                defer {
+                    if remoteHandleOpen { _ = afc_file_close(handle) }
+                }
+
+                // 2. 從本機檔案串流讀取，每次最多上傳 64 KB。
+                let chunkSize = 1024 * 64
+                var sent: Int64 = 0
+                while let chunk = try input.read(upToCount: chunkSize), !chunk.isEmpty {
+                    let writeError = chunk.withUnsafeBytes { bytes -> UnsafeMutablePointer<IdeviceFfiError>? in
+                        guard let base = bytes.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                            return nil
+                        }
+                        return afc_file_write(handle, base, bytes.count)
+                    }
+                    if let err = writeError {
                         let msg = self.errorMessage(from: err)
                         idevice_error_free(err)
-                        throw NSError(domain: "RustAFC", code: -14, userInfo: [NSLocalizedDescriptionKey: "寫入失敗 at \(offset): \(msg)"])
+                        throw NSError(domain: "RustAFC", code: -14, userInfo: [NSLocalizedDescriptionKey: "寫入失敗 at \(sent): \(msg)"])
                     }
-                    offset += bytesToWrite
-                    let sent = Int64(offset)
-                    // 直接調用，外層已處理 MainActor，不再包 async 避免亂序
+                    sent += Int64(chunk.count)
                     progress(sent, total)
                 }
-            }
-            
-            // 3. 關閉文件（刷入數據，否則設備上是壞包）
-            if let err = afc_file_close(handle) {
-                let msg = self.errorMessage(from: err)
-                idevice_error_free(err)
-                throw NSError(domain: "RustAFC", code: -14, userInfo: [NSLocalizedDescriptionKey: "關閉文件失敗: \(msg)"])
-            }
-            
-            print("[RustAFC] 上傳完成: \(remotePath) (\(total) bytes)")
+
+                // 3. 關閉文件，確保已寫入設備。
+                if let err = afc_file_close(handle) {
+                    remoteHandleOpen = false
+                    let msg = self.errorMessage(from: err)
+                    idevice_error_free(err)
+                    throw NSError(domain: "RustAFC", code: -14, userInfo: [NSLocalizedDescriptionKey: "關閉文件失敗: \(msg)"])
+                }
+                remoteHandleOpen = false
+
+                print("[RustAFC] 上傳完成: \(remotePath) (\(sent) bytes)")
             } // withLock
         }.value
     }

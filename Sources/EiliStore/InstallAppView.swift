@@ -1,8 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 安裝 App 視圖：選擇 IPA → 經 .app 上傳安裝
+/// 安裝 App 視圖：選擇 IPA，並選擇整包或解壓 .app 安裝模式。
 struct InstallAppView: View {
+    @AppStorage(AppInstaller.installationModeDefaultsKey)
+    private var installationModeRawValue = AppInstallationMode.ipa.rawValue
     @State private var selectedIPA: URL?
     @State private var isInstalling = false
     @State private var progressMessage = ""
@@ -24,6 +26,21 @@ struct InstallAppView: View {
                 }
             }
             
+            Section(header: Text("安裝方式")) {
+                Picker("方式", selection: $installationModeRawValue) {
+                    Text("整包 IPA").tag(AppInstallationMode.ipa.rawValue)
+                    Text("解壓 .app").tag(AppInstallationMode.appBundle.rawValue)
+                }
+                .pickerStyle(.segmented)
+                .disabled(isInstalling)
+
+                Text(installationMode == .ipa
+                     ? "直接傳送 IPA，由裝置安裝。這是預設方式；失敗時不會自動改用解壓模式。"
+                     : "在本機解壓 IPA，再傳送 .app bundle 安裝。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Section(header: Text("安裝")) {
                 Button(action: startInstall) {
                     HStack {
@@ -68,6 +85,10 @@ struct InstallAppView: View {
         }
     }
 
+    private var installationMode: AppInstallationMode {
+        AppInstallationMode(rawValue: installationModeRawValue) ?? .ipa
+    }
+
     private func startInstall() {
         guard let ipaURL = selectedIPA else { return }
         guard !isInstalling else { return }
@@ -75,7 +96,8 @@ struct InstallAppView: View {
         isInstalling = true
         progressMessage = "開始安裝..."
         progressPercent = 0
-        logger.log("開始安裝: \(ipaURL.lastPathComponent)")
+        let mode = installationMode
+        logger.log("開始安裝: \(ipaURL.lastPathComponent)（\(mode.title)）")
         
         Task {
             do {
@@ -84,7 +106,7 @@ struct InstallAppView: View {
                 logger.log("IPA 已保存: \(savedIPA.lastPathComponent)")
                 
                 // 2. 安裝
-                try await AppInstaller.shared.install(ipaURL: ipaURL) { msg, pct in
+                try await AppInstaller.shared.install(ipaURL: ipaURL, mode: mode) { msg, pct in
                     Task { @MainActor in
                         progressMessage = msg
                         progressPercent = pct
