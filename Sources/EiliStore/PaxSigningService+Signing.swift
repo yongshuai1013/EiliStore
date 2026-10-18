@@ -10,7 +10,7 @@ extension PaxSigningService {
         let portal = SideSign.DeveloperPortal.shared
         
         let existing = try await portal.fetchAppIDs(for: team, session: session)
-        if let found = existing.first(where: { $0.bundleIdentifier == bundleIdentifier }) {
+        if let found = existing.first(where: { SigningBundleIdentifiers.matches($0.bundleIdentifier, bundleIdentifier) }) {
             return found
         }
         

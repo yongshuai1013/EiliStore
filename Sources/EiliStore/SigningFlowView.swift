@@ -44,11 +44,11 @@ struct SigningFlowView: View {
             }
             
             Section(header: Text("Bundle ID（可選）")) {
-                TextField("留空使用原始 Bundle ID", text: $customBundleId)
+                TextField("留空自動加入 Team ID", text: $customBundleId)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
                     .disabled(isSigning)
-                Text("如果 Apple 報 9401（Bundle ID 被佔用），在這裡改個新的")
+                Text("留空使用「原始 Bundle ID.Team ID」，避免原始 ID 被佔用；填入時使用指定 ID，extensions 會同步更新")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -204,14 +204,15 @@ struct SigningFlowView: View {
             }
             log("找到 App: \(appURL.lastPathComponent)")
             
-            // 如果用戶指定了自定義 Bundle ID，先更新 Info.plist
-            if !customBundleId.isEmpty {
-                log("更新 Bundle ID 為: \(customBundleId)")
-                try updateBundleId(appURL, newId: customBundleId)
-            }
-            
-            // 解析 Bundle ID（主 App + extensions）
-            let bundleIDs = try await extractBundleIDs(from: appURL)
+            // 和 SideStore 一樣，先選定 Team 專屬主 ID，再保留各 extension 的後綴。
+            // Info.plist 必須先同步，才能與下載的 profile 及 signer 的 target 比對一致。
+            let registeredAppIDs = try await signingService.fetchAppIDs(for: team)
+            let bundleIDs = try SigningBundleIdentifiers.prepare(
+                appURL: appURL,
+                teamIdentifier: team.identifier,
+                customIdentifier: customBundleId,
+                registeredIdentifiers: registeredAppIDs.map(\.bundleIdentifier)
+            )
             log("Bundle IDs: \(bundleIDs.joined(separator: ", "))")
             
             // 為每個 Bundle ID 找／建 App ID，下載 profile
@@ -314,35 +315,6 @@ struct SigningFlowView: View {
         return total
     }
 
-    private func updateBundleId(_ appURL: URL, newId: String) throws {
-        let fm = FileManager.default
-        // 更新主 App 的 Info.plist
-        let infoPlist = appURL.appendingPathComponent("Info.plist")
-        guard let dict = NSMutableDictionary(contentsOf: infoPlist) else {
-            throw SigningError.signingFailed("無法讀取 Info.plist")
-        }
-        let oldId = dict["CFBundleIdentifier"] as? String ?? ""
-        dict["CFBundleIdentifier"] = newId
-        guard dict.write(to: infoPlist, atomically: true) else {
-            throw SigningError.signingFailed("無法寫入 Info.plist")
-        }
-        // 更新 extensions 的 Bundle ID（保持後綴）
-        if let plugins = fm.enumerator(at: appURL.appendingPathComponent("PlugIns"), includingPropertiesForKeys: nil) {
-            for case let url as URL in plugins {
-                if url.pathExtension == "appex" {
-                    let extInfo = url.appendingPathComponent("Info.plist")
-                    if let extDict = NSMutableDictionary(contentsOf: extInfo),
-                       let extOldId = extDict["CFBundleIdentifier"] as? String {
-                        // 保留 extension 的後綴部分
-                        let suffix = extOldId.replacingOccurrences(of: oldId, with: "")
-                        extDict["CFBundleIdentifier"] = newId + suffix
-                        extDict.write(to: extInfo, atomically: true)
-                    }
-                }
-            }
-        }
-    }
-    
     private func embedProfiles(_ profiles: [SideSign.ProvisioningProfile], into appURL: URL) throws {
         // 主 App
         for profile in profiles {
@@ -364,33 +336,7 @@ struct SigningFlowView: View {
         }
     }
     
-    private func extractBundleIDs(from appURL: URL) async throws -> [String] {
-        var ids: [String] = []
-        
-        // 主 App
-        let infoPlist = appURL.appendingPathComponent("Info.plist")
-        if let dict = NSDictionary(contentsOf: infoPlist),
-           let bid = dict["CFBundleIdentifier"] as? String {
-            ids.append(bid)
-        }
-        
-        // Extensions
-        let plugIns = appURL.appendingPathComponent("PlugIns")
-        if let extensions = try? FileManager.default.contentsOfDirectory(at: plugIns, includingPropertiesForKeys: nil) {
-            for ext in extensions where ext.pathExtension == "appex" {
-                let extPlist = ext.appendingPathComponent("Info.plist")
-                if let dict = NSDictionary(contentsOf: extPlist),
-                   let bid = dict["CFBundleIdentifier"] as? String {
-                    ids.append(bid)
-                }
-            }
-        }
-        
-        guard !ids.isEmpty else {
-            throw SigningError.signingFailed("無法解析 Bundle ID")
-        }
-        return ids
-    }
+
 }
 
 struct DocumentPicker: UIViewControllerRepresentable {
