@@ -1,5 +1,4 @@
 import SwiftUI
-import CoreImage.CIFilterBuiltins
 import AVFoundation
 import SideSign
 import UIKit
@@ -8,6 +7,7 @@ import UIKit
 public struct SessionQRView: View {
     @State private var qrImage: UIImage?
     @State private var showScanner = false
+    @State private var showExpandedQR = false
     @State private var notice: Notice?
 
     private let sessionKey = "paxstore.auth.session"
@@ -64,18 +64,17 @@ public struct SessionQRView: View {
 
                 VStack(spacing: 16) {
                     if let qrImage = qrImage {
-                        Image(uiImage: qrImage)
-                            .interpolation(.none)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: 320)
-                            .aspectRatio(1, contentMode: .fit)
-                            .padding(10)
-                            .background(Color.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .accessibilityLabel("Session 匯出二維碼")
+                        Button {
+                            showExpandedQR = true
+                        } label: {
+                            SessionQRCodeDisplay(image: qrImage)
+                                .aspectRatio(1, contentMode: .fit)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Session 匯出二維碼")
+                        .accessibilityHint("點一下以全螢幕放大")
 
-                        Text("在另一部設備選擇「掃描二維碼」以導入")
+                        Text("點一下放大；在另一部設備選擇「掃描二維碼」以導入")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -140,6 +139,11 @@ public struct SessionQRView: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("Session 二維碼")
         .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(isPresented: $showExpandedQR) {
+            if let qrImage = qrImage {
+                ExpandedSessionQRCode(image: qrImage)
+            }
+        }
         .fullScreenCover(isPresented: $showScanner) {
             QRScannerView(
                 onResult: { qrText in
@@ -163,15 +167,8 @@ public struct SessionQRView: View {
             return
         }
 
-        // 維持既有匯出格式：將 Keychain 中的 Session 原始 JSON 資料做 Base64 編碼。
-        let base64 = sessionData.base64EncodedString()
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(base64.utf8)
-        filter.correctionLevel = "M"
-
-        guard let output = filter.outputImage,
-              let cgImage = CIContext().createCGImage(output, from: output.extent) else {
-            notice = Notice(text: "無法生成二維碼，請稍後再試。", style: .failure)
+        guard let cgImage = SessionQRCode.makeImage(for: sessionData) else {
+            notice = Notice(text: "無法生成二維碼，Session 資料可能超出單一二維碼容量。", style: .failure)
             return
         }
 
