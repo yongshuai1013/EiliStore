@@ -31,10 +31,14 @@ public final class DeveloperPortalService: DeveloperPortalServicing, Sendable {
     private let portal: any SideSign.DeveloperPortalAPI
     private let sessionProvider: @Sendable () async throws -> (SideSign.Account, SideSign.Session)
 
-    public init(portal: any SideSign.DeveloperPortalAPI = SideSign.DeveloperPortal.shared,
-                sessionProvider: @escaping @Sendable () async throws -> (SideSign.Account, SideSign.Session) = {
-                    try await PaxSigningService.shared.sessionWithFreshAnisette()
-                }) {
+    public init(portal: any SideSign.DeveloperPortalAPI = SideSign.DeveloperPortal.shared) {
+        self.portal = portal
+        self.sessionProvider = {
+            try await PaxSigningService.shared.sessionWithFreshAnisette()
+        }
+    }
+    init(portal: any SideSign.DeveloperPortalAPI,
+         sessionProvider: @escaping @Sendable () async throws -> (SideSign.Account, SideSign.Session)) {
         self.portal = portal
         self.sessionProvider = sessionProvider
     }
