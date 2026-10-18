@@ -18,12 +18,44 @@ public final class PaxAuthService {
     
     /// 當前已登入的 Apple ID（從 Keychain 讀）
     public var currentAppleID: String? {
-        KeychainHelper.loadString(forKey: KeychainKey.appleID)
+        if let session: SideSign.AuthSession = KeychainHelper.loadCodable(
+            SideSign.AuthSession.self,
+            forKey: KeychainKey.session
+        ) {
+            let appleID = session.account.appleID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !appleID.isEmpty { return appleID }
+        }
+        return KeychainHelper.loadString(forKey: KeychainKey.appleID)
     }
     
     /// 是否有已保存的登入 session
     public var hasSavedSession: Bool {
         KeychainHelper.load(forKey: KeychainKey.session) != nil
+    }
+
+    /// Session transfer must restore the account identifier used by the app's login-state checks.
+    /// Keep the raw Session bytes unchanged and roll back both Keychain entries if either write fails.
+    func importSession(_ data: Data, session: SideSign.AuthSession) -> String? {
+        let appleID = session.account.appleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !appleID.isEmpty else { return nil }
+
+        let previousSession = KeychainHelper.load(forKey: KeychainKey.session)
+        let previousAppleID = KeychainHelper.load(forKey: KeychainKey.appleID)
+        guard KeychainHelper.save(data, forKey: KeychainKey.session),
+              KeychainHelper.saveString(appleID, forKey: KeychainKey.appleID) else {
+            restoreKeychainItem(previousSession, forKey: KeychainKey.session)
+            restoreKeychainItem(previousAppleID, forKey: KeychainKey.appleID)
+            return nil
+        }
+        return appleID
+    }
+
+    private func restoreKeychainItem(_ data: Data?, forKey key: String) {
+        if let data {
+            _ = KeychainHelper.save(data, forKey: key)
+        } else {
+            _ = KeychainHelper.delete(forKey: key)
+        }
     }
     
     /// 登入時用的 anisette 伺服器列表（自動輪換開→按優先順序 failover）

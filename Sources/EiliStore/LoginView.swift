@@ -94,7 +94,10 @@ struct LoginView: View {
                 header: Text("Session 二維碼"),
                 footer: Text("透過二維碼在設備間移轉已保存的登入 Session；請勿分享二維碼。")
             ) {
-                NavigationLink(destination: SessionQRView()) {
+                NavigationLink(destination: SessionQRView(onSessionImported: { importedAppleID in
+                    appleID = importedAppleID
+                    isLoggedIn = true
+                })) {
                     HStack {
                         Text("導出/導入 Session")
                         Spacer()
@@ -320,7 +323,10 @@ struct AccountView: View {
                 header: Text("Session 二維碼"),
                 footer: Text("導出備份後，可在更換設備時掃描導入。二維碼包含敏感登入資料，請妥善保管。")
             ) {
-                NavigationLink(destination: SessionQRView()) {
+                NavigationLink(destination: SessionQRView(onSessionImported: { importedAppleID in
+                    appleID = importedAppleID
+                    isLoggedIn = true
+                })) {
                     HStack {
                         Text("導出/導入 Session")
                         Spacer()

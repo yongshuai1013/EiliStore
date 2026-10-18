@@ -5,6 +5,7 @@ import UIKit
 
 /// Session 二維碼導出/導入
 public struct SessionQRView: View {
+    private let onSessionImported: ((String) -> Void)?
     @State private var qrImage: UIImage?
     @State private var showScanner = false
     @State private var showExpandedQR = false
@@ -40,7 +41,9 @@ public struct SessionQRView: View {
         let style: NoticeStyle
     }
 
-    public init() {}
+    public init(onSessionImported: ((String) -> Void)? = nil) {
+        self.onSessionImported = onSessionImported
+    }
 
     public var body: some View {
         ScrollView {
@@ -186,16 +189,22 @@ public struct SessionQRView: View {
         }
 
         // 與登入恢復流程使用相同的 Codable 型別驗證，避免將任意資料寫入 Session 項目。
-        guard (try? JSONDecoder().decode(SideSign.AuthSession.self, from: data)) != nil else {
+        guard let session = try? JSONDecoder().decode(SideSign.AuthSession.self, from: data) else {
             notice = Notice(text: "二維碼不包含有效的 Session，未變更現有 Session。", style: .failure)
             return
         }
 
-        if KeychainHelper.save(data, forKey: sessionKey) {
-            notice = Notice(text: "Session 導入成功。", style: .success)
-        } else {
-            notice = Notice(text: "Session 寫入失敗。", style: .failure)
+        guard !session.account.appleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            notice = Notice(text: "Session 缺少 Apple ID，未變更現有登入狀態。", style: .failure)
+            return
         }
+
+        guard let appleID = PaxAuthService.shared.importSession(data, session: session) else {
+            notice = Notice(text: "Session 或登入資訊寫入失敗，未變更現有登入狀態。", style: .failure)
+            return
+        }
+        onSessionImported?(appleID)
+        notice = Notice(text: "Session 與登入狀態導入成功。", style: .success)
     }
 }
 
