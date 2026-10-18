@@ -60,26 +60,24 @@ struct PairingFileDetailView: View {
         .navigationTitle("配對檔詳情")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if let file, !isEditing, file.canEditAnnotation, file.annotation != nil {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("編輯資訊") { beginEditing(file) }
-                        .disabled(isBusy)
-                }
-            }
-            if !isEditing {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: reload) { Image(systemName: "arrow.clockwise") }
-                        .accessibilityLabel("重新整理配對檔詳情")
-                }
-            }
-            if isEditing {
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    Button("取消") {
-                        if isDirty { showCancelConfirmation = true } else { discardEditing() }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 12) {
+                    if let file, !isEditing, file.canEditAnnotation, file.annotation != nil {
+                        Button("編輯資訊") { beginEditing(file) }
+                            .disabled(isBusy)
                     }
-                    .disabled(isSaving)
-                    Button("儲存") { save() }
-                        .disabled(isBusy || !isDirty || validationMessage != nil || !canEdit)
+                    if !isEditing {
+                        Button(action: reload) { Image(systemName: "arrow.clockwise") }
+                            .accessibilityLabel("重新整理配對檔詳情")
+                    }
+                    if isEditing {
+                        Button("取消") {
+                            if isDirty { showCancelConfirmation = true } else { discardEditing() }
+                        }
+                        .disabled(isSaving)
+                        Button("儲存") { save() }
+                            .disabled(isBusy || !isDirty || validationMessage != nil || !canEdit)
+                    }
                 }
             }
         }
