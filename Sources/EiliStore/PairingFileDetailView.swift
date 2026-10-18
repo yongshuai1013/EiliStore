@@ -14,6 +14,7 @@ struct PairingFileDetailView: View {
     @State private var isSaving = false
     @State private var showXMLWarning = false
     @State private var xmlDocument: PairingXMLDocument?
+    @State private var disclosure = PairingFieldDisclosure()
 
     private let store = PairingFileStore.shared
 
@@ -82,7 +83,9 @@ struct PairingFileDetailView: View {
             }
         }
         .onAppear { reload() }
+        .onDisappear { disclosure.hide() }
         .onChange(of: scenePhase) { phase in
+            disclosure.hide()
             if phase == .active { reload() }
         }
         .refreshable { if !isEditing { reload() } }
@@ -126,7 +129,10 @@ struct PairingFileDetailView: View {
             }
             Section("原始配對檔") {
                 if file.isInstalled && file.type == .lockdown {
-                    Button("原始 XML／編輯") { showXMLWarning = true }
+                    Button("原始 XML／編輯") {
+                        disclosure.hide()
+                        showXMLWarning = true
+                    }
                         .disabled(isBusy || isEditing)
                     Text("此選項會在本機顯示並允許編輯原始 Lockdown XML，包括私鑰與憑證；不會自動複製、記錄或上傳。")
                         .font(.footnote).foregroundColor(.secondary)
@@ -176,9 +182,9 @@ struct PairingFileDetailView: View {
             }
             Section {
                 ForEach(file.presentSensitiveFields, id: \.self) { field in
-                    PairingDetailRow(label: field, value: "已隱藏")
+                    sensitiveFieldRow(field)
                 }
-                Text("預設只顯示遮蔽後的敏感欄位中繼資料；只有明確開啟原始 XML 編輯器時，才會在本機畫面揭露 XML 內的私鑰及憑證。App 不會自動複製、記錄或上傳 XML。舊版原始檔名亦不會顯示。")
+                Text("敏感欄位預設隱藏。點按「顯示」只會在本機顯示該欄；顯示另一欄、離開詳情頁或 App 進入背景時會自動隱藏。二進位資料以 Base64 顯示，不提供複製，亦不會記錄或上傳。舊版原始檔名不會顯示。")
                     .font(.footnote).foregroundColor(.secondary)
             } header: {
                 Text("私隱保護")
@@ -192,8 +198,46 @@ struct PairingFileDetailView: View {
         .disabled(isSaving)
     }
 
+    private func sensitiveFieldRow(_ field: String) -> some View {
+        let value = disclosure.value(for: field, isActive: scenePhase == .active)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(field).font(.subheadline)
+                Spacer()
+                if value == nil {
+                    Text("已隱藏").foregroundColor(.secondary)
+                }
+                Button(value == nil ? "顯示" : "隱藏") { toggleSensitiveField(field) }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("\(value == nil ? "顯示" : "隱藏") \(field)")
+                    .disabled(scenePhase != .active || isEditing || xmlDocument != nil)
+            }
+            if let value {
+                Text(verbatim: value)
+                    .font(.system(.footnote, design: .monospaced))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.disabled)
+                    .privacySensitive()
+            }
+        }
+    }
+
+    private func toggleSensitiveField(_ field: String) {
+        guard !isEditing, xmlDocument == nil else { return }
+        message = nil
+        do {
+            try disclosure.toggle(field, isActive: scenePhase == .active) {
+                try store.loadSensitiveField(field, for: fileID)
+            }
+        } catch {
+            // Never include parser errors, paths or the requested value in UI diagnostics.
+            message = "無法安全顯示此欄位，請重新整理後再試。"
+        }
+    }
+
     private func beginEditing(_ file: PairingFileInfo) {
         guard !isBusy, file.canEditAnnotation, let annotation = file.annotation else { return }
+        disclosure.hide()
         expected = annotation
         draft = annotation
         message = nil
@@ -239,6 +283,7 @@ struct PairingFileDetailView: View {
     }
 
     private func reload() {
+        disclosure.hide()
         let latest = store.inventory().first { $0.id == fileID }
         file = latest
         guard let latest else {

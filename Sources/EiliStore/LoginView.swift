@@ -311,6 +311,11 @@ struct AccountView: View {
                     }
                 }
             }
+            Section(header: Text("Developer Portal Services")) {
+                NavigationLink(destination: DeveloperPortalView()) {
+                    Label("Developer Portal", systemImage: "person.crop.circle.badge.checkmark")
+                }
+            }
             Section(
                 header: Text("Session 二維碼"),
                 footer: Text("導出備份後，可在更換設備時掃描導入。二維碼包含敏感登入資料，請妥善保管。")

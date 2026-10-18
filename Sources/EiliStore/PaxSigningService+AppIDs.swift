@@ -22,6 +22,8 @@ extension PaxSigningService {
     public func deleteAppID(_ appID: SideSign.AppID, for team: SideSign.Team) async throws {
         let (_, session) = try await sessionWithFreshAnisette()
         let portal = SideSign.DeveloperPortal.shared
-        _ = try await portal.deleteAppID(appID, for: team, session: session)
+        guard try await portal.deleteAppID(appID, for: team, session: session) else {
+            throw SigningError.signingFailed("Apple 未確認 App ID 已刪除，請重新整理後檢查。")
+        }
     }
 }

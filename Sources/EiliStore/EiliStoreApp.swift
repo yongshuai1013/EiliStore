@@ -915,6 +915,18 @@ struct SettingsView: View {
                     }
                 }
                 
+                Section(header: Text("Developer Portal Services")) {
+                    NavigationLink(destination: DeveloperPortalView()) {
+                        Label("Developer Portal", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    .disabled(!isLoggedIn)
+                    if !isLoggedIn {
+                        Text("請先登入 Apple ID，再管理開發者團隊資源。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
                 Section(header: Text("證書")) {
                     NavigationLink(destination: CertificateView()) {
                         Text("證書管理")
@@ -953,11 +965,14 @@ struct SettingsView: View {
             }
             .navigationTitle("設定")
             .onAppear {
-                if KeychainHelper.loadString(forKey: "paxstore.auth.session") != nil,
-                   let savedID = KeychainHelper.loadString(forKey: "paxstore.auth.appleID"),
+                if PaxAuthService.shared.hasSavedSession,
+                   let savedID = PaxAuthService.shared.currentAppleID,
                    !savedID.isEmpty {
                     isLoggedIn = true
                     appleID = savedID
+                } else {
+                    isLoggedIn = false
+                    appleID = ""
                 }
             }
         }

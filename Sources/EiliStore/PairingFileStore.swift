@@ -50,9 +50,11 @@ enum PairingStoreError: Error, LocalizedError {
     case invalidLockdown, unreadable, tooLarge, storageFailed, unsupportedProtocol
     case invalidAnnotation, annotationUnavailable, annotationConflict, fileMissing
     case invalidXML, unsafeXML, xmlConflict, xmlUnavailable, xmlBusy
+    case sensitiveFieldUnavailable
 
     var errorDescription: String? {
         switch self {
+        case .sensitiveFieldUnavailable: return "無法安全顯示此欄位，請重新整理後再試。"
         case .invalidLockdown: return "這不是完整的 Lockdown 配對檔。請重新產生後匯入；現有檔案未被替換。"
         case .unreadable: return "無法讀取配對檔。請確認檔案可用並重試。"
         case .tooLarge: return "配對檔過大，已拒絕匯入。"
@@ -160,6 +162,32 @@ final class PairingFileStore: @unchecked Sendable {
                         id: legacyIdentifiers[url]!, selected: selected, annotations: annotations)
         }
         return canonical + legacy
+    }
+
+    private static func sensitiveKeys(for type: PairingType) -> [String] {
+        type == .lockdown
+            ? ["SystemBUID", "HostID", "UDID", "HardwareUDID", "WiFiMACAddress", "WifiMAC", "HostPrivateKey", "RootPrivateKey", "HostCertificate", "RootCertificate", "DeviceCertificate", "EscrowBag"]
+            : ["public_key", "private_key", "identifier", "alt_irk"]
+    }
+
+    /// Explicit single-field, local-screen access. No values enter inventory, sidecars or diagnostics.
+    func loadSensitiveField(_ field: String, for id: String) throws -> String {
+        lock.lock(); defer { lock.unlock() }
+        let type: PairingType = id == PairingType.remote.rawValue ? .remote : .lockdown
+        guard Self.sensitiveKeys(for: type).contains(field),
+              let url = annotationTarget(for: id) else { throw PairingStoreError.sensitiveFieldUnavailable }
+        do {
+            let data = try readBoundedData(at: url)
+            let dictionary = type == .lockdown ? lockdownDictionary(data) : remoteDictionary(data)
+            if let value = dictionary?[field] as? String { return value }
+            if let value = dictionary?[field] as? Data {
+                return "Base64:\n" + value.base64EncodedString(options: .lineLength64Characters)
+            }
+            throw PairingStoreError.sensitiveFieldUnavailable
+        } catch {
+            // Parser/filesystem errors may contain private data or paths. Never forward them.
+            throw PairingStoreError.sensitiveFieldUnavailable
+        }
     }
 
     /// Explicit local-editor access only. Inventory and connection clients never receive this snapshot.
@@ -501,16 +529,13 @@ final class PairingFileStore: @unchecked Sendable {
         } else {
             dictionary = nil
         }
-        let sensitiveKeys = type == .lockdown
-            ? ["SystemBUID", "HostID", "UDID", "HardwareUDID", "WiFiMACAddress", "WifiMAC", "HostPrivateKey", "RootPrivateKey", "HostCertificate", "RootCertificate", "DeviceCertificate", "EscrowBag"]
-            : ["public_key", "private_key", "identifier", "alt_irk"]
         let key = annotationKey(for: url, attributes: attributes)
         return PairingFileInfo(id: id, type: type, fileName: displayName, isInstalled: installed,
                                isStructurallyValid: dictionary != nil, isSelected: selected == url,
                                fileSize: (attributes?[.size] as? NSNumber)?.int64Value,
                                dateCreated: attributes?[.creationDate] as? Date,
                                dateModified: attributes?[.modificationDate] as? Date,
-                               presentSensitiveFields: sensitiveKeys.filter { dictionary?[$0] != nil },
+                               presentSensitiveFields: Self.sensitiveKeys(for: type).filter { dictionary?[$0] != nil },
                                annotation: key.flatMap { key in annotations.map { $0[key] ?? .empty } },
                                canEditAnnotation: installed && safeFile && annotations != nil && key != nil &&
                                    attributes?[.type] as? FileAttributeType == .typeRegular)
