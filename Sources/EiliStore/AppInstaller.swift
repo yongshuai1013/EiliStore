@@ -205,16 +205,7 @@ public class AppInstaller {
     }
 
     private func findPairingFile() -> URL? {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let dir = docs.appendingPathComponent("PairingFiles")
-        let lockdownURL = dir.appendingPathComponent("PairingFile_Lockdown.plist")
-        if FileManager.default.fileExists(atPath: lockdownURL.path) {
-            return lockdownURL
-        }
-        if let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
-            return files.first(where: { $0.pathExtension == "plist" })
-        }
-        return nil
+        PairingFileStore.shared.lockdownFileURL()
     }
 }
 

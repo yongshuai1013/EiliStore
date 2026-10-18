@@ -685,18 +685,7 @@ class AppManager: ObservableObject {
     
     /// 查找配對檔
     private func findPairingFile() -> URL? {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        // 1. 先找 PairingFiles/PairingFile_Lockdown.plist
-        let preferred = docs.appendingPathComponent("PairingFiles/PairingFile_Lockdown.plist")
-        if FileManager.default.fileExists(atPath: preferred.path) {
-            return preferred
-        }
-        // 2. 找 PairingFiles/ 下第一個 .plist
-        let dir = docs.appendingPathComponent("PairingFiles", isDirectory: true)
-        if let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
-            return files.first(where: { $0.pathExtension == "plist" })
-        }
-        return nil
+        PairingFileStore.shared.lockdownFileURL()
     }
     
     /// 檢查並自動刷新（App 啟動時調用）
