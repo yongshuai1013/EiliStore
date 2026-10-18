@@ -4,7 +4,7 @@ import IDevice
 /// 用 SideStore/idevice Rust FFI 實現的 AFC 客戶端（真實現）
 /// 經 Provider 直連，Rust 內部處理 StartService
 public class RustAFCClient {
-    private var provider: OpaquePointer?
+    private let transport = RustDeviceTransport()
     private var afcClient: OpaquePointer?
     
     private let host: String
@@ -24,10 +24,7 @@ public class RustAFCClient {
             afc_client_free(client)
             afcClient = nil
         }
-        if let prov = provider {
-            idevice_provider_free(prov)
-            provider = nil
-        }
+        transport.disconnect()
     }
     
     /// 連接 AFC（經 Rust Provider，帶重試）
@@ -49,67 +46,9 @@ public class RustAFCClient {
     private func connectOnce() async throws {
         return try await Task.detached(priority: .userInitiated) {
             try RustFFILock.shared.withLock {
-                // 1. 載入配對檔
-                let plistData = try Data(contentsOf: self.pairingFileURL)
-            var pairingFile: OpaquePointer?
-            if let err = plistData.withUnsafeBytes({ ptr in
-                idevice_pairing_file_from_bytes(
-                    ptr.baseAddress?.assumingMemoryBound(to: UInt8.self),
-                    UInt(plistData.count),
-                    &pairingFile
-                )
-            }) {
-                let msg = self.errorMessage(from: err)
-                idevice_error_free(err)
-                throw NSError(domain: "RustAFC", code: -1, userInfo: [NSLocalizedDescriptionKey: "配對檔解析失敗: \(msg)"])
-            }
-            guard let pf = pairingFile else {
-                throw NSError(domain: "RustAFC", code: -2, userInfo: [NSLocalizedDescriptionKey: "配對檔句柄為空"])
-            }
-            
-            // 2. 創建 Provider
-            var addr = sockaddr_in()
-            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-            addr.sin_family = sa_family_t(AF_INET)
-            addr.sin_port = UInt16(62078).bigEndian
-            let ptonResult: Int32 = self.host.withCString { cstr in
-                inet_pton(AF_INET, cstr, &addr.sin_addr)
-            }
-            guard ptonResult == 1 else {
-                throw NSError(domain: "RustAFC", code: -2, userInfo: [NSLocalizedDescriptionKey: "無效的目標地址"])
-            }
-            
-            var provider: OpaquePointer?
-            let label = "PaxHeartbeatTest-AFC"
-            let providerErr: UnsafeMutablePointer<IdeviceFfiError>? = withUnsafePointer(to: &addr) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                    label.withCString { labelPtr in
-                        idevice_tcp_provider_new(sockPtr, pf, labelPtr, &provider)
-                    }
-                }
-            }
-            if let err = providerErr {
-                let msg = self.errorMessage(from: err)
-                idevice_error_free(err)
-                throw NSError(domain: "RustAFC", code: -3, userInfo: [NSLocalizedDescriptionKey: "Provider 創建失敗: \(msg)"])
-            }
-            guard let prov = provider else {
-                throw NSError(domain: "RustAFC", code: -4, userInfo: [NSLocalizedDescriptionKey: "Provider 句柄為空"])
-            }
-            self.provider = prov
-            
-            // 3. 連接 AFC（Rust 內部會 StartService）
-            var client: OpaquePointer?
-            if let err = afc_client_connect(prov, &client) {
-                let msg = self.errorMessage(from: err)
-                idevice_error_free(err)
-                throw NSError(domain: "RustAFC", code: -5, userInfo: [NSLocalizedDescriptionKey: "AFC 連接失敗: \(msg)"])
-            }
-            guard let c = client else {
-                throw NSError(domain: "RustAFC", code: -6, userInfo: [NSLocalizedDescriptionKey: "AFC 句柄為空"])
-            }
-            self.afcClient = c
-            print("[RustAFC] 已連接（經 Rust FFI）")
+                self.disconnect()
+                self.afcClient = try self.transport.connect(.afc, host: self.host, pairingFileURL: self.pairingFileURL)
+                print("[RustAFC] 已連接（經 Rust FFI）")
             } // withLock
         }.value
     }
@@ -264,11 +203,7 @@ public class RustAFCClient {
     }
     
     private func errorMessage(from err: UnsafeMutablePointer<IdeviceFfiError>) -> String {
-        let code = err.pointee.code
-        if let cmsg = err.pointee.message {
-            let msg = String(cString: cmsg)
-            return "[\(code)] \(msg)"
-        }
-        return "[\(code)] unknown"
+        // Do not forward Rust's Debug-formatted payload, which can contain pairing values.
+        return "[\(err.pointee.code):\(err.pointee.sub_code)] 裝置服務錯誤"
     }
 }

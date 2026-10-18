@@ -205,7 +205,7 @@ public class AppInstaller {
     }
 
     private func findPairingFile() -> URL? {
-        PairingFileStore.shared.lockdownFileURL()
+        PairingFileStore.shared.selectedPairingFileURL()
     }
 }
 

@@ -8,6 +8,6 @@ fi
 build=$(mktemp -d)
 trap 'rm -rf "$build"' EXIT
 swiftc -swift-version 6 -strict-concurrency=complete -parse-as-library \
-    Sources/EiliStore/PairingFileStore.swift Tests/PairingFileStoreTests.swift \
+	    Sources/EiliStore/PairingFileStore.swift Sources/EiliStore/PairingFileAnnotation.swift Tests/PairingFileStoreTests.swift \
     -o "$build/pairing-tests"
 "$build/pairing-tests"

@@ -12,9 +12,26 @@ func expiryColor(days: Int) -> Color {
 
 @main
 struct EiliStoreApp: App {
+    // Keep failure closed for the entire UI lifetime; factories also call the
+    // same gate before FFI use and will observe the cached failure.
+    private let rustLoggingConfigured: Bool
+
+    init() {
+        do {
+            try RustLoggingPrivacy.ensureConfigured()
+            rustLoggingConfigured = true
+        } catch {
+            rustLoggingConfigured = false
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
-            MainTabView()
+            if rustLoggingConfigured {
+                MainTabView()
+            } else {
+                Text("無法安全初始化裝置連線，已停止啟用。")
+            }
         }
     }
 }
@@ -539,7 +556,7 @@ struct MyAppsView: View {
     }
 
     private func findPairingFileURL() -> URL? {
-        PairingFileStore.shared.lockdownFileURL()
+        PairingFileStore.shared.selectedPairingFileURL()
     }
 
 }

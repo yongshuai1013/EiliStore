@@ -227,10 +227,10 @@ public class VPNConnectionChecker {
         if !candidates.contains("127.0.0.1") { candidates.append("127.0.0.1") }
         // 候選 4：手動輸入的地址
         add(gatewayHost)
-        // 候選 5：IPv6（之前只掃了 v4；若 lockdownd 綁 [::]，v6 環回可能通）
-        if !candidates.contains("::1") { candidates.append("::1") }
-        let wifiIP6 = discoverWiFiIPv6()
-        if let w6 = wifiIP6, !candidates.contains(w6) { candidates.append(w6) }
+        // Current Rust transport accepts IPv4 only. A manual endpoint must not be
+        // validated by probing a different automatic candidate.
+        if let manual = manualGatewayHost { candidates = [manual] }
+        candidates.removeAll { ipv4Raw($0) == nil }
 
         // 排除接口自己的地址
         let localIPs = Set(tunnels.map { $0.localIP })
@@ -247,18 +247,17 @@ public class VPNConnectionChecker {
         if let wifiIP = wifiIP {
             diag += " Wi-Fi直連候選:\(wifiIP)"
         }
-        if let w6 = wifiIP6 {
-            diag += " Wi-Fi v6候選:\(w6)"
-        }
-        diag += isPortInUse(port: gatewayPort) ? " [bind:端口被佔用，有服務在聽]" : " [bind:端口空閒]" 
+        let isRemote = PairingFileStore.shared.selectedPairingFileURL()?.lastPathComponent == PairingType.remote.fileName
+        let selectedPort = isRemote ? RustDeviceTransport.remotePort : gatewayPort
+        diag += isPortInUse(port: selectedPort) ? " [bind:端口被佔用，有服務在聽]" : " [bind:端口空閒]"
         if candidates.isEmpty {
             lastDiagnostic = diag + " 無候選地址可探測。"
             return false
         }
-        diag += " 探測 " + candidates.map { "\($0):\(gatewayPort)" }.joined(separator: ", ")
+        diag += " 探測 " + candidates.map { "\($0):\(selectedPort)" }.joined(separator: ", ")
 
-        // 同時探測 lockdown(62078) 與 remote pairing(49152)
-        let ports: [UInt16] = [gatewayPort, 49152]
+        // Probe only the selected protocol: an unrelated listening service is not a usable transport.
+        let ports: [UInt16] = [selectedPort]
         diag += " 端口:" + ports.map { String($0) }.joined(separator: ",")
         var winner: String?
         var winnerPort: UInt16 = 0

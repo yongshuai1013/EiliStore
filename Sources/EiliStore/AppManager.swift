@@ -443,7 +443,7 @@ class AppManager: ObservableObject {
         }
         
         // 4. 連接 misagent
-        let misagent = RustMisagentClient(host: "10.7.0.1", pairingFileURL: pairingFile)
+        let misagent = RustMisagentClient(host: VPNConnectionChecker.shared.effectiveGatewayHost, pairingFileURL: pairingFile)
         do {
             try await misagent.connect()
             AppLogger.shared.log("✅ Misagent 已連接")
@@ -583,7 +583,7 @@ class AppManager: ObservableObject {
             return
         }
         
-        let misagent = RustMisagentClient(host: "10.7.0.1", pairingFileURL: pairingFile)
+        let misagent = RustMisagentClient(host: VPNConnectionChecker.shared.effectiveGatewayHost, pairingFileURL: pairingFile)
         do {
             try await misagent.connect()
         } catch {
@@ -685,7 +685,7 @@ class AppManager: ObservableObject {
     
     /// 查找配對檔
     private func findPairingFile() -> URL? {
-        PairingFileStore.shared.lockdownFileURL()
+        PairingFileStore.shared.selectedPairingFileURL()
     }
     
     /// 檢查並自動刷新（App 啟動時調用）

@@ -35,6 +35,11 @@ public class RustFFILock {
     
     /// 判斷是否為 transport 錯誤（仿 minimuxer 的 isTransportErrorText）
     public static func isTransportError(_ error: Error) -> Bool {
+        let failure = error as NSError
+        if failure.domain == "RustDeviceTransport" {
+            // Pinned idevice: socket, TLS, inactive/no connection, timeout.
+            return [1, 3, 17, 19, 109].contains(failure.code)
+        }
         let text = "\(error)".lowercased() + error.localizedDescription.lowercased()
         let keywords = [
             "unexpectedeof", "close_notify", "early eof",

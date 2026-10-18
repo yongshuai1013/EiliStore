@@ -6,6 +6,7 @@ struct PairingFileManagementView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var files: [PairingFileInfo] = []
     @State private var preferredProtocol: PairingType?
+    @State private var remotePortText = "49152"
     @State private var isPickingLockdown = false
     @State private var isUpdating = false
     @State private var message: String?
@@ -33,38 +34,44 @@ struct PairingFileManagementView: View {
     var body: some View {
         List {
             Section {
-                PairingDetailRow(label: "使用中的協定", value: files.contains(where: \.isSelected) ? "Lockdown" : "無")
+                PairingDetailRow(label: "選用協定", value: files.first(where: \.isSelected)?.type.title ?? "無")
                 Picker("偏好協定", selection: Binding(
                     get: { preferredProtocol },
                     set: { value in
-                        do {
-                            try store.setPreferredProtocol(value)
-                            preferredProtocol = value
-                        } catch {
-                            message = "無法儲存偏好協定。"
-                        }
+                        updatePairing { try store.setPreferredProtocol(value) }
                     }
                 )) {
                     Text("自動（無偏好）").tag(Optional<PairingType>.none)
                     Text("Lockdown").tag(Optional(PairingType.lockdown))
+                    if files.contains(where: { $0.type == .remote && $0.isStructurallyValid }) {
+                        Text("Remote Pairing").tag(Optional(PairingType.remote))
+                    }
                 }
                 .disabled(isBusy)
             } header: {
                 Text("協定狀態")
             } footer: {
-                Text("顯示目前引擎可使用的配對協定，不代表 VPN 已連線或配對握手成功。目前引擎只支援 Lockdown；Remote 不會被自動選用。")
+                Text("選用不代表連線或握手成功。自動模式優先使用有效的 Lockdown，其次是已儲存的 Remote。明確選擇的協定不可用時不會切換至另一協定。Remote 只驗證既有配對，不會開始首次配對。切換後請重新啟動 App。")
             }
 
             Section {
                 ForEach(files) { file in
                     NavigationLink {
-                        PairingFileDetailView(file: file)
+                        PairingFileDetailView(fileID: file.id)
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: file.type == .lockdown ? "lock.shield" : "waveform.circle")
                                 .foregroundColor(file.isSelected ? .green : .secondary)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(file.id.hasPrefix("legacy-") ? file.fileName : "\(file.type.title) 配對檔")
+                                VStack(alignment: .leading, spacing: 2) {
+                                    if let name = file.annotation?.displayName, !name.isEmpty {
+                                        Text(name)
+                                        Text(file.id.hasPrefix("legacy-") ? file.fileName : "\(file.type.title) 配對檔")
+                                            .font(.caption).foregroundColor(.secondary)
+                                    } else {
+                                        Text(file.id.hasPrefix("legacy-") ? file.fileName : "\(file.type.title) 配對檔")
+                                    }
+                                }
                                 Text(status(for: file))
                                     .font(.caption)
                                     .foregroundColor(file.isInstalled ? .secondary : .red)
@@ -85,7 +92,26 @@ struct PairingFileManagementView: View {
             } header: {
                 Text("配對檔清單")
             } footer: {
-                Text("配對憑證及裝置識別資料不會顯示或提供複製、分享。Remote 檔案僅列出儲存狀態，目前不支援匯入、驗證或使用。")
+                Text("清單與詳情預設隱藏配對憑證及裝置識別資料。明確開啟原始 XML 編輯器後才會在本機顯示內容，不會記錄或上傳。已儲存的 Remote 檔案可做結構檢查並用於既有配對連線；此處不提供 Remote 匯入或 XML 編輯。")
+            }
+
+            if files.contains(where: { $0.type == .remote && $0.isInstalled }) {
+                Section {
+                    TextField("Remote 服務端口", text: $remotePortText)
+                        .keyboardType(.numberPad)
+                    Button("儲存 Remote 端口") {
+                        guard let port = UInt16(remotePortText), port > 0 else {
+                            message = "端口必須介於 1 至 65535。"
+                            return
+                        }
+                        updatePairing { UserDefaults.standard.set(Int(port), forKey: "pairing.remotePort") }
+                    }
+                } header: {
+                    Text("既有 Remote 連線")
+                } footer: {
+                    Text("使用既有裝置 IP 設定及 Remote Pairing TCP 服務端口（預設 49152）。端口必須與裝置實際服務一致；不會啟動配對廣播或 PIN 流程。變更後請重新啟動 App。")
+                }
+                .disabled(isBusy)
             }
 
             Section("配對方式") {
@@ -179,13 +205,13 @@ struct PairingFileManagementView: View {
 
     private func status(for file: PairingFileInfo) -> String {
         guard file.isInstalled else { return "未安裝" }
-        if file.type == .remote { return "已儲存 · 引擎不支援" }
         return file.isStructurallyValid ? "已安裝 · 結構檢查通過" : "無法使用 · 請重新匯入"
     }
 
     private func reload() {
         files = store.inventory()
         preferredProtocol = store.preferredProtocol
+        remotePortText = String(RustDeviceTransport.remotePort)
     }
 
     private func requestImport() {
@@ -229,48 +255,6 @@ struct PairingFileManagementView: View {
     }
 }
 
-private struct PairingFileDetailView: View {
-    let file: PairingFileInfo
-
-    var body: some View {
-        List {
-            Section("檔案資料") {
-                PairingDetailRow(label: "檔案名稱", value: file.fileName)
-                PairingDetailRow(label: "類型", value: file.type.title)
-                PairingDetailRow(label: "安裝狀態", value: file.isInstalled ? "已安裝" : "未安裝")
-                PairingDetailRow(label: "使用狀態", value: file.isSelected ? "使用中（不代表連線成功）" : "未使用")
-                if file.isInstalled {
-                    PairingDetailRow(label: "驗證狀態", value: file.type == .remote ? "不支援驗證" :
-                        (file.isStructurallyValid ? "結構檢查通過" : "結構無效或無法讀取"))
-                    PairingDetailRow(label: "大小", value: file.fileSize.map {
-                        ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
-                    } ?? "無法取得")
-                    PairingDetailRow(label: "建立時間", value: date(file.dateCreated))
-                    PairingDetailRow(label: "修改時間", value: date(file.dateModified))
-                }
-            }
-            Section {
-                ForEach(file.presentSensitiveFields, id: \.self) { field in
-                    PairingDetailRow(label: field, value: "已隱藏")
-                }
-                Text("私鑰、憑證、HostID、SystemBUID、UDID 及其他配對憑證一律隱藏，不提供揭露、複製或匯出。舊版檔名亦會隱藏，避免洩漏裝置識別資料。")
-                    .font(.footnote).foregroundColor(.secondary)
-            } header: {
-                Text("私隱保護")
-            } footer: {
-                Text("結構檢查只確認必要欄位存在，並非私鑰有效性或裝置信任驗證；實際連線仍由現有 Rust 引擎處理。")
-            }
-        }
-        .navigationTitle("配對檔詳情")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func date(_ date: Date?) -> String {
-        guard let date else { return "無法取得" }
-        return date.formatted(date: .abbreviated, time: .shortened)
-    }
-}
-
 private struct WirelessPairingAvailabilityView: View {
     let onImport: () -> Void
 
@@ -278,7 +262,7 @@ private struct WirelessPairingAvailabilityView: View {
         List {
             Section("無線配對狀態") {
                 Label("此版本尚未支援 App 內無線配對", systemImage: "wifi.slash")
-                Text("現有 Rust 連線引擎使用已匯入的 Lockdown 配對檔，未接入 SideStore 的無線配對廣播、PIN 驗證與握手流程。這裡不會開始配對，也不會切換至 Remote 協定。")
+                Text("現有連線引擎可以使用已儲存的配對檔，但此頁未接入首次無線配對廣播、PIN 驗證與配對建立流程。這裡不會開始配對，也不會切換協定。")
             }
             Section("目前可用的方式") {
                 Text("先在可信任的電腦產生此裝置的 Lockdown 配對檔，再匯入本 App。配對檔包含敏感憑證，請勿貼到聊天或公開分享。")

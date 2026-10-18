@@ -4,7 +4,7 @@ import IDevice
 /// 用 SideStore/idevice Rust FFI 實現的 Misagent（provisioning profile 管理）
 /// 用於自動刷新：只換 profile，不重裝 App
 public class RustMisagentClient {
-    private var provider: OpaquePointer?
+    private let transport = RustDeviceTransport()
     private var misagentClient: OpaquePointer?
     
     private let host: String
@@ -24,10 +24,7 @@ public class RustMisagentClient {
             misagent_client_free(client)
             misagentClient = nil
         }
-        if let prov = provider {
-            idevice_provider_free(prov)
-            provider = nil
-        }
+        transport.disconnect()
     }
     
     /// 連接 misagent
@@ -49,66 +46,8 @@ public class RustMisagentClient {
         return try await Task.detached(priority: .userInitiated) {
             RustFFILock.shared.lock.lock()
             defer { RustFFILock.shared.lock.unlock() }
-            // 1. 載入配對檔
-            let plistData = try Data(contentsOf: self.pairingFileURL)
-            var pairingFile: OpaquePointer?
-            if let err = plistData.withUnsafeBytes({ ptr in
-                idevice_pairing_file_from_bytes(
-                    ptr.baseAddress?.assumingMemoryBound(to: UInt8.self),
-                    UInt(plistData.count),
-                    &pairingFile
-                )
-            }) {
-                let msg = self.errorMessage(from: err)
-                idevice_error_free(err)
-                throw NSError(domain: "RustMisagent", code: -1, userInfo: [NSLocalizedDescriptionKey: "配對檔解析失敗: \(msg)"])
-            }
-            guard let pf = pairingFile else {
-                throw NSError(domain: "RustMisagent", code: -2, userInfo: [NSLocalizedDescriptionKey: "配對檔句柄為空"])
-            }
-            
-            // 2. 創建 Provider
-            var addr = sockaddr_in()
-            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-            addr.sin_family = sa_family_t(AF_INET)
-            addr.sin_port = UInt16(62078).bigEndian
-            let ptonResult: Int32 = self.host.withCString { cstr in
-                inet_pton(AF_INET, cstr, &addr.sin_addr)
-            }
-            guard ptonResult == 1 else {
-                throw NSError(domain: "RustMisagent", code: -2, userInfo: [NSLocalizedDescriptionKey: "無效的目標地址"])
-            }
-            
-            var provider: OpaquePointer?
-            let label = "EiliStore-Misagent"
-            let providerErr: UnsafeMutablePointer<IdeviceFfiError>? = withUnsafePointer(to: &addr) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                    label.withCString { labelPtr in
-                        idevice_tcp_provider_new(sockPtr, pf, labelPtr, &provider)
-                    }
-                }
-            }
-            if let err = providerErr {
-                let msg = self.errorMessage(from: err)
-                idevice_error_free(err)
-                throw NSError(domain: "RustMisagent", code: -3, userInfo: [NSLocalizedDescriptionKey: "Provider 創建失敗: \(msg)"])
-            }
-            guard let prov = provider else {
-                throw NSError(domain: "RustMisagent", code: -4, userInfo: [NSLocalizedDescriptionKey: "Provider 句柄為空"])
-            }
-            self.provider = prov
-            
-            // 3. 連接 misagent
-            var client: OpaquePointer?
-            if let err = misagent_connect(prov, &client) {
-                let msg = self.errorMessage(from: err)
-                idevice_error_free(err)
-                throw NSError(domain: "RustMisagent", code: -5, userInfo: [NSLocalizedDescriptionKey: "Misagent 連接失敗: \(msg)"])
-            }
-            guard let c = client else {
-                throw NSError(domain: "RustMisagent", code: -6, userInfo: [NSLocalizedDescriptionKey: "Misagent 句柄為空"])
-            }
-            self.misagentClient = c
+            self.disconnect()
+            self.misagentClient = try self.transport.connect(.misagent, host: self.host, pairingFileURL: self.pairingFileURL)
             print("[RustMisagent] 已連接（經 Rust FFI）")
         }.value
     }
@@ -138,11 +77,7 @@ public class RustMisagentClient {
     }
     
     private func errorMessage(from err: UnsafeMutablePointer<IdeviceFfiError>) -> String {
-        let code = err.pointee.code
-        let subCode = err.pointee.sub_code
-        if let cmsg = err.pointee.message {
-            return "[\(code):\(subCode)] \(String(cString: cmsg))"
-        }
-        return "[\(code):\(subCode)] unknown FFI error"
+        // Do not forward Rust's Debug-formatted payload, which can contain pairing values.
+        return "[\(err.pointee.code):\(err.pointee.sub_code)] 裝置服務錯誤"
     }
 }
