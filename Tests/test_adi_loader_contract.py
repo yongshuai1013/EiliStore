@@ -12,6 +12,8 @@ class ADILoaderContractTests(unittest.TestCase):
         actual = set(re.findall(r'name\s*==\s*"([^"]+)"', router))
         strings = (ROOT / 'Packages/AnisetteKit/Native/Loader/android_libc_strings.h').read_text()
         actual.update(re.findall(r'name\s*==\s*"([^"]+)"', strings))
+        sync = (ROOT / 'Packages/AnisetteKit/Native/Loader/android_pthread_sync.h').read_text()
+        actual.update(re.findall(r'name\s*(?:==|!=)\s*"([^"]+)"', sync))
         native_table = native.split('static bool supported_guest_import', 1)[1].split('return names.count', 1)[0]
         supported = set(re.findall(r'"([^"]+)"', native_table))
         policy = (ROOT / 'Sources/EiliStore/ADILibraryCompatibility.swift').read_text()
@@ -21,6 +23,11 @@ class ADILoaderContractTests(unittest.TestCase):
         self.assertNotIn('pthread_create', actual)
         self.assertIn('memmove', actual)
         self.assertIn('dlerror', actual)
+        self.assertIn('pthread_mutex_lock', actual)
+        self.assertIn('pthread_rwlock_rdlock', actual)
+        self.assertIn('dl_iterate_phdr', actual)
+        self.assertNotIn('pthread_cond_wait', actual)
+        self.assertNotIn('pthread_once', actual)
         self.assertNotIn('uint64_t ret = 0;', router.rsplit('else {', 1)[1])
         self.assertIn('uc_emu_stop(uc)', router.rsplit('else {', 1)[1])
 

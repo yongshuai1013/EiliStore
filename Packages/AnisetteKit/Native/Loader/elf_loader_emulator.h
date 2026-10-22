@@ -27,6 +27,7 @@
 #include <unordered_map>
 #include <unicorn/unicorn.h>
 #include "anisette_base.h"
+#include "android_pthread_sync_types.h"
 
 #define LOG_UC(...) anisetteCoreLog(__VA_ARGS__)
 
@@ -86,6 +87,9 @@ struct EmulatorVM {
         size_t   init_arraysz;
         std::unordered_map<std::string, uint64_t> symbols;
         std::vector<std::string> needed_libs;
+        std::vector<uint8_t> program_headers;
+        uint16_t program_header_count = 0;
+        uint64_t program_headers_guest = 0;
     };
 
     uc_engine *uc;
@@ -109,6 +113,8 @@ struct EmulatorVM {
     uc_hook pc_trace_hook = 0;
 
     std::vector<LibraryInfo> loaded_libraries;
+    AndroidGuestSyncState guest_sync;
+    uint64_t module_iteration_trampoline = 0;
 
     EmulatorVM();
     ~EmulatorVM();

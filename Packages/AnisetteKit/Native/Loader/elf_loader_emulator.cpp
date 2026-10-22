@@ -88,6 +88,8 @@ static inline int gettimeofday(struct timeval *tv, void *tz) {
 
 #include <unordered_set>
 #include "android_libc_strings.h"
+#include "android_pthread_sync.h"
+#include "android_module_iteration.h"
 
 static bool supported_guest_import(const std::string &name) {
     static const std::unordered_set<std::string> names = {
@@ -108,6 +110,7 @@ static bool supported_guest_import(const std::string &name) {
         "calloc",
         "chmod",
         "close",
+        "dl_iterate_phdr",
         "dlclose",
         "dlerror",
         "dlopen",
@@ -127,8 +130,18 @@ static bool supported_guest_import(const std::string &name) {
         "memset",
         "mkdir",
         "open",
+        "pthread_mutex_destroy",
         "pthread_mutex_init",
+        "pthread_mutex_lock",
+        "pthread_mutex_trylock",
+        "pthread_mutex_unlock",
+        "pthread_rwlock_destroy",
         "pthread_rwlock_init",
+        "pthread_rwlock_rdlock",
+        "pthread_rwlock_tryrdlock",
+        "pthread_rwlock_trywrlock",
+        "pthread_rwlock_unlock",
+        "pthread_rwlock_wrlock",
         "read",
         "realloc",
         "strcat",
@@ -862,7 +875,7 @@ static bool valid_guest_handle(EmulatorVM *vm, uint64_t handle) {
 static bool system_module_has_import(uint64_t handle, const std::string &symbol) {
     if (handle < 0x1000 || handle - 0x1000 >= guest_system_modules.size()) return false;
     const std::string &module = guest_system_modules[handle - 0x1000];
-    const bool linker = symbol == "dlopen" || symbol == "dlsym" || symbol == "dlclose" || symbol == "dlerror";
+    const bool linker = symbol == "dlopen" || symbol == "dlsym" || symbol == "dlclose" || symbol == "dlerror" || symbol == "dl_iterate_phdr";
     const bool logging = symbol == "__android_log_print";
     const bool cxx = symbol.rfind("__cxa_", 0) == 0 || symbol == "__dynamic_cast";
     if (module == "libdl.so") return linker;
@@ -1076,16 +1089,8 @@ static void import_callback_router(uc_engine *uc, uint64_t address, uint32_t siz
     else if (name == "__cxa_begin_catch" || name == "__dynamic_cast") hook_dynamic_cast(vm);
     else if (name == "strtoll" || name == "strtol" || name == "strtoull") hook_strtoll(vm);
     else if (name == "strtod" || name == "atof") hook_strtod(vm);
-    else if (name == "pthread_rwlock_init" || name == "pthread_mutex_init") {
-        uint64_t lock_ptr = 0;
-        uc_reg_read(vm->uc, UC_ARM64_REG_X0, &lock_ptr);
-        if (lock_ptr) {
-            std::vector<uint8_t> dummy_lock(64, 0);
-            uc_mem_write(vm->uc, lock_ptr, dummy_lock.data(), 64);
-        }
-        uint64_t ret = 0;
-        uc_reg_write(vm->uc, UC_ARM64_REG_X0, &ret);
-    }
+    else if (name == "dl_iterate_phdr") hook_dl_iterate_phdr(vm);
+    else if (dispatch_android_pthread_sync(vm, name)) { }
     else if (name == "__android_log_print") hook_android_log_print(vm);
     else if (dispatch_android_libc_string(vm, name)) { }
     else {
@@ -1191,6 +1196,7 @@ static void apply_vm_relocations(EmulatorVM *vm, EmulatorVM::LibraryInfo &lib) {
 }
 
 bool load_library_to_vm(EmulatorVM *vm, const std::string &file_path, const std::string &so_name) {
+    if (!vm || !vm->uc || vm->loaded_libraries.size() >= 64) return false;
     LOG_UC("[Emulator] Loading ELF library '%s' from '%s'...\n", so_name.c_str(), file_path.c_str());
     FILE *f = fopen(file_path.c_str(), "rb");
     if (!f) {
@@ -1198,9 +1204,11 @@ bool load_library_to_vm(EmulatorVM *vm, const std::string &file_path, const std:
         return false;
     }
 
-    fseek(f, 0, SEEK_END);
-    size_t file_size = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+    const long measured_size = ftell(f);
+    if (measured_size < 0 || measured_size > 64L * 1024 * 1024 ||
+        fseek(f, 0, SEEK_SET) != 0) { fclose(f); return false; }
+    const size_t file_size = static_cast<size_t>(measured_size);
 
     std::vector<uint8_t> buffer(file_size);
     if (fread(buffer.data(), 1, file_size, f) != file_size) {
@@ -1210,19 +1218,33 @@ bool load_library_to_vm(EmulatorVM *vm, const std::string &file_path, const std:
     fclose(f);
 
     if (file_size < sizeof(Elf64_Ehdr)) return false;
-    const Elf64_Ehdr *ehdr = (const Elf64_Ehdr *)buffer.data();
+    Elf64_Ehdr header;
+    memcpy(&header, buffer.data(), sizeof(header));
+    const Elf64_Ehdr *ehdr = &header;
 
     if (memcmp(ehdr->e_ident, "\x7f\x45\x4c\x46\x02\x01\x01", 7) != 0) {
         LOG_UC("[Emulator] Invalid ELF magic or not 64-bit ELF: %s\n", so_name.c_str());
         return false;
     }
+    if (ehdr->e_type != 3 || ehdr->e_machine != 183 || ehdr->e_version != 1 ||
+        ehdr->e_ehsize != sizeof(Elf64_Ehdr) || ehdr->e_phoff < sizeof(Elf64_Ehdr) ||
+        ehdr->e_phentsize != sizeof(Elf64_Phdr) || ehdr->e_phnum == 0 ||
+        ehdr->e_phnum > 1024 || ehdr->e_phoff > file_size ||
+        ehdr->e_phnum > (file_size - ehdr->e_phoff) / sizeof(Elf64_Phdr)) return false;
+    // Copy instead of casting untrusted, possibly unaligned file offsets.
+    std::vector<Elf64_Phdr> headers(ehdr->e_phnum);
+    memcpy(headers.data(), buffer.data() + ehdr->e_phoff, headers.size() * sizeof(Elf64_Phdr));
 
     uint64_t min_vaddr = UINT64_MAX;
     uint64_t max_vaddr = 0;
-    const Elf64_Phdr *phdrs = (const Elf64_Phdr *)(buffer.data() + ehdr->e_phoff);
+    const Elf64_Phdr *phdrs = headers.data();
 
     for (int i = 0; i < ehdr->e_phnum; i++) {
         if (phdrs[i].p_type == PT_LOAD) {
+            if (phdrs[i].p_offset > file_size || phdrs[i].p_filesz > file_size - phdrs[i].p_offset ||
+                phdrs[i].p_filesz > phdrs[i].p_memsz || phdrs[i].p_memsz > UINT64_MAX - phdrs[i].p_vaddr ||
+                phdrs[i].p_vaddr + phdrs[i].p_memsz > UINT64_MAX - 0xFFFFULL) return false;
+            if (!phdrs[i].p_memsz) continue;
             uint64_t seg_start = phdrs[i].p_vaddr & ~0xFFFFULL;
             uint64_t seg_end   = (phdrs[i].p_vaddr + phdrs[i].p_memsz + 0xFFFFULL) & ~0xFFFFULL;
             if (seg_start < min_vaddr) min_vaddr = seg_start;
@@ -1234,11 +1256,12 @@ bool load_library_to_vm(EmulatorVM *vm, const std::string &file_path, const std:
     uint64_t total_span = max_vaddr - min_vaddr;
 
     uint64_t base_address = vm->library_alloc.alloc(total_span);
+    if (!base_address) return false;
     LOG_UC("[Emulator] Mapped library '%s' span 0x%llx at base address: 0x%llx\n",
            so_name.c_str(), (unsigned long long)total_span, (unsigned long long)base_address);
 
     uc_err err = uc_mem_map(vm->uc, base_address, total_span, UC_PROT_ALL);
-    if (err != UC_ERR_OK && err != UC_ERR_MAP) {
+    if (err != UC_ERR_OK) {
         LOG_UC("[Emulator] uc_mem_map failed for library span: %u (%s)\n", err, uc_strerror(err));
         return false;
     }
@@ -1261,19 +1284,30 @@ bool load_library_to_vm(EmulatorVM *vm, const std::string &file_path, const std:
     lib.init_func = 0;
     lib.init_array = 0;
     lib.init_arraysz = 0;
+    lib.program_header_count = ehdr->e_phnum;
+    const auto phdr_bytes = reinterpret_cast<const uint8_t *>(headers.data());
+    lib.program_headers.assign(phdr_bytes, phdr_bytes + headers.size() * sizeof(Elf64_Phdr));
+    lib.program_headers_guest = vm->write_bytes(lib.program_headers.data(), lib.program_headers.size());
+    if (!lib.program_headers_guest) return false;
 
     for (int i = 0; i < ehdr->e_phnum; i++) {
         if (phdrs[i].p_type == PT_LOAD) {
             uint64_t dest = base_address + (phdrs[i].p_vaddr - min_vaddr);
             if (phdrs[i].p_filesz > 0) {
-                uc_mem_write(vm->uc, dest, buffer.data() + phdrs[i].p_offset, phdrs[i].p_filesz);
+                if (uc_mem_write(vm->uc, dest, buffer.data() + phdrs[i].p_offset, phdrs[i].p_filesz) != UC_ERR_OK) return false;
             }
             if (phdrs[i].p_memsz > phdrs[i].p_filesz) {
                 uint64_t bss_size = phdrs[i].p_memsz - phdrs[i].p_filesz;
-                std::vector<uint8_t> bss_zeros(bss_size, 0);
-                uc_mem_write(vm->uc, dest + phdrs[i].p_filesz, bss_zeros.data(), bss_size);
+                const std::vector<uint8_t> bss_zeros(0x10000, 0);
+                for (uint64_t offset = 0; offset < bss_size;) {
+                    const size_t chunk = static_cast<size_t>(std::min<uint64_t>(bss_zeros.size(), bss_size - offset));
+                    if (uc_mem_write(vm->uc, dest + phdrs[i].p_filesz + offset, bss_zeros.data(), chunk) != UC_ERR_OK) return false;
+                    offset += chunk;
+                }
             }
         } else if (phdrs[i].p_type == PT_DYNAMIC) {
+            if (phdrs[i].p_vaddr < min_vaddr || phdrs[i].p_vaddr >= max_vaddr ||
+                phdrs[i].p_memsz > max_vaddr - phdrs[i].p_vaddr) return false;
             lib.dynamic_address = base_address + (phdrs[i].p_vaddr - min_vaddr);
         }
     }

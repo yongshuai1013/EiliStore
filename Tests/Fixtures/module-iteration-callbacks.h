@@ -1,0 +1,17 @@
+// Generated from module-iteration-callbacks.S using clang -target aarch64-linux-gnu.
+#ifndef EILI_SYNTHETIC_MODULE_CALLBACKS_H
+#define EILI_SYNTHETIC_MODULE_CALLBACKS_H
+#include <cstdint>
+static constexpr uint64_t kSyntheticIterationCallbackOffset = 24;
+static constexpr uint32_t kSyntheticModuleCallbackWords[] = {
+    0xA9BF7BFD, 0x910003FD, 0xAA0203F0, 0xD63F0200,
+    0xA8C17BFD, 0xD65F03C0, 0xA9BE53F3, 0xA9017BF5,
+    0xAA0203F3, 0xF9400269, 0x91000529, 0xF9000269,
+    0xF9000660, 0xF9000A61, 0xF9000E62, 0xF9400400,
+    0xF9401270, 0xD63F0200, 0xF9001A60, 0xF9402669,
+    0xB4000149, 0xF9402E6A, 0xB500010A, 0xD280002A,
+    0xF9002E6A, 0xF9402A60, 0xAA1303E1, 0xD63F0120,
+    0xF9003660, 0xF9002E7F, 0xB9403A60, 0xF9402269,
+    0xAA098000, 0xA9417BF5, 0xA8C253F3, 0xD65F03C0,
+};
+#endif

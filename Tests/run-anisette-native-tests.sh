@@ -41,4 +41,10 @@ LINK=(-pthread)
 "$OUT/libc-strings"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeADIOutputTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/adi-output"
 "$OUT/adi-output"
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/AndroidPthreadSyncTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/pthread-sync"
+"$OUT/pthread-sync"
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/AndroidModuleIterationTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/module-iteration"
+"$OUT/module-iteration"
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeELFProgramHeadersTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/elf-headers"
+"$OUT/elf-headers"
 echo 'PASS: native TCI synthetic ABI, linker and provisioning-output tests (not Apple login verification)'

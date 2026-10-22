@@ -34,7 +34,7 @@ struct ADILibraryCompatibility: Equatable, Sendable {
     let mismatchedSONAMEs: [String]
 
     // This is an explicit capability gate, not a claim that static linking proves runtime safety.
-    // libstoreapi requires a new Android ABI adapter; do not send it into the legacy zero-stub loader.
+    // libstoreapi requires a new Android ABI adapter; do not send it into the legacy loader.
     var runtimeAdapterAvailable: Bool { profile == .legacy }
     var hasStaticBlockers: Bool {
         !missingFiles.isEmpty || !missingDependencies.isEmpty || !missingEntryPoints.isEmpty ||
@@ -57,7 +57,7 @@ struct ADILibraryCompatibility: Equatable, Sendable {
 
     static let systemLibraries: Set<String> = ["libc.so", "libdl.so", "liblog.so", "libm.so", "libz.so", "libstdc++.so", "libandroid.so"]
     static let requiredEntryPoints: Set<String> = ["Sph98paBcz", "nf92ngaK92", "kq56gsgHG6", "qi864985u0", "rsegvyrt87", "uv5t6nhkui"]
-    // Only explicit branches in import_callback_router count. Its generic zero-return fallback is NOT support.
+    // Only explicit router/adapter implementations count; this is not complete Android ABI support.
     static let handledImports: Set<String> = [
         "__android_log_print",
         "__cxa_allocate_exception",
@@ -76,6 +76,7 @@ struct ADILibraryCompatibility: Equatable, Sendable {
         "calloc",
         "chmod",
         "close",
+        "dl_iterate_phdr",
         "dlclose",
         "dlerror",
         "dlopen",
@@ -95,8 +96,18 @@ struct ADILibraryCompatibility: Equatable, Sendable {
         "memset",
         "mkdir",
         "open",
+        "pthread_mutex_destroy",
         "pthread_mutex_init",
+        "pthread_mutex_lock",
+        "pthread_mutex_trylock",
+        "pthread_mutex_unlock",
+        "pthread_rwlock_destroy",
         "pthread_rwlock_init",
+        "pthread_rwlock_rdlock",
+        "pthread_rwlock_tryrdlock",
+        "pthread_rwlock_trywrlock",
+        "pthread_rwlock_unlock",
+        "pthread_rwlock_wrlock",
         "read",
         "realloc",
         "strcat",
