@@ -2,6 +2,9 @@ import Foundation
 import SwiftUI
 import SideSign
 import ZIPFoundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// 從軟體源下載、簽名、安裝 App（一條龍）
 @MainActor
@@ -47,28 +50,53 @@ final class SourceAppInstaller: ObservableObject {
             statusMessage = "正在下載 \(app.name)..."
             let ipaURL = try await downloadIPA(app)
             statusMessage = "下載完成，正在簽名..."
-
-            // 2. 簽名
-            let signedIPA = try await signIPA(at: ipaURL, appName: app.name)
-            statusMessage = "簽名完成，正在安裝..."
-
-            // 3. 安裝
-            try await AppInstaller.shared.install(ipaURL: signedIPA) { msg, pct in
-                Task { @MainActor in
-                    self.statusMessage = msg
-                    self.progress = Double(pct) / 100.0
-                }
-            }
-
-            // 4. 登記到 App 列表
-            registerInstalledApp(signedIPA: signedIPA, sourceApp: app)
-
-            statusMessage = "✅ \(app.name) 安裝完成"
-            progress = 1
+            try await signAndInstallIPA(at: ipaURL, appName: app.name, bundleID: app.bundleId)
         } catch {
             statusMessage = "❌ \(error.localizedDescription)"
             progress = 0
         }
+    }
+
+    /// 使用檔案副本，不下載、不修改原檔；只在使用者明確開始後簽署與安裝。
+    func installImportedIPA(at ipaURL: URL) async {
+        guard !isWorking else { return }
+        isWorking = true
+        statusMessage = "正在驗證匯入的 IPA..."
+        progress = -1
+        defer { isWorking = false }
+        do {
+            let (file, info) = try await Task.detached(priority: .userInitiated) {
+                let file = try IPAImportStore.stage(ipaURL)
+                do {
+                    let info = try IPAParser.parse(ipaURL: file.url, requireInstallableMetadata: true)
+                    return (file, info)
+                } catch {
+                    IPAImportStore.remove(file)
+                    throw error
+                }
+            }.value
+            defer { IPAImportStore.remove(file) }
+            try Task.checkCancellation()
+            try await signAndInstallIPA(at: file.url, appName: info.name, bundleID: info.bundleId)
+        } catch {
+            statusMessage = error is CancellationError ? "已取消" : "匯入安裝失敗：\(error.localizedDescription)"
+            progress = 0
+        }
+    }
+
+    /// 來源 App 與檔案匯入只共用這一份 Team／證書／profile／簽署行為。
+    private func signAndInstallIPA(at ipaURL: URL, appName: String, bundleID: String) async throws {
+        let signedIPA = try await signIPA(at: ipaURL, appName: appName)
+        statusMessage = "簽名完成，正在安裝..."
+        try await AppInstaller.shared.install(ipaURL: signedIPA) { msg, pct in
+            Task { @MainActor in
+                self.statusMessage = msg
+                self.progress = Double(pct) / 100.0
+            }
+        }
+        registerInstalledApp(signedIPA: signedIPA, appName: appName, bundleID: bundleID)
+        statusMessage = "\(appName) 安裝完成"
+        progress = 1
     }
 
     // MARK: - 下載
@@ -215,16 +243,16 @@ final class SourceAppInstaller: ObservableObject {
 
     // MARK: - 登記
 
-    private func registerInstalledApp(signedIPA: URL, sourceApp: SourceApp) {
+    private func registerInstalledApp(signedIPA: URL, appName: String, bundleID: String) {
         // 保存一份 IPA 供以後重簽
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let savedIPA = docs.appendingPathComponent("\(sourceApp.bundleId)-signed.ipa")
+        let savedIPA = docs.appendingPathComponent("\(bundleID)-signed.ipa")
         try? FileManager.default.removeItem(at: savedIPA)
         try? FileManager.default.copyItem(at: signedIPA, to: savedIPA)
 
         // 解析 + 圖標
         var iconPath: String? = nil
-        var displayName = sourceApp.name
+        var displayName = appName
         var profileExpirationDate: Date?
         if let info = try? IPAParser.parse(ipaURL: savedIPA) {
             displayName = info.name
@@ -232,7 +260,7 @@ final class SourceAppInstaller: ObservableObject {
             if let iconData = info.iconData, !iconData.isEmpty {
                 let iconsDir = docs.appendingPathComponent("AppIcons")
                 try? FileManager.default.createDirectory(at: iconsDir, withIntermediateDirectories: true)
-                let iconFile = iconsDir.appendingPathComponent("\(sourceApp.bundleId).png")
+                let iconFile = iconsDir.appendingPathComponent("\(bundleID).png")
                 if (try? iconData.write(to: iconFile)) != nil {
                     iconPath = iconFile.path
                 }
@@ -250,7 +278,7 @@ final class SourceAppInstaller: ObservableObject {
 
         let newApp = InstalledApp(
             name: displayName,
-            bundleId: sourceApp.bundleId,
+            bundleId: bundleID,
             team: "未知",
             expiresDate: expiresDate,
             ipaPath: savedIPA.path,

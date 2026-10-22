@@ -24,26 +24,24 @@ public final class PaxSigningService {
     /// 原因：anisette 含一次性 OTP，登入時已消費，重用會導致 Apple 回 1100
     func sessionWithFreshAnisette() async throws -> (account: SideSign.Account, session: SideSign.Session) {
         let authSession = try loadSession()
+        let anisetteMode = EiliAnisetteMode.savedSessionMode
         
         // 從 Keychain 取穩定的 anisette 身份
-        guard let uuidString = KeychainHelper.loadString(forKey: "paxstore.anisette.identifier"),
-              let identifier = UUID(uuidString: uuidString) else {
+        let remoteIdentifier = KeychainHelper.loadString(forKey: "paxstore.anisette.identifier")
+            .flatMap(UUID.init(uuidString:))
+        guard anisetteMode == .onDevice || remoteIdentifier != nil else {
             throw SigningError.certificateFailed("找不到 anisette 身份，請重新登入")
         }
         let existingBlob = KeychainHelper.load(forKey: "paxstore.anisette.adiblob")
         
         // 取新鮮 anisette
         let servers = AnisetteServerManager.shared.serversForLogin()
-        let urls = servers.isEmpty ? [URL(string: "https://ani.sidestore.zip")!] : servers
-        let manager = SideSign.AnisetteDataManager.shared
-        let (freshAnisette, newBlob) = try await manager.fetchAnisetteDataWithFailover(
-            servers: urls,
-            identifier: identifier,
-            existingAdiBlob: existingBlob
+        let freshAnisette = try await EiliAnisetteService.shared.fetch(
+            remoteIdentifier: remoteIdentifier ?? UUID(),
+            remoteBlob: existingBlob,
+            servers: servers,
+            mode: anisetteMode
         )
-        if let newBlob = newBlob {
-            KeychainHelper.save(newBlob, forKey: "paxstore.anisette.adiblob")
-        }
         
         // 換上新鮮 anisette
         var freshSession = authSession.session

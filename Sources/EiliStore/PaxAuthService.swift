@@ -47,6 +47,7 @@ public final class PaxAuthService {
             restoreKeychainItem(previousAppleID, forKey: KeychainKey.appleID)
             return nil
         }
+        UserDefaults.standard.set(EiliAnisetteMode.remote.rawValue, forKey: EiliAnisetteMode.sessionKey)
         return appleID
     }
 
@@ -71,21 +72,18 @@ public final class PaxAuthService {
         // 1. 拿 anisette（穩定身份）
         let identifier = resolveIdentifier()
         let existingBlob: Data? = loadADIBlob()
+        let anisetteMode = EiliAnisetteMode.selected
         
-        let manager = SideSign.AnisetteDataManager.shared
-        let (anisetteData, newBlob) = try await manager.fetchAnisetteDataWithFailover(
+        let anisetteData = try await EiliAnisetteService.shared.fetch(
+            remoteIdentifier: identifier,
+            remoteBlob: existingBlob,
             servers: anisetteServers,
-            identifier: identifier,
-            existingAdiBlob: existingBlob
+            mode: anisetteMode
         )
         
         try Task.checkCancellation()
         guard !codeProvider.isCancelled else { throw CancellationError() }
 
-        if let newBlob = newBlob {
-            saveADIBlob(newBlob)
-        }
-        
         // 2. SideSign 登入（2FA 在同一次調用內等待輸入）
         let portal = SideSign.DeveloperPortal.shared
         
@@ -138,6 +136,7 @@ public final class PaxAuthService {
             KeychainHelper.delete(forKey: KeychainKey.session)
             throw LoginError.sessionSaveFailed
         }
+        UserDefaults.standard.set(anisetteMode.rawValue, forKey: EiliAnisetteMode.sessionKey)
         codeProvider.log("登入資料已安全保存")
         
         print("[PaxStore] 登入成功")
@@ -152,6 +151,7 @@ public final class PaxAuthService {
     static func loginErrorMessage(for error: Error) -> String {
         if error is CancellationError { return "登入已取消" }
         if error is LoginError { return "無法安全保存登入資料，請重試。" }
+        if let anisetteError = error as? EiliAnisetteError { return anisetteError.localizedDescription }
         if let portalError = error as? DeveloperPortalError {
             switch portalError {
             case .userCancelled:
@@ -184,6 +184,7 @@ public final class PaxAuthService {
     public func logout() {
         KeychainHelper.delete(forKey: KeychainKey.session)
         KeychainHelper.delete(forKey: KeychainKey.appleID)
+        UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.sessionKey)
         print("[PaxStore] 已登出，session 已清除")
     }
     

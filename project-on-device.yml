@@ -1,0 +1,14 @@
+include:
+  - project.yml
+
+packages:
+  AnisetteKit:
+    path: Packages/AnisetteKit
+
+targets:
+  EiliStore:
+    dependencies:
+      - package: AnisetteKit
+    settings:
+      base:
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) EILI_ON_DEVICE_ANISETTE"
