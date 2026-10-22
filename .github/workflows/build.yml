@@ -22,6 +22,7 @@ jobs:
           bash Tests/run-ipa-installer-tests.sh
           PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_ios_archive_audit.py
           PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_unicorn_source_fetch.py
+          PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_production_link_map.py
           printf '#include "anisette_core.h"\nvoid test_reset(void) { reset_anisette_vm_uc(); }\n' | xcrun clang -x c -std=c11 -Werror=implicit-function-declaration -fsyntax-only -I Packages/AnisetteKit/Native/include -
 
       - name: Build IDevice xcframework for iOS 15
@@ -64,8 +65,8 @@ jobs:
           [[ ${#APP_LINK_MAPS[@]} -eq 1 ]] || { echo 'ERROR: expected exactly one App Link Map' >&2; exit 1; }
           cp "${APP_LINK_MAPS[0]}" build/production-link-map.txt
           # A symbol listed only as dead-stripped is not proof of engine inclusion.
-          awk '/^# Dead Stripped Symbols:/{exit} {print}' build/production-link-map.txt \
-            | grep -F '_get_anisette_headers_uc' >/dev/null
+          # Mach-O symbols can contain non-UTF-8 bytes; do not use locale-sensitive awk.
+          python3 Scripts/verify-anisette-link-map.py build/production-link-map.txt
           BUILT_UNICORN=build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/EiliStore/BuildProductsPath/Release-iphoneos/libunicorn.a
           cmp Packages/AnisetteKit/Artifacts/Unicorn.xcframework/ios-arm64/libunicorn.a "$BUILT_UNICORN"
           python3 Scripts/audit-ios-archive.py "$BUILT_UNICORN"
