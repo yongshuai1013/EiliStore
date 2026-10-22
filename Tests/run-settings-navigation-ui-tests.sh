@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEST_DIR="$ROOT/Tests/SettingsNavigationUI"
 BUILD_DIR="$ROOT/build"
-PROJECT="$BUILD_DIR/SettingsNavigationUI.xcodeproj"
+PROJECT="$TEST_DIR/SettingsNavigationUI.xcodeproj"
 RESULT="$BUILD_DIR/settings-navigation-ui.xcresult"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -57,7 +57,7 @@ parts = ['import SwiftUI', extract('struct MainTabView: View'), extract('struct 
 Path(sys.argv[2]).write_text('\n\n'.join(parts) + '\n')
 PY
 
-xcodegen generate --spec "$TEST_DIR/project.yml" --project "$BUILD_DIR"
+xcodegen generate --spec "$TEST_DIR/project.yml" --project "$TEST_DIR"
 DEVICE="$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((v["udid"] for k,vs in d["devices"].items() if "iOS" in k for v in vs if "iPhone" in v["name"] and v.get("isAvailable",False)),""))')"
 if [[ -z "$DEVICE" ]]; then echo "No available iPhone simulator found." >&2; exit 2; fi
 set +e

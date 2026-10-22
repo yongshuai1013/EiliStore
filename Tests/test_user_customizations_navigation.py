@@ -31,6 +31,15 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         self.assertNotIn(".disabled(", toolbar)
         self.assertNotIn("if isLoggedIn", toolbar)
 
+    def test_ui_harness_project_root_matches_relative_source_paths(self):
+        runner = (ROOT / "Tests/run-settings-navigation-ui-tests.sh").read_text()
+        self.assertIn('PROJECT="$TEST_DIR/SettingsNavigationUI.xcodeproj"', runner)
+        self.assertIn('xcodegen generate --spec "$TEST_DIR/project.yml" --project "$TEST_DIR"', runner)
+        spec = (ROOT / "Tests/SettingsNavigationUI/project.yml").read_text()
+        for name in ["HarnessApp.swift", "NavigationStubs.swift", "../../Sources/EiliStore/UserCustomizationsView.swift"]:
+            self.assertIn(f"- path: {name}", spec)
+            self.assertTrue((ROOT / "Tests/SettingsNavigationUI" / name).is_file())
+
     def test_page_hosts_controls_directly_and_uses_parent_navigation(self):
         page = (SOURCES / "UserCustomizationsView.swift").read_text()
         self.assertIn("struct UserCustomizationsView: View", page)
