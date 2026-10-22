@@ -56,10 +56,37 @@ final class SettingsNavigationUITests: XCTestCase {
         attachScreenshot(named: "customizations-from-toolbar")
     }
 
+    func testAnisetteImportOpensDocumentPickerAndCanBeCancelled() {
+        let route = app.buttons["settings-user-customizations-shortcut"]
+        XCTAssertTrue(route.waitForExistence(timeout: 20))
+        route.tap()
+        let importButton = app.buttons["anisette-library-import"]
+        XCTAssertTrue(app.descendants(matching: .any)["user-customizations-page"].waitForExistence(timeout: 30))
+        let list = settingsList
+        for _ in 0..<10 { if importButton.isHittable { break }; list.swipeUp() }
+        XCTAssertTrue(importButton.isHittable)
+        importButton.tap()
+        let picker = app.otherElements["Document Browser"]
+        let visiblePicker = picker.waitForExistence(timeout: 8) || app.navigationBars["Browse"].exists || app.buttons["Browse"].exists || app.buttons["Cancel"].exists
+        XCTAssertTrue(visiblePicker, "The system document picker should open without supplying any Apple files")
+        attachScreenshot(named: "anisette-document-picker")
+        let cancel = app.buttons["Cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        cancel.tap()
+        XCTAssertTrue(importButton.waitForExistence(timeout: 5))
+    }
+
     private func assertCustomizationPage() {
-        XCTAssertTrue(app.descendants(matching: .any)["user-customizations-page"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Anisette Client Configuration"].exists)
-        XCTAssertTrue(app.staticTexts["SideSign Client Configuration"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["user-customizations-page"].waitForExistence(timeout: 30))
+        let list = settingsList
+        let anisetteLink = app.buttons["customizations-anisette-client-config"]
+        let sideSignLink = app.buttons["customizations-sidesign-client-config"]
+        for _ in 0..<12 {
+            if anisetteLink.isHittable && sideSignLink.isHittable { break }
+            list.swipeUp()
+        }
+        XCTAssertTrue(anisetteLink.exists)
+        XCTAssertTrue(sideSignLink.exists)
     }
 
     private func attachScreenshot(named name: String) {

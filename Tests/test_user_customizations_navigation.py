@@ -36,23 +36,25 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         self.assertIn('PROJECT="$TEST_DIR/SettingsNavigationUI.xcodeproj"', runner)
         self.assertIn('xcodegen generate --spec "$TEST_DIR/project.yml" --project "$TEST_DIR"', runner)
         spec = (ROOT / "Tests/SettingsNavigationUI/project.yml").read_text()
-        for name in ["HarnessApp.swift", "NavigationStubs.swift", "../../Sources/EiliStore/UserCustomizationsView.swift"]:
+        for name in ["HarnessApp.swift", "NavigationStubs.swift", "../../Sources/EiliStore/UserCustomizationsView.swift", "../../Sources/EiliStore/AnisetteModeSection.swift", "../../Sources/EiliStore/AnisettePresentationModel.swift"]:
             self.assertIn(f"- path: {name}", spec)
             self.assertTrue((ROOT / "Tests/SettingsNavigationUI" / name).is_file())
 
     def test_page_hosts_controls_directly_and_uses_parent_navigation(self):
         page = (SOURCES / "UserCustomizationsView.swift").read_text()
         self.assertIn("struct UserCustomizationsView: View", page)
-        self.assertRegex(page, r"Form\s*\{\s*AnisetteModeSection\(\)")
+        self.assertRegex(page, r"Form\s*\{\s*AnisetteModeSection\(model: anisette\)")
         self.assertIn('.navigationTitle("用戶自定義")', page)
         self.assertIn('.navigationBarTitleDisplayMode(.inline)', page)
         self.assertNotIn("NavigationView {", page)
         self.assertNotIn("NavigationStack {", page)  # iOS 15 remains supported.
-        self.assertNotIn("Button(", page)  # Not a placeholder that opens another page.
+        self.assertIn("NavigationLink(destination: AnisetteClientConfigurationView())", page)
+        self.assertIn("NavigationLink(destination: SideSignClientConfigurationView())", page)
+        self.assertIn(".fileImporter(isPresented: $anisette.importing", page)
 
     def test_only_customizations_owns_mode_controls(self):
         owners = [p.name for p in SOURCES.glob("*.swift")
-                  if re.search(r"\bAnisetteModeSection\s*\(\s*\)", p.read_text())]
+                  if re.search(r"\bAnisetteModeSection\s*\(\s*model:\s*anisette\s*\)", p.read_text())]
         self.assertEqual(owners, ["UserCustomizationsView.swift"])
         server = (SOURCES / "AnisetteServerView.swift").read_text()
         self.assertIn('Text("AVAILABLE SERVERS")', server)
@@ -60,16 +62,21 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
 
     def test_complete_controls_and_existing_service_actions_are_preserved(self):
         mode = (SOURCES / "AnisetteModeSection.swift").read_text()
+        model = (SOURCES / "AnisettePresentationModel.swift").read_text()
+        page = (SOURCES / "UserCustomizationsView.swift").read_text()
         for identifier in ["anisette-mode-picker", "anisette-library-status",
                            "anisette-library-recheck", "anisette-library-download",
                            "anisette-library-import", "anisette-local-reset"]:
             self.assertIn(f'accessibilityIdentifier("{identifier}")', mode)
         for action in [".downloadLibraries()", ".importLibraries(urls)",
                        ".localLibraryStatus()", ".resetLocal()"]:
-            self.assertIn(action, mode)
+            self.assertIn(action, model)
+        self.assertIn(".fileImporter(isPresented: $anisette.importing", page)
+        self.assertIn(".confirmationDialog(", page)
+        self.assertIn('.alert("本機 Anisette"', page)
+        self.assertNotIn(".fileImporter(", mode)
         self.assertIn('@AppStorage(EiliAnisetteMode.preferenceKey)', mode)
         self.assertIn('EiliAnisetteMode.remote.rawValue', mode)
-        self.assertIn('.confirmationDialog("從第三方下載 ADI 函式庫？"', mode)
         self.assertIn('case .incompatible(let reason)', mode)
 
     def test_opening_page_does_not_enable_or_download_anything(self):
@@ -78,9 +85,17 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
                           "downloadLibraries", "fetch(", "PaxAuthService"]:
             self.assertNotIn(forbidden, page)
         mode = (SOURCES / "AnisetteModeSection.swift").read_text()
-        self.assertIn('.task { await refreshLibraryStatus() }', mode)
+        self.assertIn('.task { await model.refreshLibraryStatus() }', mode)
         self.assertIn('Text("遠端（預設）")', mode)
         self.assertIn("尚未支援其 Android ABI，不能用於本機登入", mode)
+
+    def test_session_check_errors_are_not_reported_as_invalid_or_logged_out(self):
+        login = (SOURCES / "LoginView.swift").read_text()
+        account = login.split("private func checkSession()", 1)[1]
+        catch = account.split("} catch {", 1)[1].split("\n            }", 1)[0]
+        self.assertIn("sessionValid = nil", catch)
+        self.assertNotIn("Session 已失效:", catch)
+        self.assertNotRegex(catch, r"logout\s*\(|delete")
 
     def test_new_view_is_in_app_source_tree_and_contract_runs_in_ci(self):
         project = (ROOT / "project.yml").read_text()

@@ -16,7 +16,17 @@ struct FileBrowserView: View { let directory: URL; var body: some View { Text("F
 struct LogView: View { var body: some View { Text("Logs") } }
 struct AnisetteClientConfigurationView: View { var body: some View { Text("Anisette Client Configuration") } }
 struct SideSignClientConfigurationView: View { var body: some View { Text("SideSign Client Configuration") } }
-struct AnisetteModeSection: View { var body: some View { Section(header: Text("ANISETTE MODE")) { Text("Stub") } } }
+enum EiliAnisetteMode: String { case remote, onDevice; static let preferenceKey = "anisette.mode"; static let localBuildAvailable = true }
+enum EiliAnisetteLibraryStatus { case engineUnavailable, missing, invalid, present, incompatible(String) }
+enum EiliAnisetteError: LocalizedError { case unavailable; var errorDescription: String? { "Unavailable" } }
+struct ADIRuntimeLibraryDownloader { enum DownloadError: LocalizedError { case unavailable; var errorDescription: String? { "Unavailable" } } }
+final class EiliAnisetteService {
+    static let shared = EiliAnisetteService()
+    func localLibraryStatus() async -> EiliAnisetteLibraryStatus { .missing }
+    func importLibraries(_ urls: [URL]) async throws -> EiliAnisetteLibraryStatus { .missing }
+    func downloadLibraries() async throws -> EiliAnisetteLibraryStatus { .missing }
+    func resetLocal() async throws {}
+}
 final class PaxAuthService {
     static let shared = PaxAuthService()
     var hasSavedSession = false

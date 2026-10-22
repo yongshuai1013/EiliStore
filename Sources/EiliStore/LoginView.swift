@@ -372,8 +372,8 @@ struct AccountView: View {
                 }
             } catch {
                 await MainActor.run {
-                    self.sessionValid = false
-                    self.sessionStatus = "Session 已失效: \(error.localizedDescription)"
+                    self.sessionValid = nil
+                    self.sessionStatus = "暫時無法驗證 Session；登入資料已保留，請稍後再檢查。"
                     self.isChecking = false
                 }
             }

@@ -11,6 +11,8 @@ targets:
       - path: HarnessApp.swift
       - path: NavigationStubs.swift
       - path: ../../Sources/EiliStore/UserCustomizationsView.swift
+      - path: ../../Sources/EiliStore/AnisetteModeSection.swift
+      - path: ../../Sources/EiliStore/AnisettePresentationModel.swift
       - path: build/ExtractedNavigation.swift
     settings:
       base:

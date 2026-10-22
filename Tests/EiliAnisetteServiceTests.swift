@@ -295,11 +295,33 @@ enum KeychainHelper {
         check(remoteCallsBeforeError == remoteCallsAfterError, "local error fell back to remote")
         FakeAnisetteKitControl.reset()
         let remoteKeep = Data([0x77, 0x88]); KeychainHelper.save(remoteKeep, forKey: "paxstore.anisette.adiblob")
+        let protectedLoginValues = [
+            "paxstore.auth.session": Data("synthetic-session".utf8),
+            "paxstore.auth.appleID": Data("synthetic@example.invalid".utf8),
+            "paxstore.anisette.identifier": Data(UUID().uuidString.utf8),
+            "paxstore.anisette.adiblob": remoteKeep,
+            "paxstore.signing.activeCertP12": Data("synthetic-certificate".utf8)
+        ]
+        for (key, value) in protectedLoginValues { KeychainHelper.save(value, forKey: key) }
+        UserDefaults.standard.set("remote", forKey: EiliAnisetteMode.sessionKey)
+        let preferenceBeforeReset = UserDefaults.standard.string(forKey: EiliAnisetteMode.preferenceKey)
+        let coreBeforeReset = try Data(contentsOf: coreFile)
+        let provisioning = supportRoot.appendingPathComponent("Provisioning", isDirectory: true)
+        try FileManager.default.createDirectory(at: provisioning, withIntermediateDirectories: true)
+        try Data("synthetic-local-provisioning".utf8).write(to: provisioning.appendingPathComponent("sentinel"))
         try await svc.resetLocal()
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == nil, "reset retained local blob")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == nil, "reset retained local identifier")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteKeep, "reset cleared remote blob")
+        for (key, value) in protectedLoginValues {
+            check(KeychainHelper.load(forKey: key) == value, "local reset changed protected login key: \(key)")
+        }
+        check(UserDefaults.standard.string(forKey: EiliAnisetteMode.sessionKey) == "remote", "local reset changed saved session mode")
+        check(UserDefaults.standard.string(forKey: EiliAnisetteMode.preferenceKey) == preferenceBeforeReset, "local reset changed next-login preference")
+        check(try Data(contentsOf: coreFile) == coreBeforeReset, "local reset changed installed libraries")
+        check(!FileManager.default.fileExists(atPath: provisioning.path), "local provisioning was not removed")
         check(FakeAnisetteKitControl.resetCount >= 2, "local engine not reset after import and reset")
+        print("PASS: local reset preserves session, Apple ID, remote identity/blob, certificate, mode and libraries")
 
         let modernDir = FileManager.default.temporaryDirectory.appendingPathComponent("anisette-modern-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: modernDir) }
