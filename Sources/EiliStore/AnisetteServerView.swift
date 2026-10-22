@@ -17,6 +17,8 @@ struct AnisetteServerView: View {
     
     var body: some View {
         List {
+            AnisetteModeSection()
+
             Section(header: Text("AVAILABLE SERVERS"),
                     footer: Text("Drag to reorder server priority. Swipe left on a server to hide or unhide it.")) {
                 ForEach(Array(servers.enumerated()), id: \.element.id) { index, server in
