@@ -84,6 +84,7 @@ struct MyAppsView: View {
 
     private enum HomeSheet: String, Identifiable {
         case appIDSelection
+        case importIPA
         case importIcon
         case changeIcon
         case iconTargetSelection
@@ -328,6 +329,12 @@ struct MyAppsView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button {
+                            activeHomeSheet = .importIPA
+                        } label: {
+                            Label("匯入 IPA 並簽名安裝", systemImage: "square.and.arrow.down")
+                        }
+                        .accessibilityIdentifier("home-import-ipa")
+                        Button {
                             activeHomeSheet = .appIDSelection
                         } label: {
                             Label("選擇需要刷新的 App ID", systemImage: "checkmark.circle")
@@ -353,6 +360,16 @@ struct MyAppsView: View {
                 switch sheet {
                 case .appIDSelection:
                     AppIDSelectionView()
+                case .importIPA:
+                    NavigationView {
+                        SignIPAView()
+                            .toolbar {
+                                ToolbarItem(placement: .cancellationAction) {
+                                    Button("完成") { activeHomeSheet = nil }
+                                }
+                            }
+                    }
+                    .navigationViewStyle(.stack)
                 case .importIcon:
                     DocumentPicker(
                         onPick: { url in
@@ -879,9 +896,6 @@ struct SignInstallView: View {
         NavigationView {
             List {
                 Section(header: Text("簽名")) {
-                    NavigationLink(destination: SignIPAView()) {
-                        Label("匯入 IPA 並簽名安裝", systemImage: "square.and.arrow.down")
-                    }
                     NavigationLink(destination: SigningFlowView()) {
                         Text("簽名 IPA")
                     }
