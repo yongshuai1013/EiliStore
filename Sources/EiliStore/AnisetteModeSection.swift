@@ -22,7 +22,7 @@ struct AnisetteModeSection: View {
     }
 
     var body: some View {
-        Section(header: Text("Anisette 模式"), footer: Text("遠端模式保留現有伺服器與自動輪換。本機模式只在裝置產生 Anisette，初次啟用仍須連線 Apple；失敗不會自動改用遠端。模式變更於下次登入生效，現有登入維持原模式。")) {
+        Section(header: Text("On-Device Anisette"), footer: Text("遠端模式保留現有伺服器與自動輪換。本機模式只在裝置產生 Anisette，初次啟用仍須連線 Apple；失敗不會自動改用遠端。模式變更於下次登入生效，現有登入維持原模式。")) {
             Text("下次登入使用").font(.subheadline)
             Picker("下次登入使用", selection: selectedMode) {
                 Text("遠端（預設）").tag(EiliAnisetteMode.remote.rawValue)
@@ -39,6 +39,7 @@ struct AnisetteModeSection: View {
                 Label("本機引擎已內置", systemImage: "cpu")
                     .font(.caption).foregroundColor(.secondary)
                 libraryStatusView
+                    .accessibilityIdentifier("anisette-library-status")
                 Button("重新檢查檔案") {
                     Task {
                         working = true
@@ -56,12 +57,14 @@ struct AnisetteModeSection: View {
                     .font(.caption).foregroundColor(.secondary)
                 Button("匯入本機 ADI 函式庫") { importing = true }
                     .disabled(working)
+                    .accessibilityIdentifier("anisette-library-import")
                 Text("Apple 函式庫不隨 App 提供。舊版選取 libCoreADI.so 與 libstoreservicescore.so。新版（如 6.5.3）選取 libstoreapi.so、libCoreADI.so、libCoreFP.so、libCoreLSKD.so、libFPDIFor3P.so，保留原名、勿混用版本，且須有權取得及使用。")
                     .font(.caption).foregroundColor(.secondary)
                 Text("新版五庫目前只提供匯入與離線相容性診斷；尚未支援其 Android ABI，不能用於本機登入。請保持遠端模式。靜態檢查不驗證來源、安全性、授權或實際登入；遠端不需要這些檔案。")
                     .font(.caption).foregroundColor(.secondary)
                 Button("重設本機 Anisette", role: .destructive) { resetting = true }
                     .disabled(working)
+                    .accessibilityIdentifier("anisette-local-reset")
                 Text("本機資料與遠端身分分開保存。匯入或重設前請先登出使用本機模式的帳號；重設不會刪除遠端資料。")
                     .font(.caption).foregroundColor(.secondary)
             }

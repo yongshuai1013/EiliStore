@@ -917,7 +917,15 @@ struct SettingsView: View {
                         }
                     }
                 }
-                
+
+                Section(header: Text("偏好設定")) {
+                    NavigationLink(destination: UserCustomizationsView()) {
+                        Label("用戶自定義", systemImage: "slider.horizontal.3")
+                    }
+                    .accessibilityIdentifier("settings-user-customizations")
+                    .accessibilityHint("設定 On-Device Anisette 模式與管理 ADI 函式庫")
+                }
+
                 Section(header: Text("Developer Portal Services")) {
                     NavigationLink(destination: DeveloperPortalView()) {
                         Label("Developer Portal", systemImage: "person.crop.circle.badge.checkmark")
