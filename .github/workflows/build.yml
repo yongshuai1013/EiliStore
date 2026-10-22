@@ -22,6 +22,9 @@ jobs:
           bash Tests/run-anisette-tests.sh
           bash Tests/run-adi-download-tests.sh
           PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_user_customizations_navigation.py
+          bash Tests/run-anisette-client-config-tests.sh
+          bash Tests/run-sidesign-client-config-tests.sh
+          bash Tests/run-developer-portal-service-tests.sh
           bash Tests/run-ipa-import-tests.sh
           bash Tests/run-ipa-installer-tests.sh
           PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_ios_archive_audit.py

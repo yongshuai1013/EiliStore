@@ -21,6 +21,16 @@ enum KeychainHelper {
 
 @main struct EiliAnisetteServiceTests {
     static func check(_ value: Bool, _ message: String) { if !value { fatalError(message) } }
+    static func checkOverrides(_ data: SideSign.AnisetteData, configuration: EiliAnisetteClientConfiguration) {
+        check(data.clientInfo == configuration.clientInfo && data.userAgent == configuration.userAgent,
+              "client-info/user-agent overrides missing")
+        check(data.deviceID == configuration.customDeviceID && data.localUserID == configuration.customLocalUserID,
+              "device/local user header overrides missing")
+        check(data.serialNumber == configuration.customSerialNumber && data.routingInfo == configuration.customRoutingInfo,
+              "serial/routing overrides missing")
+        check(data.locale == configuration.customLocale && data.timeZone == configuration.customTimeZone,
+              "locale/timezone overrides missing")
+    }
     static func main() async throws {
         let manager = SideSign.AnisetteDataManager.shared
         let originalPreference = UserDefaults.standard.object(forKey: EiliAnisetteMode.preferenceKey)
@@ -79,6 +89,38 @@ enum KeychainHelper {
         let defaultServers = await manager.lastServers
         check(defaultServers == [URL(string: "https://ani.sidestore.zip")!], "default failover URL")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == responseBlob, "remote blob save")
+
+        let overrideConfiguration = EiliAnisetteClientConfiguration(
+            clientInfo: "Configured Client", userAgent: "Configured Agent",
+            customDeviceID: UUID().uuidString, customLocalUserID: "custom-lu",
+            customSerialNumber: "serial-config", customRoutingInfo: "123456",
+            customLocale: "zh_HK", customTimeZone: "Asia/Hong_Kong",
+            customXcodeVersion: "27.1 (27B001)")
+        await manager.reset()
+        let overriddenRemote = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob,
+            servers: urls, mode: .remote, configuration: overrideConfiguration)
+        checkOverrides(overriddenRemote, configuration: overrideConfiguration)
+        check(overriddenRemote.machineID == "m" && overriddenRemote.oneTimePassword == "otp" && overriddenRemote.clientTime == "t", "remote overrides changed protected generated values")
+        let remoteRequestHeaders = await manager.lastHeaders
+        let remoteProvisioningID = await manager.lastIdentifier
+        let remoteProvisioningBlob = await manager.lastBlob
+        check(remoteRequestHeaders == overrideConfiguration.requestHeaderOverrides && remoteRequestHeaders.count == 8, "remote provider did not receive precisely the allowed metadata")
+        check(remoteProvisioningID == id && remoteProvisioningBlob == blob, "custom device header changed remote provisioning identity")
+        check(overrideConfiguration.resolvedXcodeVersion() == "27.1 (27B001)", "Xcode override missing")
+        check(EiliAnisetteClientConfiguration.empty.resolvedXcodeVersion(fallback: "saved-version") == "saved-version", "empty Xcode override changed existing session version")
+        let revertedRemote = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .remote)
+        check(revertedRemote.clientInfo == "ci" && revertedRemote.userAgent == "ua", "empty config did not restore provider metadata")
+        let clearedRequestHeaders = await manager.lastHeaders
+        check(clearedRequestHeaders.isEmpty, "old remote overrides persisted after reset")
+        let beforeInvalidCalls = await manager.calls
+        do {
+            _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls,
+                mode: .remote, configuration: .init(userAgent: "bad\r\nInjected: value"))
+            fatalError("invalid config reached provider")
+        } catch EiliAnisetteClientConfiguration.ConfigError.invalidValue {}
+        let afterInvalidCalls = await manager.calls
+        check(beforeInvalidCalls == afterInvalidCalls, "invalid config triggered remote traffic")
+        print("PASS: remote client overrides, provider headers, reset/defaults and generated identity isolation")
 
         await manager.reset()
         if !EiliAnisetteMode.localBuildAvailable {
@@ -219,6 +261,17 @@ enum KeychainHelper {
         check(localData.machineID == "v0" && localData.oneTimePassword == "v1", "local header conversion")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == localResponseBlob, "local blob persistence")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteBlobBeforeLocal, "local branch modified remote blob")
+        let localProvisioningID = FakeAnisetteKitControl.identifier
+        let overriddenLocal = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob,
+            servers: urls, mode: .onDevice, configuration: overrideConfiguration)
+        checkOverrides(overriddenLocal, configuration: overrideConfiguration)
+        check(overriddenLocal.machineID == "v0" && overriddenLocal.oneTimePassword == "v1" && overriddenLocal.clientTime == "v8", "local overrides changed generated values")
+        check(FakeAnisetteKitControl.headers == overrideConfiguration.requestHeaderOverrides, "local provider did not receive configured metadata")
+        check(FakeAnisetteKitControl.identifier == localProvisioningID, "custom device header changed local provisioning identity")
+        check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteBlobBeforeLocal, "local override changed remote identity")
+        let revertedLocal = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .onDevice)
+        check(revertedLocal.clientInfo == "v6" && revertedLocal.userAgent == "v7" && FakeAnisetteKitControl.headers.isEmpty, "local overrides survived reset")
+        print("PASS: local client overrides, provider headers, reset/defaults and provisioning identity isolation")
         UserDefaults.standard.set("remote", forKey: EiliAnisetteMode.preferenceKey)
         FakeAnisetteKitControl.reset()
         await manager.reset()

@@ -73,19 +73,22 @@ public final class PaxAuthService {
         let identifier = resolveIdentifier()
         let existingBlob: Data? = loadADIBlob()
         let anisetteMode = EiliAnisetteMode.selected
+        let clientConfiguration = try await EiliAnisetteClientConfigurationStore.shared.load()
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         
         let anisetteData = try await EiliAnisetteService.shared.fetch(
             remoteIdentifier: identifier,
             remoteBlob: existingBlob,
             servers: anisetteServers,
-            mode: anisetteMode
+            mode: anisetteMode,
+            configuration: clientConfiguration
         )
         
         try Task.checkCancellation()
         guard !codeProvider.isCancelled else { throw CancellationError() }
 
         // 2. SideSign 登入（2FA 在同一次調用內等待輸入）
-        let portal = SideSign.DeveloperPortal.shared
+        // Keep the same immutable header snapshot throughout this 2FA flow.
         
         let verificationHandler: SideSign.DeveloperPortal.VerificationHandler = { request in
             try Task.checkCancellation()
@@ -120,7 +123,7 @@ public final class PaxAuthService {
             appleID: appleID,
             password: password,
             anisetteData: anisetteData,
-            xcodeVersion: "27.0 (27A242)",
+            xcodeVersion: clientConfiguration.resolvedXcodeVersion(),
             verificationHandler: verificationHandler
         )
         

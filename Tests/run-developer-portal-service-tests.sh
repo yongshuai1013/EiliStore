@@ -10,5 +10,6 @@ trap 'rm -rf "$build"' EXIT
     Tests/Fixtures/PortalServiceSideSignStub.swift -o "$build/SideSign.o" -emit-module-path "$build/SideSign.swiftmodule"
 "$SWIFT_BIN" -swift-version 6 -strict-concurrency=complete -I "$build" \
     Sources/EiliStore/DeveloperPortalValidation.swift Sources/EiliStore/DeveloperPortalService.swift \
+    Tests/Fixtures/EiliSideSignConfigurationStoreStub.swift \
     Tests/Fixtures/PaxSigningServiceStub.swift Tests/DeveloperPortalServiceTests.swift "$build/SideSign.o" -o "$build/tests"
 "$build/tests"

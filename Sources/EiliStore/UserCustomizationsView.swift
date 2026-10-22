@@ -6,6 +6,20 @@ struct UserCustomizationsView: View {
     var body: some View {
         Form {
             AnisetteModeSection()
+
+            Section(header: Text("ANISETTE")) {
+                NavigationLink(destination: AnisetteClientConfigurationView()) {
+                    Label("Anisette Client Configuration", systemImage: "slider.horizontal.3")
+                }
+                .accessibilityIdentifier("customizations-anisette-client-config")
+            }
+
+            Section(header: Text("SIDESIGN")) {
+                NavigationLink(destination: SideSignClientConfigurationView()) {
+                    Label("SideSign Client Configuration", systemImage: "network")
+                }
+                .accessibilityIdentifier("customizations-sidesign-client-config")
+            }
         }
         .navigationTitle("用戶自定義")
         .navigationBarTitleDisplayMode(.inline)

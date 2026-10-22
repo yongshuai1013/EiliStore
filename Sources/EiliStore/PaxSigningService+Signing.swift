@@ -7,7 +7,7 @@ extension PaxSigningService {
     /// 查找或創建 App ID
     public func findOrCreateAppID(bundleIdentifier: String, name: String, for team: SideSign.Team) async throws -> SideSign.AppID {
         let (_, session) = try await sessionWithFreshAnisette()
-        let portal = SideSign.DeveloperPortal.shared
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         
         let existing = try await portal.fetchAppIDs(for: team, session: session)
         if let found = existing.first(where: { SigningBundleIdentifiers.matches($0.bundleIdentifier, bundleIdentifier) }) {
@@ -24,7 +24,7 @@ extension PaxSigningService {
     /// 只開啟 App Groups 單一開關（不重送整包 features，避免 4100）
     public func enableAppGroups(for appID: SideSign.AppID, team: SideSign.Team) async throws -> SideSign.AppID {
         let (_, session) = try await sessionWithFreshAnisette()
-        let portal = SideSign.DeveloperPortal.shared
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         
         var modified = appID.copy()
         modified.features = [SideSign.Feature.appGroups: "true"]
@@ -34,7 +34,7 @@ extension PaxSigningService {
     /// 查找或創建 App Group
     public func findOrCreateAppGroup(identifier: String, name: String, for team: SideSign.Team) async throws -> SideSign.AppGroup {
         let (_, session) = try await sessionWithFreshAnisette()
-        let portal = SideSign.DeveloperPortal.shared
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         
         let existing = try await portal.fetchAppGroups(for: team, session: session)
         if let found = existing.first(where: { $0.identifier == identifier }) {
@@ -47,14 +47,14 @@ extension PaxSigningService {
     /// 指派 App Groups 到 App ID
     public func assignAppGroups(_ groups: [SideSign.AppGroup], to appID: SideSign.AppID, for team: SideSign.Team) async throws -> SideSign.AppID {
         let (_, session) = try await sessionWithFreshAnisette()
-        let portal = SideSign.DeveloperPortal.shared
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         return try await portal.assignAppGroups(groups, to: appID, team: team, session: session)
     }
     
     /// 獲取 provisioning profile（查找或創建，然後下載）
     public func provisioningProfile(for appID: SideSign.AppID, team: SideSign.Team) async throws -> SideSign.ProvisioningProfile {
         let (_, session) = try await sessionWithFreshAnisette()
-        let portal = SideSign.DeveloperPortal.shared
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         
         // 查找現有
         let existing = try await portal.listProvisioningProfiles(for: team, session: session)
@@ -125,7 +125,8 @@ extension PaxSigningService {
     /// 這和一般簽 IPA 時重用／建立 portal 手動 profile 的流程分開；不會刪除 Apple 端資料。
     public func refreshProvisioningProfile(for appID: SideSign.AppID, team: SideSign.Team) async throws -> SideSign.ProvisioningProfile {
         let (_, session) = try await sessionWithFreshAnisette()
-        return try await SideSign.DeveloperPortal.shared.downloadProvisioningProfile(
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
+        return try await portal.downloadProvisioningProfile(
             for: appID,
             isTeamProfile: true,
             team: team,
@@ -136,14 +137,14 @@ extension PaxSigningService {
     /// 註冊設備
     public func registerDevice(udid: String, name: String, for team: SideSign.Team) async throws -> SideSign.Device {
         let (_, session) = try await sessionWithFreshAnisette()
-        let portal = SideSign.DeveloperPortal.shared
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         return try await portal.registerDevice(name: name, identifier: udid, type: .iPhone, team: team, session: session)
     }
     
     /// 獲取已註冊設備
     public func fetchDevices(for team: SideSign.Team) async throws -> [SideSign.Device] {
         let (_, session) = try await sessionWithFreshAnisette()
-        let portal = SideSign.DeveloperPortal.shared
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         return try await portal.fetchDevices(for: team, session: session)
     }
 }

@@ -25,6 +25,7 @@ public final class PaxSigningService {
     func sessionWithFreshAnisette() async throws -> (account: SideSign.Account, session: SideSign.Session) {
         let authSession = try loadSession()
         let anisetteMode = EiliAnisetteMode.savedSessionMode
+        let clientConfiguration = try await EiliAnisetteClientConfigurationStore.shared.load()
         
         // 從 Keychain 取穩定的 anisette 身份
         let remoteIdentifier = KeychainHelper.loadString(forKey: "paxstore.anisette.identifier")
@@ -40,12 +41,14 @@ public final class PaxSigningService {
             remoteIdentifier: remoteIdentifier ?? UUID(),
             remoteBlob: existingBlob,
             servers: servers,
-            mode: anisetteMode
+            mode: anisetteMode,
+            configuration: clientConfiguration
         )
         
         // 換上新鮮 anisette
         var freshSession = authSession.session
         freshSession.anisetteData = freshAnisette
+        freshSession.xcodeVersion = clientConfiguration.resolvedXcodeVersion(fallback: freshSession.xcodeVersion)
         
         return (authSession.account, freshSession)
     }
@@ -55,7 +58,7 @@ public final class PaxSigningService {
     /// 獲取該 Apple ID 下的所有 Team
     public func fetchTeams() async throws -> [SideSign.Team] {
         let (account, session) = try await sessionWithFreshAnisette()
-        let portal = SideSign.DeveloperPortal.shared
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let teams = try await portal.fetchTeams(
             for: account,
             session: session
@@ -69,7 +72,7 @@ public final class PaxSigningService {
     /// 獲取指定 Team 下的所有證書
     public func fetchCertificates(for team: SideSign.Team) async throws -> [SideSign.X509Certificate] {
         let (_, session) = try await sessionWithFreshAnisette()
-        let portal = SideSign.DeveloperPortal.shared
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let certs = try await portal.fetchCertificates(
             for: team,
             session: session
@@ -82,7 +85,7 @@ public final class PaxSigningService {
     /// - Returns: 包含私鑰的 KeyStore（必須保存好，簽名時要用）
     public func createCertificate(for team: SideSign.Team, machineName: String = "PaxStore") async throws -> SideSign.KeyStore {
         let (_, session) = try await sessionWithFreshAnisette()
-        let portal = SideSign.DeveloperPortal.shared
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let keyStore = try await portal.addCertificate(
             machineName: machineName,
             type: .development,
@@ -133,7 +136,7 @@ public final class PaxSigningService {
     /// 撤銷指定證書
     public func revokeCertificate(_ certificate: SideSign.X509Certificate, for team: SideSign.Team) async throws {
         let (_, session) = try await sessionWithFreshAnisette()
-        let portal = SideSign.DeveloperPortal.shared
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let success = try await portal.revokeCertificate(
             certificate,
             for: team,

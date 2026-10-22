@@ -102,24 +102,29 @@ actor EiliAnisetteService {
     }
 
     func fetch(remoteIdentifier: UUID, remoteBlob: Data?, servers: [URL],
-               mode: EiliAnisetteMode = .selected) async throws -> SideSign.AnisetteData {
+               mode: EiliAnisetteMode = .selected,
+               configuration: EiliAnisetteClientConfiguration = .empty) async throws -> SideSign.AnisetteData {
         await acquire()
         defer { release() }
         try Task.checkCancellation()
+        let configuration = try configuration.validated()
         switch mode {
         case .remote:
             let urls = servers.isEmpty ? [URL(string: "https://ani.sidestore.zip")!] : servers
             let (data, blob) = try await SideSign.AnisetteDataManager.shared.fetchAnisetteDataWithFailover(
-                servers: urls, identifier: remoteIdentifier, existingAdiBlob: remoteBlob)
+                servers: urls, identifier: remoteIdentifier, existingAdiBlob: remoteBlob,
+                headers: .init(rawHeaders: configuration.requestHeaderOverrides))
             try Task.checkCancellation()
             if let blob { KeychainHelper.save(blob, forKey: "paxstore.anisette.adiblob") }
-            return data
+            // SideSign may reuse a provider cache; reapply metadata so a saved
+            // override is honored even when a cached Anisette result is returned.
+            return configuration.applying(to: data)
         case .onDevice:
-            return try await fetchLocal()
+            return try await fetchLocal(configuration: configuration)
         }
     }
 
-    private func fetchLocal() async throws -> SideSign.AnisetteData {
+    private func fetchLocal(configuration: EiliAnisetteClientConfiguration) async throws -> SideSign.AnisetteData {
         #if EILI_ON_DEVICE_ANISETTE
         switch localLibraryStatus() {
         case .engineUnavailable: throw EiliAnisetteError.localBuildRequired
@@ -156,13 +161,17 @@ actor EiliAnisetteService {
         }
         guard let client = localClient else { throw EiliAnisetteError.missingLibraries }
         let (headers, blob) = try await client.getAnisetteData(identifier: identifier,
-            storage: .memory(existingBlob: KeychainHelper.load(forKey: Self.localBlobKey)))
+            storage: .memory(existingBlob: KeychainHelper.load(forKey: Self.localBlobKey)),
+            headers: .init(rawHeaders: configuration.requestHeaderOverrides))
         // Save a provisioned identity before honouring cancellation, never log its payload.
         if let blob, !KeychainHelper.save(blob, forKey: Self.localBlobKey) {
             throw EiliAnisetteError.storageFailed
         }
         try Task.checkCancellation()
-        return try Self.convertHeaders(headers)
+        // The native provider's persisted routing info can take precedence over
+        // request headers internally. The Apple-bound metadata still honors the
+        // explicit override without modifying stored provisioning state.
+        return configuration.applying(to: try Self.convertHeaders(headers))
         #else
         throw EiliAnisetteError.localBuildRequired
         #endif
