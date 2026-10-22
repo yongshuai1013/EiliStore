@@ -40,7 +40,7 @@ import UniformTypeIdentifiers
             do {
                 let status = try await EiliAnisetteService.shared.downloadLibraries()
                 if case .incompatible(let reason) = status { message = "函式庫已下載並保存，但目前不能用於本機登入。\n" + reason }
-                else { message = "函式庫已下載，通過 SHA-256 與基本格式檢查；尚未驗證真機登入，遠端仍為預設。" }
+                else { message = "函式庫已下載並通過 ZIP 與基本格式檢查；SHA-256 不符僅記錄警告，不代表來源可信。尚未驗證真機登入，遠端仍為預設。" }
             } catch { message = safeMessage(error) }
             await refreshLibraryStatus(); working = false
         }

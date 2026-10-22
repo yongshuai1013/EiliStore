@@ -40,6 +40,12 @@ final class MockURLProtocol: URLProtocol {
 }
 
 final class ADIRuntimeLibraryDownloaderTests: XCTestCase {
+    private final class Warnings: @unchecked Sendable {
+        private let lock = NSLock()
+        private var messages: [String] = []
+        func append(_ message: String) { lock.lock(); defer { lock.unlock() }; messages.append(message) }
+        var values: [String] { lock.lock(); defer { lock.unlock() }; return messages }
+    }
     private let fixtures = URL(fileURLWithPath: ProcessInfo.processInfo.environment["ADI_TEST_FIXTURES"]!, isDirectory: true)
     private let metadataURL = URL(string: "https://mock.test/metadata")!
     private var stagedDirectories: [URL] = []
@@ -49,7 +55,7 @@ final class ADIRuntimeLibraryDownloaderTests: XCTestCase {
         super.tearDown()
     }
     private func data(_ name: String) throws -> Data { try Data(contentsOf: fixtures.appendingPathComponent(name)) }
-    private func makeDownloader(_ archive: String? = "valid.zip", status: Int = 200, delay: TimeInterval = 0, limits: ADIRuntimeLibraryDownloader.Limits = .init()) throws -> ADIRuntimeLibraryDownloader {
+    private func makeDownloader(_ archive: String? = "valid.zip", status: Int = 200, delay: TimeInterval = 0, limits: ADIRuntimeLibraryDownloader.Limits = .init(), warnings: Warnings? = nil) throws -> ADIRuntimeLibraryDownloader {
         MockURLProtocol.clear()
         let archiveData = try archive.map(data) ?? data("valid.zip")
         let digestName = archive ?? "valid.zip"
@@ -59,7 +65,8 @@ final class ADIRuntimeLibraryDownloaderTests: XCTestCase {
         MockURLProtocol.set(.init(status: 200, data: json, delay: 0), for: "/metadata")
         MockURLProtocol.set(.init(status: status, data: archiveData, delay: delay), for: "/archive")
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockURLProtocol.self]
-        return ADIRuntimeLibraryDownloader(metadataURL: metadataURL, configuration: config, limits: limits)
+        return ADIRuntimeLibraryDownloader(metadataURL: metadataURL, configuration: config, limits: limits,
+            warningHandler: { warnings?.append($0) })
     }
     private func stageDir() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -82,9 +89,58 @@ final class ADIRuntimeLibraryDownloaderTests: XCTestCase {
         XCTAssertEqual(remotePaths.map(\.lastPathComponent), ["libCoreADI.so", "libstoreservicescore.so"])
         XCTAssertEqual(try Data(contentsOf: remotePaths[0]), try data("valid.elf"))
     }
-    func testRejectsWrongDigest() async throws {
-        let d = try makeDownloader("valid.zip"); MockURLProtocol.set(.init(status: 200, data: Data("{\"sha256\":\"\(String(repeating: "0", count: 64))\",\"l\":\"\(try data("valid.zip").base64EncodedString())\"}".utf8), delay: 0), for: "/metadata")
-        await assertFailure(.hash, downloader: d)
+    private func setMismatchedMetadata(_ archive: String?, key: String = "s") throws {
+        let payload = try archive.map { "\"l\":\"\(try data($0).base64EncodedString())\"" }
+            ?? "\"url\":\"https://mock.test/archive\""
+        let json = "{\"\(key)\":\"\(String(repeating: "0", count: 64))\",\(payload)}"
+        MockURLProtocol.set(.init(status: 200, data: Data(json.utf8), delay: 0), for: "/metadata")
+    }
+    func testWrongDigestWarnsAndStagesInlineAndHTTPSArchive() async throws {
+        for key in ["s", "sha", "sha256"] {
+            for archive: String? in ["valid.zip", nil] {
+                let warnings = Warnings()
+                let d = try makeDownloader(archive, warnings: warnings)
+                try setMismatchedMetadata(archive, key: key)
+                let paths = try await d.stageLibraries(in: try stageDir())
+                XCTAssertEqual(paths.map(\.lastPathComponent), ["libCoreADI.so", "libstoreservicescore.so"])
+                for path in paths { XCTAssertEqual(try Data(contentsOf: path), try data("valid.elf")) }
+                XCTAssertEqual(warnings.values.count, 1)
+                XCTAssertTrue(warnings.values.first?.contains("SHA-256") == true)
+            }
+        }
+    }
+    func testMatchingDigestDoesNotWarnIncludingUppercase() async throws {
+        let warnings = Warnings()
+        let d = try makeDownloader(warnings: warnings)
+        let digest = try String(contentsOf: fixtures.appendingPathComponent("valid.zip.sha256"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let json = "{\"s\":\"\(digest)\",\"l\":\"\(try data("valid.zip").base64EncodedString())\"}"
+        MockURLProtocol.set(.init(status: 200, data: Data(json.utf8), delay: 0), for: "/metadata")
+        _ = try await d.stageLibraries(in: try stageDir())
+        XCTAssertTrue(warnings.values.isEmpty)
+    }
+    func testWrongDigestDoesNotBypassArchiveELFOrSizeChecks() async throws {
+        for (archive, expected) in [("traversal.zip", ADIRuntimeLibraryDownloader.DownloadError.archive),
+            ("duplicate.zip", .archive), ("symlink.zip", .archive), ("extra.zip", .archive),
+            ("crc.zip", .archive), ("invalid-elf.zip", .elf), ("bomb.zip", .large)] {
+            let warnings = Warnings()
+            let d = try makeDownloader(archive, limits: .init(expandedBytes: archive == "bomb.zip" ? 511 : 512), warnings: warnings)
+            try setMismatchedMetadata(archive)
+            await assertFailure(expected, downloader: d)
+            XCTAssertEqual(warnings.values.count, 1)
+        }
+    }
+    func testWrongDigestNeverOverwritesNonemptyStagingDirectory() async throws {
+        let d = try makeDownloader()
+        try setMismatchedMetadata("valid.zip")
+        let directory = try stageDir()
+        let existing = directory.appendingPathComponent("libCoreADI.so")
+        let original = Data("existing library sentinel".utf8)
+        try original.write(to: existing)
+        do { _ = try await d.stageLibraries(in: directory); XCTFail("nonempty staging accepted") }
+        catch let error as ADIRuntimeLibraryDownloader.DownloadError { XCTAssertEqual(error, .archive) }
+        XCTAssertEqual(try Data(contentsOf: existing), original)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["libCoreADI.so"])
     }
     func testRequiresHash() async throws {
         let d = try makeDownloader("valid.zip"); MockURLProtocol.set(.init(status: 200, data: Data("{\"l\":\"\(try data("valid.zip").base64EncodedString())\"}".utf8), delay: 0), for: "/metadata")

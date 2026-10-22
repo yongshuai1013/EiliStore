@@ -9,7 +9,7 @@ import Crypto
 import FoundationNetworking
 #endif
 
-/// SideStore-compatible direct ODA metadata. The metadata's hash checks integrity,
+/// SideStore-compatible direct ODA metadata. The metadata's hash is advisory,
 /// not authenticity: it is deliberately NOT described as an independent pin.
 struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
     static let defaultMetadataURL = URL(string: "https://zzz.haus/oda.json")!
@@ -22,10 +22,13 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
     let metadataURL: URL
     private let configuration: URLSessionConfiguration
     private let limits: Limits
+    private let warningHandler: @Sendable (String) -> Void
 
     init(metadataURL: URL = Self.defaultMetadataURL,
-         configuration: URLSessionConfiguration = .ephemeral, limits: Limits = .init()) {
+         configuration: URLSessionConfiguration = .ephemeral, limits: Limits = .init(),
+         warningHandler: @escaping @Sendable (String) -> Void = { NSLog("%@", $0) }) {
         self.metadataURL = metadataURL
+        self.warningHandler = warningHandler
         // Own an immutable snapshot; a caller cannot mutate policy during a request.
         let copy = configuration.copy() as! URLSessionConfiguration
         copy.httpCookieStorage = nil
@@ -71,7 +74,11 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
             }
             try Task.checkCancellation()
             let actual = SHA256.hash(data: archiveData).map { String(format: "%02x", $0) }.joined()
-            guard actual.caseInsensitiveCompare(digest) == .orderedSame else { throw DownloadError.hash }
+            if actual.caseInsensitiveCompare(digest) != .orderedSame {
+                // Match SideStore's advisory digest behavior. ZIP/CRC/ELF checks
+                // and transactional installation remain mandatory below.
+                warningHandler("[EiliStore] 警告：ADI 函式庫 SHA-256 與 ODA 中繼資料不符；依 SideStore 行為繼續解壓，仍須通過 ZIP、CRC、大小與格式檢查。")
+            }
             return try extract(archiveData, into: directory)
         } catch is CancellationError {
             throw CancellationError()
@@ -161,14 +168,13 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
     }
 
     enum DownloadError: LocalizedError, Equatable {
-        case insecure, metadata, network, large, hash, archive, elf, invalid, cancelled
+        case insecure, metadata, network, large, archive, elf, invalid, cancelled
         var errorDescription: String? {
             switch self {
             case .insecure: return "下載來源必須使用 HTTPS，且重新導向不得降級。"
             case .metadata: return "ADI 函式庫中繼資料格式無效或缺少 SHA-256。"
             case .network: return "無法取得 ADI 函式庫，請檢查連線後重試。"
             case .large: return "ADI 函式庫超過安全大小限制。"
-            case .hash: return "ADI 函式庫 SHA-256 驗證失敗；原有函式庫未變更。"
             case .archive: return "ADI 函式庫 ZIP 結構不安全、損毀或不受支援。"
             case .elf: return "ADI 函式庫不是有效的 ELF64 AArch64 檔案。"
             case .cancelled: return "ADI 函式庫下載已取消。"

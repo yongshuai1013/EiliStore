@@ -48,7 +48,7 @@ struct AnisetteModeSection: View {
                 Button("下載 ADI 函式庫（SideStore 方式）") { model.confirmingDownload = true }
                     .disabled(model.working)
                     .accessibilityIdentifier("anisette-library-download")
-                Text("僅在確認後，從 https://zzz.haus/oda.json 取得第三方 ODA 中繼資料及其指定套件；不隨 App 打包。下載會核對中繼資料提供的 SHA-256，不符即拒絕；這不是獨立釘選，也不保證來源可信或已取得授權。")
+                Text("僅在確認後，從 https://zzz.haus/oda.json 取得第三方 ODA 中繼資料及其指定套件；不隨 App 打包。下載會核對中繼資料提供的 SHA-256，不符會記錄警告並繼續嘗試解壓；ZIP、CRC、大小與格式檢查仍須通過。這不是獨立釘選，也不保證來源可信或已取得授權。")
                     .font(.caption).foregroundColor(.secondary)
                 Button("匯入本機 ADI 函式庫") { model.importing = true }
                     .disabled(model.working)

@@ -29,7 +29,7 @@ struct UserCustomizationsView: View {
             Button("確認下載並替換本機函式庫") { anisette.download() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("來源：https://zzz.haus/oda.json。套件與雜湊均由第三方提供，並非獨立可信釘選；再散布授權尚未確認，請確認你有權取得及使用。成功後會替換現有本機函式庫；失敗保留原檔。下載不會切換模式、連線 Apple 或開始登入，新版五庫仍可能不相容。")
+            Text("來源：https://zzz.haus/oda.json。套件與雜湊均由第三方提供，並非獨立可信釘選；SHA-256 不符會記錄警告並繼續嘗試解壓，其他安全檢查仍須通過；再散布授權尚未確認，請確認你有權取得及使用。成功後會替換現有本機函式庫；失敗保留原檔。下載不會切換模式、連線 Apple 或開始登入，新版五庫仍可能不相容。")
         }
         .confirmationDialog("重設本機 Anisette？", isPresented: $anisette.resetting, titleVisibility: .visible) {
             Button("重設本機資料", role: .destructive) { anisette.reset() }
