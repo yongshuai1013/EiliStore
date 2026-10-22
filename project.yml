@@ -15,6 +15,8 @@ packages:
     branch: main
   EMProxy:
     path: Packages/EMProxy
+  AnisetteKit:
+    path: Packages/AnisetteKit
 targets:
   EiliStore:
     type: application
@@ -26,6 +28,7 @@ targets:
       - package: SideSign
       - package: CodeSignKit
       - package: EMProxy
+      - package: AnisetteKit
       - framework: Libraries/IDeviceFFI.xcframework
         embed: false
     settings:
@@ -34,6 +37,7 @@ targets:
         MARKETING_VERSION: 1.0
         CURRENT_PROJECT_VERSION: 1
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) EILI_ON_DEVICE_ANISETTE"
     info:
       path: Sources/EiliStore/Info.plist
       properties:

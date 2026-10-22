@@ -2,8 +2,11 @@ name: Build
 
 on:
   push:
-    branches: [main, validation/anisette-20261022-0618]
+    branches: [main, feat/on-device-production-20261022]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -12,27 +15,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run offline IPA import and installer tests
+      - name: Run offline mode selection and IPA tests (no Apple services)
         run: |
+          bash Tests/run-anisette-tests.sh
           bash Tests/run-ipa-import-tests.sh
           bash Tests/run-ipa-installer-tests.sh
+          PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_ios_archive_audit.py
+          printf '#include "anisette_core.h"\nvoid test_reset(void) { reset_anisette_vm_uc(); }\n' | xcrun clang -x c -std=c11 -Werror=implicit-function-declaration -fsyntax-only -I Packages/AnisetteKit/Native/include -
 
       - name: Build IDevice xcframework for iOS 15
         run: |
-          PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_ios_archive_audit.py
           command -v cmake >/dev/null || brew install cmake
           bash Scripts/build-idevice-ios15.sh
 
-      - name: Rebuild pinned Unicorn for iOS 15 (remote mode unchanged)
-        run: bash Scripts/prepare-anisette-ios15.sh
+      - name: Build and audit production Unicorn for iOS 15
+        run: bash Scripts/build-on-device-anisette.sh
 
-      - name: Install xcodegen
-        run: brew install xcodegen
+      - name: Generate standard production project (both engines, remote default)
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec project.yml
 
-      - name: Generate iOS 15 dependency-validation project
-        run: xcodegen generate --spec project-ios15-validation.yml
-
-      - name: Build IPA
+      - name: Archive and validate production IPA without signing
         shell: bash
         run: |
           set -euo pipefail
@@ -44,15 +48,41 @@ jobs:
             -archivePath build/EiliStore.xcarchive \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            LD_GENERATE_MAP_FILE=YES \
+            'LD_MAP_FILE_PATH=$(TARGET_TEMP_DIR)/$(PRODUCT_NAME)-$(CURRENT_VARIANT)-$(CURRENT_ARCH)-LinkMap.txt' \
             2>&1 | tee build/xcodebuild.log
-          # Compare the archive's actual linker-input product, not log formatting.
+          grep -E -- '-D[[:space:]]*EILI_ON_DEVICE_ANISETTE([[:space:]]|$)' build/xcodebuild.log >/dev/null
+          grep -F 'Packages/AnisetteKit/Native/anisette_core_uc.cpp' build/xcodebuild.log >/dev/null
+          # Each target writes its own map. Inspect only the App map after linking.
+          APP_LINK_MAPS=()
+          while IFS= read -r map; do APP_LINK_MAPS+=("$map"); done < <(
+            find build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/EiliStore/IntermediateBuildFilesPath/EiliStore.build \
+              -type f -name 'EiliStore-*-LinkMap.txt'
+          )
+          [[ ${#APP_LINK_MAPS[@]} -eq 1 ]] || { echo 'ERROR: expected exactly one App Link Map' >&2; exit 1; }
+          cp "${APP_LINK_MAPS[0]}" build/production-link-map.txt
+          # A symbol listed only as dead-stripped is not proof of engine inclusion.
+          awk '/^# Dead Stripped Symbols:/{exit} {print}' build/production-link-map.txt \
+            | grep -F '_get_anisette_headers_uc' >/dev/null
           BUILT_UNICORN=build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/EiliStore/BuildProductsPath/Release-iphoneos/libunicorn.a
-          cmp build/Dependencies/AnisetteKit/Artifacts/Unicorn.xcframework/ios-arm64/libunicorn.a "$BUILT_UNICORN"
+          cmp Packages/AnisetteKit/Artifacts/Unicorn.xcframework/ios-arm64/libunicorn.a "$BUILT_UNICORN"
           python3 Scripts/audit-ios-archive.py "$BUILT_UNICORN"
           if grep -Ei 'built for newer.*than being linked' build/xcodebuild.log; then
             echo 'ERROR: deployment-version mismatch remains; refusing to publish IPA' >&2
             exit 1
           fi
+          python3 - <<'PY'
+          import json, pathlib, plistlib
+          app = pathlib.Path('build/EiliStore.xcarchive/Products/Applications/EiliStore.app')
+          info = plistlib.loads((app / 'Info.plist').read_bytes())
+          assert info.get('MinimumOSVersion') == '15.0', info.get('MinimumOSVersion')
+          result = {'project': 'project.yml', 'minimum_iOS': info['MinimumOSVersion'],
+                    'on_device_engine_linked': True, 'mode_test_script': 'Tests/run-anisette-tests.sh',
+                    'apple_signing_enabled': False}
+          pathlib.Path('build/production-validation.json').write_text(json.dumps(result, indent=2) + '\n')
+          print('PASS: production archive includes On-Device engine and retains iOS 15 target; remote default verified by offline mode tests')
+          PY
           mkdir -p build/Payload
           cp -r build/EiliStore.xcarchive/Products/Applications/EiliStore.app build/Payload/
           cd build && zip -r EiliStore.ipa Payload/
@@ -70,90 +100,8 @@ jobs:
           name: ios15-validation-logs
           path: |
             build/xcodebuild.log
-            build/Dependencies/AnisetteKit/.Unicorn.xcframework-stage-*/unicorn-disassembly.txt
-          if-no-files-found: ignore
-          retention-days: 7
-
-  on-device-validation:
-    if: github.ref == 'refs/heads/validation/anisette-20261022-0618'
-    runs-on: macos-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run isolated Anisette fixture tests (no Apple services)
-        run: |
-          bash Tests/run-anisette-tests.sh
-          PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_ios_archive_audit.py
-          printf '#include "anisette_core.h"\nvoid test_reset(void) { reset_anisette_vm_uc(); }\n' | xcrun clang -x c -std=c11 -Werror=implicit-function-declaration -fsyntax-only -I Packages/AnisetteKit/Native/include -
-
-      - name: Build IDevice xcframework for iOS 15
-        run: |
-          command -v cmake >/dev/null || brew install cmake
-          bash Scripts/build-idevice-ios15.sh
-
-      - name: Build and audit local Unicorn for iOS 15
-        run: bash Scripts/build-on-device-anisette.sh
-
-      - name: Generate optional On-Device project
-        run: |
-          brew install xcodegen
-          xcodegen generate --spec project-on-device.yml
-
-      - name: Archive optional On-Device configuration without signing
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build
-          xcodebuild archive \
-            -project EiliStore.xcodeproj \
-            -scheme EiliStore \
-            -destination 'generic/platform=iOS' \
-            -archivePath build/EiliStore-OnDevice.xcarchive \
-            -derivedDataPath build/OnDeviceDerivedData \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            LD_GENERATE_MAP_FILE=YES \
-            'LD_MAP_FILE_PATH=$(TARGET_TEMP_DIR)/$(PRODUCT_NAME)-$(CURRENT_VARIANT)-$(CURRENT_ARCH)-LinkMap.txt' \
-            2>&1 | tee build/on-device-xcodebuild.log
-          grep -E -- '-D[[:space:]]*EILI_ON_DEVICE_ANISETTE([[:space:]]|$)' build/on-device-xcodebuild.log >/dev/null
-          grep -F 'Packages/AnisetteKit/Native/anisette_core_uc.cpp' build/on-device-xcodebuild.log >/dev/null
-          # TARGET_TEMP_DIR is target/configuration-specific. Collect the App map
-          # only after all linker tasks finish; never share a linker output path.
-          APP_LINK_MAPS=()
-          while IFS= read -r map; do APP_LINK_MAPS+=("$map"); done < <(
-            find build/OnDeviceDerivedData/Build/Intermediates.noindex/ArchiveIntermediates/EiliStore/IntermediateBuildFilesPath/EiliStore.build \
-              -type f -name 'EiliStore-*-LinkMap.txt'
-          )
-          [[ ${#APP_LINK_MAPS[@]} -eq 1 ]] || { echo 'ERROR: expected exactly one App Link Map' >&2; exit 1; }
-          cp "${APP_LINK_MAPS[0]}" build/on-device-link-map.txt
-          grep -F '_get_anisette_headers_uc' build/on-device-link-map.txt >/dev/null
-          BUILT_UNICORN=build/OnDeviceDerivedData/Build/Intermediates.noindex/ArchiveIntermediates/EiliStore/BuildProductsPath/Release-iphoneos/libunicorn.a
-          cmp Packages/AnisetteKit/Artifacts/Unicorn.xcframework/ios-arm64/libunicorn.a "$BUILT_UNICORN"
-          python3 Scripts/audit-ios-archive.py "$BUILT_UNICORN"
-          if grep -Ei 'built for newer.*than being linked' build/on-device-xcodebuild.log; then
-            echo 'ERROR: deployment-version mismatch in On-Device build' >&2
-            exit 1
-          fi
-          mkdir -p build/OnDevicePayload/Payload
-          cp -r build/EiliStore-OnDevice.xcarchive/Products/Applications/EiliStore.app build/OnDevicePayload/Payload/
-          cd build/OnDevicePayload && zip -r ../EiliStore-on-device-unsigned.ipa Payload/
-
-      - name: Upload optional On-Device unsigned IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: EiliStore-on-device-unsigned-ipa
-          path: build/EiliStore-on-device-unsigned.ipa
-
-      - name: Upload optional On-Device validation logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: on-device-validation-logs
-          path: |
-            build/on-device-xcodebuild.log
-            build/on-device-link-map.txt
-            build/OnDeviceDerivedData/**/*-LinkMap.txt
+            build/production-link-map.txt
+            build/production-validation.json
             Packages/AnisetteKit/.Unicorn.xcframework-stage-*/unicorn-disassembly.txt
           if-no-files-found: ignore
           retention-days: 7

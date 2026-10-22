@@ -8,13 +8,22 @@ struct AnisetteModeSection: View {
     @State private var working = false
     @State private var message: String?
 
+    private var selectedMode: Binding<String> {
+        Binding(get: { EiliAnisetteMode(rawValue: mode)?.rawValue ?? EiliAnisetteMode.remote.rawValue },
+                set: { mode = $0 })
+    }
+
     var body: some View {
         Section(header: Text("Anisette 模式"), footer: Text("遠端模式保留現有伺服器與自動輪換。本機模式只在裝置產生 Anisette，初次啟用仍須連線 Apple；失敗不會自動改用遠端。模式變更於下次登入生效，現有登入維持原模式。")) {
-            Picker("下次登入使用", selection: $mode) {
-                Text("遠端伺服器").tag(EiliAnisetteMode.remote.rawValue)
-                Text("On-Device（本機）").tag(EiliAnisetteMode.onDevice.rawValue)
+            Text("下次登入使用").font(.subheadline)
+            Picker("下次登入使用", selection: selectedMode) {
+                Text("遠端（預設）").tag(EiliAnisetteMode.remote.rawValue)
+                Text("On-Device").tag(EiliAnisetteMode.onDevice.rawValue)
                     .disabled(!EiliAnisetteMode.localBuildAvailable)
             }
+            .pickerStyle(.segmented)
+            .disabled(working)
+            .accessibilityIdentifier("anisette-mode-picker")
             if !EiliAnisetteMode.localBuildAvailable {
                 Text("此版本未包含本機引擎；需使用另行建置的相容性版本。")
                     .font(.caption).foregroundColor(.secondary)
