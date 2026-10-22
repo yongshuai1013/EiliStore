@@ -72,15 +72,24 @@ struct ADILibraryCompatibility: Equatable, Sendable {
         let needed = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.needed) }
         let relocations = metadata.values.reduce(into: Set<UInt32>()) { $0.formUnion($1.relocationTypes) }
         let dynamicTags = metadata.values.reduce(into: Set<UInt64>()) { $0.formUnion($1.unsupportedDynamicTags) }
+        // Match vm_resolve_symbol's existing __ndk1 -> __1 lookup, not a new shim.
+        let unresolved = imports.filter { name in
+            if exports.contains(name) || handledImports.contains(name) { return false }
+            var converted = name
+            if let range = converted.range(of: "6__ndk1") { converted.replaceSubrange(range, with: "3__1") }
+            else if let range = converted.range(of: "__ndk1") { converted.replaceSubrange(range, with: "__1") }
+            return !exports.contains(converted)
+        }
         let mismatches = metadata.compactMap { name, value -> String? in
-            guard value.soname != name else { return nil }
+            // SONAME is optional in ELF; reject an explicit mismatch, not its absence.
+            guard let soname = value.soname, soname != name else { return nil }
             return name
         }
         return Self(profile: profile,
                     missingFiles: Set(profile.filenames).subtracting(provided).sorted(),
                     missingDependencies: needed.subtracting(provided).subtracting(systemLibraries).sorted(),
                     missingEntryPoints: requiredEntryPoints.subtracting(exports).sorted(),
-                    unhandledImports: imports.subtracting(exports).subtracting(handledImports).sorted(),
+                    unhandledImports: unresolved.sorted(),
                     unsupportedRelocations: relocations.subtracting([0, 257, 1025, 1026, 1027]).sorted(),
                     unsupportedDynamicTags: dynamicTags.sorted(), mismatchedSONAMEs: mismatches.sorted())
     }

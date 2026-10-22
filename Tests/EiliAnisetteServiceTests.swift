@@ -323,6 +323,68 @@ enum KeychainHelper {
         check(FakeAnisetteKitControl.resetCount >= 2, "local engine not reset after import and reset")
         print("PASS: local reset preserves session, Apple ID, remote identity/blob, certificate, mode and libraries")
 
+        let incompatibleDir = fixtureDir.appendingPathComponent("incompatible-legacy")
+        try FileManager.default.createDirectory(at: incompatibleDir, withIntermediateDirectories: true)
+        let incompatibleFiles = try ADILibraryProfile.legacy.filenames.map { name in
+            let url = incompatibleDir.appendingPathComponent(name)
+            try ADIElfFixture.make(soname: name,
+                needed: ["libmediaplatform.so", "libCoreFoundation.so", "libc++_shared.so"],
+                exports: name == "libstoreservicescore.so" ? ADILibraryCompatibility.requiredEntryPoints.sorted() : [],
+                imports: ["CFRelease", "pthread_create"]).write(to: url)
+            return url
+        }
+        FakeAnisetteKitControl.reset()
+        let legacyMode = EiliAnisetteMode.selected
+        let legacySessionMode = EiliAnisetteMode.savedSessionMode
+        let resetsBeforeRejectedLegacy = FakeAnisetteKitControl.resetCount
+        let savedLegacyBytes = try ADILibraryProfile.legacy.filenames.map { try Data(contentsOf: libraryDirectory.appendingPathComponent($0)) }
+        // Both manual import and downloaded staging must preserve a usable cache.
+        do { _ = try await svc.importLibraries(incompatibleFiles); fatalError("incompatible legacy replaced valid cache") }
+        catch EiliAnisetteError.incompatibleLibraries(let reason) { check(reason.contains("保留"), "missing preservation message") }
+        let badSources = incompatibleFiles
+        do {
+            _ = try await svc.downloadLibraries(using: { directory in
+                try badSources.map { source in
+                    let target = directory.appendingPathComponent(source.lastPathComponent)
+                    try FileManager.default.copyItem(at: source, to: target)
+                    return target
+                }
+            })
+            fatalError("incompatible download replaced valid cache")
+        } catch EiliAnisetteError.incompatibleLibraries {}
+        for (index, name) in ADILibraryProfile.legacy.filenames.enumerated() {
+            check(try Data(contentsOf: libraryDirectory.appendingPathComponent(name)) == savedLegacyBytes[index], "preflight damaged valid library")
+        }
+        check(await svc.localLibraryStatus() == .present, "rejected import changed installed status")
+        check(FakeAnisetteKitControl.resetCount == resetsBeforeRejectedLegacy, "rejected import reset engine")
+        // Diagnose previously imported incomplete sets, and retain manual diagnostic
+        // import when no preflight-passing cache is present.
+        try FileManager.default.removeItem(at: libraryDirectory)
+        let badStatus = try await svc.importLibraries(incompatibleFiles)
+        if case .incompatible = badStatus {} else { fatalError("incomplete legacy marked runnable") }
+        FakeAnisetteKitControl.reset()
+        let remoteBeforeLegacyBlock = await manager.calls
+        let resetsBeforeLegacyBlock = FakeAnisetteKitControl.resetCount
+        if case .incompatible(let reason) = await svc.localLibraryStatus() {
+            check(reason.contains("相依庫") && reason.contains("外部符號"), "legacy blockers not explained")
+        } else { fatalError("stored incomplete legacy bypassed preflight") }
+        do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("incomplete legacy executed") }
+        catch EiliAnisetteError.incompatibleLibraries {}
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == resetsBeforeLegacyBlock, "blocked legacy touched engine")
+        check(await manager.calls == remoteBeforeLegacyBlock, "legacy block silently fell back to remote")
+        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == nil && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == nil, "blocked legacy created identity")
+        check(!FileManager.default.fileExists(atPath: provisioning.path), "blocked legacy created provisioning directory")
+        check(EiliAnisetteMode.selected == legacyMode && EiliAnisetteMode.savedSessionMode == legacySessionMode, "legacy preflight changed modes")
+        for (key, value) in protectedLoginValues { check(KeychainHelper.load(forKey: key) == value, "legacy preflight changed protected login data") }
+        try await svc.importLibraries(elfFiles)
+        check(await svc.localLibraryStatus() == .present, "compatible legacy restore blocked")
+        // Header-correct but structurally incomplete metadata must not replace it.
+        for url in incompatibleFiles { try Data(validCore.prefix(128)).write(to: url) }
+        do { _ = try await svc.importLibraries(incompatibleFiles); fatalError("header-only legacy accepted") }
+        catch EiliAnisetteError.invalidLibraries {}
+        check(await svc.localLibraryStatus() == .present, "malformed import damaged cache")
+        print("PASS: legacy dependency/symbol preflight, manual diagnostics, valid-cache preservation, no VM/identity/fallback/session changes")
+
         let modernDir = FileManager.default.temporaryDirectory.appendingPathComponent("anisette-modern-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: modernDir) }
         try FileManager.default.createDirectory(at: modernDir, withIntermediateDirectories: true)
@@ -337,6 +399,10 @@ enum KeychainHelper {
         }
         FakeAnisetteKitControl.reset()
         let savedModeBeforeImport = EiliAnisetteMode.selected
+        do { _ = try await svc.importLibraries(modernURLs); fatalError("modern diagnostics overwrote usable legacy cache") }
+        catch EiliAnisetteError.incompatibleLibraries {}
+        check(await svc.localLibraryStatus() == .present, "modern rejection changed valid legacy cache")
+        try FileManager.default.removeItem(at: libraryDirectory)
         let modernSources = modernURLs
         let importedModern = try await svc.downloadLibraries(using: { directory in
             try modernSources.map { source in

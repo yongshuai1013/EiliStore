@@ -55,7 +55,7 @@ struct AnisetteModeSection: View {
                     .accessibilityIdentifier("anisette-library-import")
                 Text("Apple 函式庫不隨 App 提供。舊版選取 libCoreADI.so 與 libstoreservicescore.so。新版（如 6.5.3）選取 libstoreapi.so、libCoreADI.so、libCoreFP.so、libCoreLSKD.so、libFPDIFor3P.so，保留原名、勿混用版本，且須有權取得及使用。")
                     .font(.caption).foregroundColor(.secondary)
-                Text("新版五庫目前只提供匯入與離線相容性診斷；尚未支援其 Android ABI，不能用於本機登入。請保持遠端模式。靜態檢查不驗證來源、安全性、授權或實際登入；遠端不需要這些檔案。")
+                Text("舊版兩庫也須通過相依庫與符號檢查，不能僅憑檔名判定可用。不相容匯入不會覆蓋原有通過檢查的庫組。新版五庫目前只提供離線相容性診斷，尚未支援其 Android ABI，不能用於本機登入。靜態檢查不驗證來源、安全性、授權或實際登入；遠端不需要這些檔案。")
                     .font(.caption).foregroundColor(.secondary)
                 Button("重設本機 Anisette", role: .destructive) { model.resetting = true }
                     .disabled(model.working)
@@ -84,7 +84,7 @@ struct AnisetteModeSection: View {
                 Label("ADI 檔案基本檢查通過", systemImage: "checkmark.circle")
                     .font(.caption).foregroundColor(.secondary)
             case .incompatible(let reason):
-                Label("新版庫組已識別，但目前引擎不相容", systemImage: "exclamationmark.triangle")
+                Label("ADI 庫組與目前引擎不相容", systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundColor(.orange)
                 Text(reason).font(.caption).foregroundColor(.secondary)
             }

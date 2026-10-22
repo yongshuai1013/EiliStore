@@ -22,7 +22,7 @@ import UniformTypeIdentifiers
             Task {
                 do {
                     let status = try await EiliAnisetteService.shared.importLibraries(urls)
-                    if case .incompatible(let reason) = status { message = "新版庫組已保存供離線檢查，目前不能用於本機登入。\n" + reason }
+                    if case .incompatible(let reason) = status { message = "庫組已保存供離線檢查，目前不能用於本機登入。\n" + reason }
                     else { message = "舊版函式庫已匯入並通過基本檢查；尚未驗證真機登入結果。" }
                 } catch { message = safeMessage(error) }
                 await refreshLibraryStatus()

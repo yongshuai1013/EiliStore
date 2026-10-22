@@ -72,7 +72,7 @@ actor EiliAnisetteService {
     }
     private var libraries: URL { root.appendingPathComponent("Libraries", isDirectory: true) }
 
-    /// Legacy uses bounded headers; modern additionally inspects ELF dependencies and symbols.
+    /// Both layouts require bounded ELF metadata, dependencies and symbol preflight.
     /// Neither path initializes a VM/provider, creates an identity, or contacts Apple.
     func localLibraryStatus() -> EiliAnisetteLibraryStatus {
         #if EILI_ON_DEVICE_ANISETTE
@@ -91,10 +91,8 @@ actor EiliAnisetteService {
             guard let header = try? handle.read(upToCount: 64),
                   Self.validLibrary(header) else { return .invalid }
         }
-        if profile == .modern {
-            guard let report = try? ADILibraryCompatibility.read(directory: libraries, profile: profile) else { return .invalid }
-            if !report.runtimeAdapterAvailable || report.hasStaticBlockers { return .incompatible(report.summary) }
-        }
+        guard let report = try? ADILibraryCompatibility.read(directory: libraries, profile: profile) else { return .invalid }
+        if !report.runtimeAdapterAvailable || report.hasStaticBlockers { return .incompatible(report.summary) }
         return .present
         #else
         return .engineUnavailable
@@ -261,13 +259,16 @@ actor EiliAnisetteService {
             }
             try data.write(to: staging.appendingPathComponent(url.lastPathComponent), options: .atomic)
         }
-        let status: EiliAnisetteLibraryStatus
-        if profile == .modern {
-            let report: ADILibraryCompatibility
-            do { report = try ADILibraryCompatibility.read(directory: staging, profile: profile) }
-            catch { throw EiliAnisetteError.invalidLibraries }
-            status = report.runtimeAdapterAvailable && !report.hasStaticBlockers ? .present : .incompatible(report.summary)
-        } else { status = .present }
+        let report: ADILibraryCompatibility
+        do { report = try ADILibraryCompatibility.read(directory: staging, profile: profile) }
+        catch { throw EiliAnisetteError.invalidLibraries }
+        let status: EiliAnisetteLibraryStatus = report.runtimeAdapterAvailable && !report.hasStaticBlockers
+            ? .present : .incompatible(report.summary)
+        // Keep manual diagnostic imports when there is no usable set, but never
+        // replace an existing preflight-passing set with an incompatible one.
+        if case .incompatible = status, localLibraryStatus() == .present {
+            throw EiliAnisetteError.incompatibleLibraries(report.summary + " 原有通過檢查的函式庫已保留，未替換。")
+        }
         try Task.checkCancellation()
         let hadLibraries = fm.fileExists(atPath: libraries.path)
         if hadLibraries { try fm.moveItem(at: libraries, to: backup) }
