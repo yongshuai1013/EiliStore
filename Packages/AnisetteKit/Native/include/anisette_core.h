@@ -13,8 +13,9 @@
 
 #ifdef __cplusplus
 extern "C" {
-void reset_anisette_vm_uc(void);
 #endif
+
+void reset_anisette_vm_uc(void);
 
 typedef enum {
     ANISETTE_OK                            = 0,
