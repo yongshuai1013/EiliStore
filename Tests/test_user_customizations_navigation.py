@@ -19,6 +19,18 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         entry = settings.split("NavigationLink(destination: UserCustomizationsView())", 1)[1].split("Section(header:", 1)[0]
         self.assertNotIn(".disabled(", entry)
 
+    def test_customizations_remains_reachable_when_list_is_scrolled(self):
+        app = (SOURCES / "EiliStoreApp.swift").read_text()
+        settings = app.split("struct SettingsView: View", 1)[1]
+        toolbar = settings.split('.navigationTitle("設定")', 1)[1].split(".onAppear", 1)[0]
+        self.assertIn(".toolbar", toolbar)
+        self.assertIn("ToolbarItem(placement: .navigationBarTrailing)", toolbar)
+        self.assertIn("NavigationLink(destination: UserCustomizationsView())", toolbar)
+        self.assertIn('Text("用戶自定義")', toolbar)
+        self.assertIn('accessibilityIdentifier("settings-user-customizations-shortcut")', toolbar)
+        self.assertNotIn(".disabled(", toolbar)
+        self.assertNotIn("if isLoggedIn", toolbar)
+
     def test_page_hosts_controls_directly_and_uses_parent_navigation(self):
         page = (SOURCES / "UserCustomizationsView.swift").read_text()
         self.assertIn("struct UserCustomizationsView: View", page)

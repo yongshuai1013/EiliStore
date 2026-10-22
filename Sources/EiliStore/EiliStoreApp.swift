@@ -975,6 +975,16 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("設定")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    // Keep customizations reachable even when the list restores a lower scroll position.
+                    NavigationLink(destination: UserCustomizationsView()) {
+                        Text("用戶自定義")
+                    }
+                    .accessibilityIdentifier("settings-user-customizations-shortcut")
+                    .accessibilityHint("設定 Anisette 模式及 Anisette／SideSign 用戶端配置")
+                }
+            }
             .onAppear {
                 if PaxAuthService.shared.hasSavedSession,
                    let savedID = PaxAuthService.shared.currentAppleID,

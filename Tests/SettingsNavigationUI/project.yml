@@ -1,0 +1,40 @@
+name: SettingsNavigationUI
+options:
+  bundleIdPrefix: com.eili.test
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  SettingsNavigationHarness:
+    type: application
+    platform: iOS
+    sources:
+      - path: HarnessApp.swift
+      - path: NavigationStubs.swift
+      - path: ../../Sources/EiliStore/UserCustomizationsView.swift
+      - path: build/ExtractedNavigation.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.eili.settingsnavigation.harness
+        GENERATE_INFOPLIST_FILE: YES
+        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+  SettingsNavigationUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - SettingsNavigationUITests
+    dependencies:
+      - target: SettingsNavigationHarness
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.eili.settingsnavigation.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+schemes:
+  SettingsNavigationHarness:
+    build:
+      targets:
+        SettingsNavigationHarness: all
+        SettingsNavigationUITests: [test]
+    test:
+      targets:
+        - SettingsNavigationUITests

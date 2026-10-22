@@ -9,6 +9,27 @@ permissions:
   contents: read
 
 jobs:
+  settings-navigation-ui:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen for isolated navigation harness
+        run: brew install xcodegen
+      - name: Verify real Settings navigation on iPhone simulator (no Apple login)
+        run: bash Tests/run-settings-navigation-ui-tests.sh
+      - name: Upload navigation screenshots and UI test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: settings-navigation-ui-evidence
+          path: |
+            build/settings-navigation-ui.xcresult
+            build/settings-navigation-ui.log
+            build/settings-navigation-screenshots
+          if-no-files-found: ignore
+          retention-days: 7
+
   build:
     runs-on: macos-latest
     timeout-minutes: 45
