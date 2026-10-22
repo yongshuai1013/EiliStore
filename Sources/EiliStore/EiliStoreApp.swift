@@ -879,6 +879,9 @@ struct SignInstallView: View {
         NavigationView {
             List {
                 Section(header: Text("簽名")) {
+                    NavigationLink(destination: SignIPAView()) {
+                        Label("匯入 IPA 並簽名安裝", systemImage: "square.and.arrow.down")
+                    }
                     NavigationLink(destination: SigningFlowView()) {
                         Text("簽名 IPA")
                     }

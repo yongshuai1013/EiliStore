@@ -1,5 +1,6 @@
 import SwiftUI
 import SideSign
+import UniformTypeIdentifiers
 
 /// 保留舊入口，但共用可取消的登入流程，避免兩套 2FA 行為分歧。
 @MainActor
@@ -25,45 +26,113 @@ struct SignInView: View {
     }
 }
 
-/// 簽名 IPA 頁（UI 空殼，後端待接）
+/// Owns only an imported copy. An in-flight task retains it across navigation.
+private final class ImportedIPASelection: Sendable {
+    let file: ImportedIPAFile
+    let info: IPAParser.AppInfo
+    init(file: ImportedIPAFile, info: IPAParser.AppInfo) {
+        self.file = file
+        self.info = info
+    }
+    deinit { IPAImportStore.remove(file) }
+}
+
+/// 匯入本地 IPA，沿用軟體源的簽名與安裝流程。
+@MainActor
 struct SignIPAView: View {
-    @State private var selectedIPA: String? = nil
-    @State private var isSigning = false
-    @State private var progress = ""
+    @StateObject private var installer = SourceAppInstaller.shared
+    @State private var selectedIPA: ImportedIPASelection?
+    @State private var showFilePicker = false
+    @State private var isImporting = false
+    @State private var isVisible = false
+    @State private var importMessage: String?
     
     var body: some View {
         List {
             Section("IPA 文件") {
-                Button("選擇 IPA") {}
-                if let ipa = selectedIPA {
-                    Text(ipa)
+                Button("選擇 IPA") { showFilePicker = true }
+                    .disabled(isImporting || installer.isWorking)
+                if let selection = selectedIPA {
+                    Text(selection.file.originalFilename)
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    Text(selection.info.name).font(.headline)
+                    Text(selection.info.bundleId).font(.caption).textSelection(.enabled)
+                    Text("版本 \(selection.info.version)").font(.caption).foregroundColor(.secondary)
+                }
+                if isImporting { ProgressView("正在匯入與驗證...") }
+                if let message = importMessage {
+                    Text(message).font(.caption).foregroundColor(.red)
                 }
             }
             
-            Section("簽名") {
-                Button(action: {}) {
-                    HStack {
-                        Spacer()
-                        Text(isSigning ? "簽名中..." : "開始簽名")
-                            .foregroundColor(isSigning ? .secondary : .teal)
-                        Spacer()
+            Section("簽名並安裝") {
+                Button(installer.isWorking ? "正在處理..." : "開始簽名並安裝", action: startInstall)
+                    .disabled(isImporting || installer.isWorking || selectedIPA == nil)
+                Text("沿用已登入帳號的第一個開發者 Team 與活動證書。按下開始後才會簽名及安裝；匯入本身不會登入、佈建或安裝。")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+            
+            if !installer.statusMessage.isEmpty {
+                Section("共用安裝進度") {
+                    Text(installer.statusMessage).font(.caption).foregroundColor(.secondary)
+                    if installer.isWorking {
+                        if installer.progress >= 0 {
+                            ProgressView(value: min(1, max(0, installer.progress)))
+                        } else {
+                            ProgressView()
+                        }
                     }
-                }
-                .disabled(isSigning || selectedIPA == nil)
-            }
-            
-            if !progress.isEmpty {
-                Section("進度") {
-                    Text(progress)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
                 }
             }
         }
-        .navigationTitle("簽名 IPA")
+        .navigationTitle("匯入 IPA 並安裝")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { isVisible = true }
+        .onDisappear { isVisible = false; selectedIPA = nil }
+        .fileImporter(isPresented: $showFilePicker,
+                      allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data, .data]) { result in
+            switch result {
+            case .success(let url): importIPA(url)
+            case .failure(let error):
+                if (error as NSError).code != NSUserCancelledError {
+                    importMessage = "無法選取檔案：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func importIPA(_ url: URL) {
+        guard !isImporting, !installer.isWorking else { return }
+        isImporting = true
+        selectedIPA = nil
+        importMessage = nil
+        Task {
+            defer { isImporting = false }
+            do {
+                let selection = try await Task.detached(priority: .userInitiated) {
+                    let file = try IPAImportStore.stage(url)
+                    do {
+                        let info = try IPAParser.parse(ipaURL: file.url, requireInstallableMetadata: true)
+                        return ImportedIPASelection(file: file, info: info)
+                    } catch {
+                        IPAImportStore.remove(file)
+                        throw error
+                    }
+                }.value
+                if isVisible { selectedIPA = selection }
+            } catch {
+                importMessage = "匯入失敗：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func startInstall() {
+        guard let selection = selectedIPA, !installer.isWorking, !isImporting else { return }
+        Task {
+            defer { withExtendedLifetime(selection) {} }
+            await installer.installImportedIPA(at: selection.file.url)
+        }
     }
 }
 
@@ -282,4 +351,3 @@ struct CertificateView: View {
         }
     }
 }
-

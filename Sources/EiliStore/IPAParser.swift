@@ -5,7 +5,7 @@ import SideSign
 
 /// IPA 解析：從 IPA 提取 bundle ID、名稱、圖標
 struct IPAParser {
-    struct AppInfo {
+    struct AppInfo: Sendable {
         let name: String
         let bundleId: String
         let version: String
@@ -14,7 +14,7 @@ struct IPAParser {
     }
     
     /// 解析 IPA，返回 App 信息
-    static func parse(ipaURL: URL) throws -> AppInfo {
+    static func parse(ipaURL: URL, requireInstallableMetadata: Bool = false) throws -> AppInfo {
         let workDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: workDir) }
@@ -25,7 +25,9 @@ struct IPAParser {
         // 找 .app
         let payload = workDir.appendingPathComponent("Payload")
         let contents = try FileManager.default.contentsOfDirectory(at: payload, includingPropertiesForKeys: nil)
-        guard let appURL = contents.first(where: { $0.pathExtension == "app" }) else {
+        let apps = contents.filter { $0.pathExtension == "app" }
+        if requireInstallableMetadata && apps.count != 1 { throw IPAError.ambiguousPayload }
+        guard let appURL = apps.first else {
             throw IPAError.noAppFound
         }
         
@@ -36,11 +38,13 @@ struct IPAParser {
             throw IPAError.invalidPlist
         }
         
-        let bundleId = plist["CFBundleIdentifier"] as? String ?? "unknown"
-        let name = plist["CFBundleDisplayName"] as? String
+        let validated = requireInstallableMetadata
+            ? try IPAInstallMetadata(plist: plist, fallbackName: appURL.deletingPathExtension().lastPathComponent) : nil
+        let bundleId = validated?.bundleId ?? plist["CFBundleIdentifier"] as? String ?? "unknown"
+        let name = validated?.name ?? plist["CFBundleDisplayName"] as? String
             ?? plist["CFBundleName"] as? String
             ?? appURL.deletingPathExtension().lastPathComponent
-        let version = plist["CFBundleShortVersionString"] as? String ?? "1.0"
+        let version = validated?.version ?? plist["CFBundleShortVersionString"] as? String ?? "1.0"
 
         // Provisioning profiles are CMS-wrapped; use SideSign's parser so the
         // embedded profile's ExpirationDate is read from the profile plist.
@@ -114,11 +118,13 @@ struct IPAParser {
 enum IPAError: Error, LocalizedError {
     case noAppFound
     case invalidPlist
+    case ambiguousPayload
     
     var errorDescription: String? {
         switch self {
         case .noAppFound: return "IPA 中找不到 .app"
         case .invalidPlist: return "Info.plist 無效"
+        case .ambiguousPayload: return "IPA 的 Payload 必須包含且只包含一個主要 .app"
         }
     }
 }

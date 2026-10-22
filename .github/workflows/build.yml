@@ -12,6 +12,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Run offline IPA import and installer tests
+        run: |
+          bash Tests/run-ipa-import-tests.sh
+          bash Tests/run-ipa-installer-tests.sh
+
       - name: Build IDevice xcframework for iOS 15
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_ios_archive_audit.py
