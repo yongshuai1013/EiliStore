@@ -86,6 +86,75 @@ static inline int gettimeofday(struct timeval *tv, void *tz) {
 #include <sstream>
 #include <random>
 
+#include <unordered_set>
+#include "android_libc_strings.h"
+
+static bool supported_guest_import(const std::string &name) {
+    static const std::unordered_set<std::string> names = {
+        "__android_log_print",
+        "__cxa_allocate_exception",
+        "__cxa_begin_catch",
+        "__cxa_guard_acquire",
+        "__cxa_guard_release",
+        "__dynamic_cast",
+        "__errno",
+        "__errno_location",
+        "__memchr_chk",
+        "__system_property_get",
+        "arc4random",
+        "atof",
+        "atoi",
+        "atoll",
+        "calloc",
+        "chmod",
+        "close",
+        "dlclose",
+        "dlerror",
+        "dlopen",
+        "dlsym",
+        "free",
+        "fstat",
+        "ftruncate",
+        "getauxval",
+        "gettimeofday",
+        "lstat",
+        "malloc",
+        "memchr",
+        "memcmp",
+        "memcpy",
+        "memmem",
+        "memmove",
+        "memset",
+        "mkdir",
+        "open",
+        "pthread_mutex_init",
+        "pthread_rwlock_init",
+        "read",
+        "realloc",
+        "strcat",
+        "strchr",
+        "strcmp",
+        "strcpy",
+        "strcspn",
+        "strlen",
+        "strncat",
+        "strncmp",
+        "strncpy",
+        "strnlen",
+        "strpbrk",
+        "strrchr",
+        "strspn",
+        "strstr",
+        "strtod",
+        "strtol",
+        "strtoll",
+        "strtoull",
+        "umask",
+        "write",
+    };
+    return names.count(name) != 0;
+}
+
 const AndroidSystemProperties kAndroidProperties;
 
 static thread_local uint64_t g_last_pcs[16];
@@ -210,6 +279,10 @@ uint64_t EmulatorVM::register_import(const std::string &name) {
         return it->second;
     }
 
+    if (!supported_guest_import(name) || next_import_address > kImportAddress + kImportSize - 8) {
+        execution_error = "Unsupported guest import or exhausted import area: " + name;
+        return 0;
+    }
     uint64_t stub_addr = next_import_address;
     next_import_address += 8;
 
@@ -766,25 +839,92 @@ static void hook_getauxval(EmulatorVM *vm) {
     uc_reg_write(vm->uc, UC_ARM64_REG_X0, &val);
 }
 
+// Handles refer only to mapped guest modules or the explicitly implemented
+// system ABI. Never pass an ELF path/symbol to the host dlopen/dlsym.
+static const std::vector<std::string> guest_system_modules = {
+    "libc.so", "libdl.so", "liblog.so", "libm.so", "libz.so", "libstdc++.so", "libandroid.so"
+};
+static bool read_linker_string(EmulatorVM *vm, uint64_t address, std::string &out) {
+    out.clear();
+    for (size_t i = 0; i < 4096 && address <= UINT64_MAX - i; ++i) {
+        char c = 0;
+        if (uc_mem_read(vm->uc, address + i, &c, 1) != UC_ERR_OK) break;
+        if (c == 0) return true;
+        out.push_back(c);
+    }
+    vm->dynamic_link_error = "Invalid or oversized guest linker string";
+    return false;
+}
+static bool valid_guest_handle(EmulatorVM *vm, uint64_t handle) {
+    return handle == 1 || (handle >= 2 && handle - 2 < vm->loaded_libraries.size()) ||
+        (handle >= 0x1000 && handle - 0x1000 < guest_system_modules.size());
+}
+static bool system_module_has_import(uint64_t handle, const std::string &symbol) {
+    if (handle < 0x1000 || handle - 0x1000 >= guest_system_modules.size()) return false;
+    const std::string &module = guest_system_modules[handle - 0x1000];
+    const bool linker = symbol == "dlopen" || symbol == "dlsym" || symbol == "dlclose" || symbol == "dlerror";
+    const bool logging = symbol == "__android_log_print";
+    const bool cxx = symbol.rfind("__cxa_", 0) == 0 || symbol == "__dynamic_cast";
+    if (module == "libdl.so") return linker;
+    if (module == "liblog.so") return logging;
+    if (module == "libstdc++.so") return cxx && supported_guest_import(symbol);
+    if (module == "libc.so") return !linker && !logging && !cxx && supported_guest_import(symbol);
+    // No math, zlib or libandroid symbol implementation is supplied here.
+    return false;
+}
 static void hook_dlopen(EmulatorVM *vm) {
-    uint64_t handle = 0x50000000;
+    uint64_t path = 0, handle = 0;
+    uc_reg_read(vm->uc, UC_ARM64_REG_X0, &path);
+    if (!path) handle = 1; // dlopen(NULL): global guest scope
+    else {
+        std::string name;
+        if (read_linker_string(vm, path, name)) {
+            const auto slash = name.find_last_of('/');
+            if (slash != std::string::npos) name.erase(0, slash + 1);
+            for (size_t i = 0; i < vm->loaded_libraries.size(); ++i)
+                if (vm->loaded_libraries[i].name == name) { handle = i + 2; break; }
+            for (size_t i = 0; !handle && i < guest_system_modules.size(); ++i)
+                if (guest_system_modules[i] == name) { handle = 0x1000 + i; break; }
+            if (!handle) vm->dynamic_link_error = "Guest module not loaded: " + name;
+        }
+    }
     uc_reg_write(vm->uc, UC_ARM64_REG_X0, &handle);
 }
-
 static void hook_dlsym(EmulatorVM *vm) {
-    uint64_t handle = 0, sym_name_ptr = 0;
+    uint64_t handle = 0, pointer = 0, result = 0;
     uc_reg_read(vm->uc, UC_ARM64_REG_X0, &handle);
-    uc_reg_read(vm->uc, UC_ARM64_REG_X1, &sym_name_ptr);
-    std::string sym_name;
-    char c = 0;
-    if (sym_name_ptr) {
-        while (uc_mem_read(vm->uc, sym_name_ptr++, &c, 1) == UC_ERR_OK && c != '\0') sym_name.push_back(c);
+    uc_reg_read(vm->uc, UC_ARM64_REG_X1, &pointer);
+    std::string name;
+    // Android arm64 RTLD_DEFAULT is NULL, RTLD_NEXT is deliberately unsupported.
+    if (!valid_guest_handle(vm, handle) && handle != 0) vm->dynamic_link_error = "Invalid guest module handle";
+    else if (read_linker_string(vm, pointer, name)) {
+        if (handle == 0 || handle == 1) result = get_vm_symbol_address(vm, name);
+        else if (handle < 0x1000) {
+            const auto &symbols = vm->loaded_libraries[handle - 2].symbols;
+            auto it = symbols.find(name);
+            if (it != symbols.end()) result = it->second;
+        }
+        if (!result && (handle == 0 || handle == 1 || system_module_has_import(handle, name)) && supported_guest_import(name))
+            result = vm->register_import(name);
+        if (!result) vm->dynamic_link_error = "Guest symbol not found: " + name;
     }
-    uint64_t addr = get_vm_symbol_address(vm, sym_name);
-    if (!addr) {
-        addr = vm->register_import(sym_name);
+    uc_reg_write(vm->uc, UC_ARM64_REG_X0, &result);
+}
+static void hook_dlclose(EmulatorVM *vm) {
+    uint64_t handle = 0;
+    uc_reg_read(vm->uc, UC_ARM64_REG_X0, &handle);
+    int64_t result = valid_guest_handle(vm, handle) ? 0 : -1;
+    if (result) vm->dynamic_link_error = "Invalid guest module handle";
+    // Mapped ADI modules are pinned for the VM lifetime, as with RTLD_NODELETE.
+    uc_reg_write(vm->uc, UC_ARM64_REG_X0, &result);
+}
+static void hook_dlerror(EmulatorVM *vm) {
+    uint64_t result = 0;
+    if (!vm->dynamic_link_error.empty()) {
+        result = vm->write_string(vm->dynamic_link_error.c_str());
+        vm->dynamic_link_error.clear();
     }
-    uc_reg_write(vm->uc, UC_ARM64_REG_X0, &addr);
+    uc_reg_write(vm->uc, UC_ARM64_REG_X0, &result);
 }
 
 static void hook_cxa_guard_acquire(EmulatorVM *vm) {
@@ -928,6 +1068,8 @@ static void import_callback_router(uc_engine *uc, uint64_t address, uint32_t siz
     else if (name == "getauxval") hook_getauxval(vm);
     else if (name == "dlopen") hook_dlopen(vm);
     else if (name == "dlsym") hook_dlsym(vm);
+    else if (name == "dlclose") hook_dlclose(vm);
+    else if (name == "dlerror") hook_dlerror(vm);
     else if (name == "__cxa_guard_acquire") hook_cxa_guard_acquire(vm);
     else if (name == "__cxa_guard_release") hook_cxa_guard_release(vm);
     else if (name == "__cxa_allocate_exception") hook_cxa_allocate_exception(vm);
@@ -945,10 +1087,10 @@ static void import_callback_router(uc_engine *uc, uint64_t address, uint32_t siz
         uc_reg_write(vm->uc, UC_ARM64_REG_X0, &ret);
     }
     else if (name == "__android_log_print") hook_android_log_print(vm);
+    else if (dispatch_android_libc_string(vm, name)) { }
     else {
-
-        uint64_t ret = 0;
-        uc_reg_write(vm->uc, UC_ARM64_REG_X0, &ret);
+        vm->execution_error = "Unsupported guest call: " + name;
+        uc_emu_stop(uc);
     }
 }
 
@@ -1000,30 +1142,13 @@ static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo 
         }
     }
 
-    uint8_t sym_type = sym.st_info & 0xf;
-    bool is_data = (sym_type == 1  ) ||
-                   sym_name.rfind("_ZTV", 0) == 0 ||
-                   sym_name.rfind("_ZTI", 0) == 0 ||
-                   sym_name.rfind("_ZTS", 0) == 0 ||
-                   sym_name.rfind("kCF", 0) == 0 ||
-                   sym_name.rfind("kAudio", 0) == 0 ||
-                   sym_name.rfind("OBJC_", 0) == 0 ||
-                   sym_name == "__CFConstantStringClassReference" ||
-                   sym_name == "__sF" ||
-                   sym_name == "environ" ||
-                   sym_name == "__stack_chk_guard" ||
-                   sym_name == "__ctype_";
-
-    if (is_data) {
-        auto it = vm->imported_symbols.find(sym_name);
-        if (it != vm->imported_symbols.end()) return it->second;
-        uint64_t dummy = vm->heap.alloc(256);
-        std::vector<uint8_t> zeros(256, 0);
-        uc_mem_write(vm->uc, dummy, zeros.data(), 256);
-        vm->imported_symbols[sym_name] = dummy;
-        return dummy;
+    // Undefined weak symbols may legally resolve to zero. Strong data symbols
+    // require a real implementation, never a fabricated zero-filled object.
+    if ((sym.st_info >> 4) == 2) return 0;
+    if ((sym.st_info & 0xf) == 1) {
+        vm->execution_error = "Unsupported guest data symbol: " + sym_name;
+        return 0;
     }
-
     return vm->register_import(sym_name);
 }
 
@@ -1046,11 +1171,15 @@ static void apply_vm_relocations(EmulatorVM *vm, EmulatorVM::LibraryInfo &lib) {
                 applied++;
             } else if (type == R_AARCH64_JUMP_SLOT || type == R_AARCH64_GLOB_DAT || type == R_AARCH64_ABS64) {
                 uint64_t sym_addr = vm_resolve_symbol(vm, lib, sym_idx);
-                if (sym_addr != 0) {
+                if (!vm->execution_error.empty()) return;
+                {
                     uint64_t final_val = sym_addr + r.r_addend;
                     uc_mem_write(vm->uc, target_addr, &final_val, sizeof(final_val));
                     applied++;
                 }
+            } else if (type != 0) {
+                vm->execution_error = "Unsupported guest relocation: " + std::to_string(type);
+                return;
             }
         }
         LOG_UC("[Emulator] Applied %zu / %zu relocations for %s in '%s'\n",
@@ -1209,28 +1338,36 @@ void relocate_all_vm_libraries(EmulatorVM *vm) {
     LOG_UC("[Emulator] Relocating all %zu loaded libraries...\n", vm->loaded_libraries.size());
     for (auto &lib : vm->loaded_libraries) {
         apply_vm_relocations(vm, lib);
+        if (!vm->execution_error.empty()) return;
     }
 }
 
-void run_library_constructors(EmulatorVM *vm) {
+bool run_library_constructors(EmulatorVM *vm) {
     for (const auto &lib : vm->loaded_libraries) {
         if (lib.init_func) {
             LOG_UC("[Emulator] Calling DT_INIT at 0x%llx for '%s'...\n",
                    (unsigned long long)lib.init_func, lib.name.c_str());
             run_vm_procedure(vm, lib.init_func, {});
+            if (!vm->execution_error.empty()) return false;
         }
         if (lib.init_array && lib.init_arraysz) {
             size_t count = lib.init_arraysz / 8;
             for (size_t i = 0; i < count; i++) {
                 uint64_t ctor_ptr = 0;
-                if (uc_mem_read(vm->uc, lib.init_array + i * 8, &ctor_ptr, 8) == UC_ERR_OK && ctor_ptr != 0) {
+                if (uc_mem_read(vm->uc, lib.init_array + i * 8, &ctor_ptr, 8) != UC_ERR_OK) {
+                    vm->execution_error = "Unreadable guest constructor array";
+                    return false;
+                }
+                if (ctor_ptr != 0 && ctor_ptr != UINT64_MAX) {
                     LOG_UC("[Emulator] Calling DT_INIT_ARRAY[%zu] at 0x%llx for '%s'...\n",
                            i, (unsigned long long)ctor_ptr, lib.name.c_str());
                     run_vm_procedure(vm, ctor_ptr, {});
+                    if (!vm->execution_error.empty()) return false;
                 }
             }
         }
     }
+    return true;
 }
 
 uint64_t get_vm_symbol_address(EmulatorVM *vm, const std::string &name) {
@@ -1242,7 +1379,8 @@ uint64_t get_vm_symbol_address(EmulatorVM *vm, const std::string &name) {
 }
 
 int32_t run_vm_procedure(EmulatorVM *vm, uint64_t proc_addr, const std::vector<uint64_t> &args, uint64_t timeout_us, size_t max_count) {
-    if (!proc_addr) return -1;
+    if (!vm || !vm->uc || !proc_addr) return -1;
+    if (!vm->execution_error.empty()) return -1000;
     g_active_vm = vm;
 
     if (timeout_us == 0) timeout_us = 0;
@@ -1289,7 +1427,8 @@ int32_t run_vm_procedure(EmulatorVM *vm, uint64_t proc_addr, const std::vector<u
 
     uint64_t pc = 0;
     uc_reg_read(vm->uc, UC_ARM64_REG_PC, &pc);
-    if (err != UC_ERR_OK || pc != kReturnAddress) {
+    if (err != UC_ERR_OK || pc != kReturnAddress || !vm->execution_error.empty()) {
+        if (vm->execution_error.empty()) vm->execution_error = "Guest execution did not return normally";
         LOG_UC("[Emulator] Execution stopped with status %d: %s at PC=0x%llx (expected 0x%llx)\n",
                (int)err, uc_strerror(err), (unsigned long long)pc, (unsigned long long)kReturnAddress);
         return -1000 - (int32_t)err;

@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <errno.h>
 #include <fcntl.h>
 #if !defined(_WIN32) && !defined(_MSC_VER)
 #include <unistd.h>
@@ -38,12 +39,33 @@
 #include <sstream>
 #include <mutex>
 #include <new>
+#include <memory>
 
 static EmulatorVM *g_shared_vm = nullptr;
 static std::mutex g_vm_mutex;
 static std::string g_current_prov_path = "";
 static std::string g_current_android_id = "";
 static bool g_libraries_initialized = false;
+static const uint32_t kMaxADIDataSize = 64u * 1024u * 1024u;
+
+static bool read_guest_bytes(EmulatorVM *vm, uint64_t pointer_slot,
+                             uint64_t length_slot, uint8_t **data, uint32_t *length) {
+    uint64_t guest_pointer = 0;
+    uint32_t guest_length = 0;
+    if (!vm || !vm->uc || !data || !length ||
+        uc_mem_read(vm->uc, pointer_slot, &guest_pointer, sizeof(guest_pointer)) != UC_ERR_OK ||
+        uc_mem_read(vm->uc, length_slot, &guest_length, sizeof(guest_length)) != UC_ERR_OK ||
+        guest_pointer == 0 || guest_length == 0 || guest_length > kMaxADIDataSize) return false;
+    uint8_t *buffer = new (std::nothrow) uint8_t[guest_length];
+    if (!buffer) return false;
+    if (uc_mem_read(vm->uc, guest_pointer, buffer, guest_length) != UC_ERR_OK) {
+        delete[] buffer;
+        return false;
+    }
+    *data = buffer;
+    *length = guest_length;
+    return true;
+}
 
 static bool setup_vm_and_adi(
     EmulatorVM *&vm,
@@ -70,6 +92,17 @@ static bool setup_vm_and_adi(
         out_err = "The libstoreapi library set requires an Android ABI adapter that this build does not implement. "
                   "Use remote mode or compatible legacy libraries; do not rename libstoreapi.so.";
         return false;
+    }
+
+    if (g_shared_vm &&
+        (!g_shared_vm->execution_error.empty() ||
+         (!g_libraries_initialized && !g_shared_vm->loaded_libraries.empty()))) {
+        clear_active_vm();
+        delete g_shared_vm;
+        g_shared_vm = nullptr;
+        g_libraries_initialized = false;
+        g_current_prov_path.clear();
+        g_current_android_id.clear();
     }
 
     if (!g_shared_vm) {
@@ -99,7 +132,10 @@ static bool setup_vm_and_adi(
         }
 
         relocate_all_vm_libraries(vm);
-        run_library_constructors(vm);
+        if (!vm->execution_error.empty() || !run_library_constructors(vm)) {
+            out_err = "Library constructors failed in VM";
+            return false;
+        }
 
         uint64_t load_lib_ptr = get_vm_symbol_address(vm, kADISymbols.load_library);
         if (!load_lib_ptr) {
@@ -121,9 +157,19 @@ static bool setup_vm_and_adi(
 
     std::string uuid = format_uuid_string(identifier);
     out_uuid_prov_dir = std::string(provisioning_dir) + "/" + uuid;
-    mkdir(out_uuid_prov_dir.c_str(), 0755);
+    const bool created_provisioning_dir = mkdir(out_uuid_prov_dir.c_str(), 0755) == 0;
+    if (!created_provisioning_dir && errno != EEXIST) {
+        out_err = "Failed to create provisioning directory";
+        return false;
+    }
+    if (stat(out_uuid_prov_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+        out_err = "Provisioning path is not a directory";
+        return false;
+    }
 
-    if (out_uuid_prov_dir != g_current_prov_path) {
+    // Memory storage removes the previous directory between fetches. Reapply
+    // the path after recreation even if its string is unchanged.
+    if (created_provisioning_dir || out_uuid_prov_dir != g_current_prov_path) {
         uint64_t set_prov_ptr = get_vm_symbol_address(vm, kADISymbols.set_provisioning_path);
         if (!set_prov_ptr) {
             out_err = "Symbol ADISetProvisioningPath missing in VM";
@@ -175,7 +221,8 @@ static int32_t get_anisette_headers_uc_impl(
     char **out_json
 ) {
     LOG_UC("[AnisetteKit - UC] Invoked get_anisette_headers_uc\n");
-    if (!lib_dir || !provisioning_dir || !identifier || !adi_pb || !out_json) {
+    if (!lib_dir || !provisioning_dir || !identifier || !adi_pb || !out_json ||
+        adi_pb_len == 0 || adi_pb_len > kMaxADIDataSize) {
         return ANISETTE_ERR_INVALID_ARGUMENT;
     }
 
@@ -192,9 +239,15 @@ static int32_t get_anisette_headers_uc_impl(
 
     std::string adi_pb_path = uuid_prov_dir + "/" + kADISymbols.adi_pb_filename;
     FILE* f = fopen(adi_pb_path.c_str(), "wb");
-    if (f) {
-        fwrite(adi_pb, 1, adi_pb_len, f);
-        fclose(f);
+    if (!f) {
+        *out_json = strdup("{\"error\":\"Failed to write adi.pb\"}");
+        return ANISETTE_ERR_READ_FILE_FAILED;
+    }
+    bool write_ok = fwrite(adi_pb, 1, adi_pb_len, f) == adi_pb_len;
+    int write_close_result = fclose(f);
+    if (!write_ok || write_close_result != 0) {
+        *out_json = strdup("{\"error\":\"Failed to write adi.pb\"}");
+        return ANISETTE_ERR_READ_FILE_FAILED;
     }
 
     uint64_t otp_req_ptr = get_vm_symbol_address(vm, kADISymbols.otp_request);
@@ -221,26 +274,17 @@ static int32_t get_anisette_headers_uc_impl(
         return res;
     }
 
-    uint64_t final_mid_addr = 0, final_otp_addr = 0;
+    uint8_t *mid_data = nullptr, *otp_data = nullptr;
     uint32_t final_mid_len = 0, final_otp_len = 0;
-    
-    uc_mem_read(vm->uc, mid_ptr, &final_mid_addr, 8);
-    uc_mem_read(vm->uc, mid_len_ptr, &final_mid_len, 4);
-    uc_mem_read(vm->uc, otp_ptr, &final_otp_addr, 8);
-    uc_mem_read(vm->uc, otp_len_ptr, &final_otp_len, 4);
-
-    std::vector<uint8_t> mid_data(final_mid_len);
-    if (final_mid_len > 0 && final_mid_addr != 0) {
-        uc_mem_read(vm->uc, final_mid_addr, mid_data.data(), final_mid_len);
+    if (!read_guest_bytes(vm, mid_ptr, mid_len_ptr, &mid_data, &final_mid_len) ||
+        !read_guest_bytes(vm, otp_ptr, otp_len_ptr, &otp_data, &final_otp_len)) {
+        delete[] mid_data; delete[] otp_data;
+        *out_json = strdup("{\"error\":\"Incomplete or invalid OTP response\"}");
+        return ANISETTE_ERR_READ_FILE_FAILED;
     }
-
-    std::vector<uint8_t> otp_data(final_otp_len);
-    if (final_otp_len > 0 && final_otp_addr != 0) {
-        uc_mem_read(vm->uc, final_otp_addr, otp_data.data(), final_otp_len);
-    }
-
-    std::string mid = base64_encode(mid_data.data(), final_mid_len);
-    std::string otp = base64_encode(otp_data.data(), final_otp_len);
+    std::unique_ptr<uint8_t[]> mid_owner(mid_data), otp_owner(otp_data);
+    std::string mid = base64_encode(mid_owner.get(), final_mid_len);
+    std::string otp = base64_encode(otp_owner.get(), final_otp_len);
 
     std::stringstream ss;
     ss << "{\"X-Apple-I-MD-M\":\"" << mid
@@ -260,7 +304,8 @@ static int32_t start_provision_uc_impl(
     char **out_json
 ) {
     LOG_UC("[AnisetteKit - UC] Invoked start_provision_uc\n");
-    if (!lib_dir || !provisioning_dir || !identifier || !spim || !out_json) {
+    if (!lib_dir || !provisioning_dir || !identifier || !spim || !out_json ||
+        spim_len == 0 || spim_len > kMaxADIDataSize) {
         return ANISETTE_ERR_INVALID_ARGUMENT;
     }
 
@@ -307,24 +352,21 @@ static int32_t start_provision_uc_impl(
         return res;
     }
 
-    uint64_t final_cpim_addr = 0;
     uint32_t final_cpim_len = 0;
     uint32_t session = 0;
 
-    uc_mem_read(vm->uc, cpim_ptr, &final_cpim_addr, 8);
-    uc_mem_read(vm->uc, cpim_len_ptr, &final_cpim_len, 4);
-    uc_mem_read(vm->uc, session_ptr, &session, 4);
-
-    LOG_UC("[AnisetteKit - UC] ADIProvisioningStart OK: cpim_addr=0x%llx, cpim_len=%u, session=%u\n",
-           (unsigned long long)final_cpim_addr, final_cpim_len, session);
-    fflush(stdout);
-
-    std::vector<uint8_t> cpim_data(final_cpim_len);
-    if (final_cpim_len > 0 && final_cpim_addr != 0) {
-        uc_mem_read(vm->uc, final_cpim_addr, cpim_data.data(), final_cpim_len);
+    if (uc_mem_read(vm->uc, session_ptr, &session, sizeof(session)) != UC_ERR_OK) {
+        *out_json = strdup("{\"error\":\"Incomplete provisioning response\"}");
+        return ANISETTE_ERR_READ_FILE_FAILED;
     }
 
-    std::string cpim_b64 = base64_encode(cpim_data.data(), final_cpim_len);
+    uint8_t *cpim_data = nullptr;
+    if (!read_guest_bytes(vm, cpim_ptr, cpim_len_ptr, &cpim_data, &final_cpim_len)) {
+        *out_json = strdup("{\"error\":\"Incomplete or invalid CPIM response\"}");
+        return ANISETTE_ERR_READ_FILE_FAILED;
+    }
+    std::unique_ptr<uint8_t[]> cpim_owner(cpim_data);
+    std::string cpim_b64 = base64_encode(cpim_owner.get(), final_cpim_len);
 
     std::stringstream ss;
     ss << "{\"cpim_base64\":\"" << cpim_b64 << "\",\"session\":" << session << "}";
@@ -345,7 +387,8 @@ static int32_t end_provision_uc_impl(
     char **out_json
 ) {
     LOG_UC("[AnisetteKit - UC] Invoked end_provision_uc\n");
-    if (!lib_dir || !provisioning_dir || !identifier || !ptm || !tk || !out_json) {
+    if (!lib_dir || !provisioning_dir || !identifier || !ptm || !tk || !out_json ||
+        ptm_len == 0 || tk_len == 0 || ptm_len > kMaxADIDataSize || tk_len > kMaxADIDataSize) {
         return ANISETTE_ERR_INVALID_ARGUMENT;
     }
 
@@ -389,15 +432,22 @@ static int32_t end_provision_uc_impl(
         return ANISETTE_ERR_READ_FILE_FAILED;
     }
 
-    fseek(f, 0, SEEK_END);
-    size_t size = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    bool io_ok = fseek(f, 0, SEEK_END) == 0;
+    long file_size = io_ok ? ftell(f) : -1;
+    io_ok = io_ok && file_size > 0 && (unsigned long)file_size <= kMaxADIDataSize;
+    if (io_ok) io_ok = fseek(f, 0, SEEK_SET) == 0;
+    std::vector<uint8_t> pb_data;
+    if (io_ok) {
+        pb_data.resize((size_t)file_size);
+        io_ok = fread(pb_data.data(), 1, pb_data.size(), f) == pb_data.size();
+    }
+    int close_result = fclose(f);
+    if (!io_ok || close_result != 0) {
+        *out_json = strdup("{\"error\":\"Invalid or incomplete generated adi.pb\"}");
+        return ANISETTE_ERR_READ_FILE_FAILED;
+    }
 
-    std::vector<uint8_t> pb_data(size);
-    fread(pb_data.data(), 1, size, f);
-    fclose(f);
-
-    std::string adi_pb_b64 = base64_encode(pb_data.data(), size);
+    std::string adi_pb_b64 = base64_encode(pb_data.data(), pb_data.size());
 
     std::stringstream ss;
     ss << "{\"adi_pb_base64\":\"" << adi_pb_b64 << "\"}";

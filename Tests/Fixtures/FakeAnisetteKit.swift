@@ -17,19 +17,23 @@ public enum FakeAnisetteKitControl {
     nonisolated(unsafe) private static var _delay: UInt64 = 0
     nonisolated(unsafe) private static var _resets = 0
     nonisolated(unsafe) private static var _initializations = 0
-    public static func reset() { lock.lock(); defer { lock.unlock() }; _calls = 0; _identifier = nil; _blob = nil; _headers = [:]; _responseBlob = Data([0xFA, 0xCE]); _throws = false; _delay = 0; _initializations = 0 }
-    public static func configure(blob: Data?, throwsError: Bool = false, delay: UInt64 = 0) { lock.lock(); defer { lock.unlock() }; _responseBlob = blob; _throws = throwsError; _delay = delay }
-    private static func begin(identifier: UUID, blob: Data?, headers: [String: String]) -> (Bool, UInt64, Data?) {
+    nonisolated(unsafe) private static var _routingInfo = "v3"
+    public static func reset() { lock.lock(); defer { lock.unlock() }; _calls = 0; _identifier = nil; _blob = nil; _headers = [:]; _responseBlob = Data([0xFA, 0xCE]); _throws = false; _delay = 0; _initializations = 0; _routingInfo = "v3" }
+    public static func configure(blob: Data?, throwsError: Bool = false, delay: UInt64 = 0, routingInfo: String = "v3") { lock.lock(); defer { lock.unlock() }; _responseBlob = blob; _throws = throwsError; _delay = delay; _routingInfo = routingInfo }
+    private static func begin(identifier: UUID, blob: Data?, headers: [String: String]) -> (Bool, UInt64, Data?, String) {
         lock.lock(); defer { lock.unlock() }
         _calls += 1; _identifier = identifier; _blob = blob
         _headers = headers
-        return (_throws, _delay, _responseBlob)
+        return (_throws, _delay, _responseBlob, _routingInfo)
     }
     static func run(identifier: UUID, blob: Data?, headers: [String: String]) async throws -> ([String: String], Data?) {
-        let (shouldThrow, delay, result) = begin(identifier: identifier, blob: blob, headers: headers)
+        let (shouldThrow, delay, result, routingInfo) = begin(identifier: identifier, blob: blob, headers: headers)
         if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
         if shouldThrow { throw FakeAnisetteError.expected }
-        return (Dictionary(uniqueKeysWithValues: ["X-Apple-I-MD-M", "X-Apple-I-MD", "X-Apple-I-MD-LU", "X-Apple-I-MD-RINFO", "X-Mme-Device-Id", "X-Apple-I-SRL-NO", "X-Mme-Client-Info", "User-Agent", "X-Apple-I-Client-Time", "X-Apple-Locale", "X-Apple-I-TimeZone"].enumerated().map { ($1, "v\($0)") }), result)
+        var response = Dictionary(uniqueKeysWithValues: ["X-Apple-I-MD-M", "X-Apple-I-MD", "X-Apple-I-MD-LU", "X-Apple-I-MD-RINFO", "X-Mme-Device-Id", "X-Apple-I-SRL-NO", "X-Mme-Client-Info", "User-Agent", "X-Apple-I-Client-Time", "X-Apple-Locale", "X-Apple-I-TimeZone"].enumerated().map { ($1, "v\($0)") })
+        response["x-apple-i-md-rinfo"] = routingInfo
+        response.removeValue(forKey: "X-Apple-I-MD-RINFO")
+        return (response, result)
     }
     public static var calls: Int { lock.lock(); defer { lock.unlock() }; return _calls }
     public static var identifier: UUID? { lock.lock(); defer { lock.unlock() }; return _identifier }

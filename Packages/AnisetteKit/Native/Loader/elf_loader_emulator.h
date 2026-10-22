@@ -90,6 +90,9 @@ struct EmulatorVM {
 
     uc_engine *uc;
     uc_err initialization_error;
+    // A guest ABI failure must not be mistaken for a successful X0 == 0.
+    std::string execution_error;
+    std::string dynamic_link_error;
     PageAllocator heap;
     PageAllocator library_alloc;
     
@@ -118,7 +121,7 @@ struct EmulatorVM {
 void clear_active_vm();
 bool load_library_to_vm(EmulatorVM *vm, const std::string &file_path, const std::string &so_name);
 void relocate_all_vm_libraries(EmulatorVM *vm);
-void run_library_constructors(EmulatorVM *vm);
+bool run_library_constructors(EmulatorVM *vm);
 uint64_t get_vm_symbol_address(EmulatorVM *vm, const std::string &name);
 
 int32_t run_vm_procedure(EmulatorVM *vm, uint64_t proc_addr, const std::vector<uint64_t> &args, uint64_t timeout_us = 0, size_t max_count = 0);

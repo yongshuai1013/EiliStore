@@ -5,18 +5,20 @@ import AnisetteKit
 #endif
 
 private final class FakeKeychainStore: @unchecked Sendable {
-    private let lock = NSLock(); private var values: [String: Data] = [:]
+    private let lock = NSLock(); private var values: [String: Data] = [:]; private var failedSaves: Set<String> = []
     func get(_ key: String) -> Data? { lock.lock(); defer { lock.unlock() }; return values[key] }
-    func put(_ data: Data, _ key: String) { lock.lock(); defer { lock.unlock() }; values[key] = data }
+    func put(_ data: Data, _ key: String) -> Bool { lock.lock(); defer { lock.unlock() }; if failedSaves.contains(key) { return false }; values[key] = data; return true }
     func remove(_ key: String) { lock.lock(); defer { lock.unlock() }; values.removeValue(forKey: key) }
+    func failSave(_ key: String, _ fail: Bool) { lock.lock(); defer { lock.unlock() }; if fail { failedSaves.insert(key) } else { failedSaves.remove(key) } }
 }
 private let fakeKeychain = FakeKeychainStore()
 enum KeychainHelper {
-    @discardableResult static func save(_ data: Data, forKey key: String) -> Bool { fakeKeychain.put(data, key); return true }
+    @discardableResult static func save(_ data: Data, forKey key: String) -> Bool { fakeKeychain.put(data, key) }
     static func load(forKey key: String) -> Data? { fakeKeychain.get(key) }
     @discardableResult static func saveString(_ value: String, forKey key: String) -> Bool { save(Data(value.utf8), forKey: key) }
     static func loadString(forKey key: String) -> String? { load(forKey: key).flatMap { String(data: $0, encoding: .utf8) } }
     @discardableResult static func delete(forKey key: String) -> Bool { fakeKeychain.remove(key); return true }
+    static func failSaveForTests(_ key: String, _ fail: Bool) { fakeKeychain.failSave(key, fail) }
 }
 
 @main struct EiliAnisetteServiceTests {
@@ -144,13 +146,14 @@ enum KeychainHelper {
         let supportRootExisted = FileManager.default.fileExists(atPath: supportRoot.path)
         if supportRootExisted { try FileManager.default.copyItem(at: supportRoot, to: backupURL) }
         let originalLocalBlob = KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")
+        let originalLocalRoutingInfo = KeychainHelper.load(forKey: "eilistore.anisette.local.routinginfo")
         let originalRemoteBlob = KeychainHelper.load(forKey: "paxstore.anisette.adiblob")
         let originalAuthSession = KeychainHelper.load(forKey: "paxstore.auth.session")
         defer {
             try? FileManager.default.removeItem(at: supportRoot)
             if supportRootExisted { try? FileManager.default.moveItem(at: backupURL, to: supportRoot) }
             else { try? FileManager.default.removeItem(at: backupURL) }
-            for (key, value) in [("eilistore.anisette.local.adiblob", originalLocalBlob), ("paxstore.anisette.adiblob", originalRemoteBlob), ("paxstore.auth.session", originalAuthSession)] {
+            for (key, value) in [("eilistore.anisette.local.adiblob", originalLocalBlob), ("eilistore.anisette.local.routinginfo", originalLocalRoutingInfo), ("paxstore.anisette.adiblob", originalRemoteBlob), ("paxstore.auth.session", originalAuthSession)] {
                 if let value { KeychainHelper.save(value, forKey: key) } else { KeychainHelper.delete(forKey: key) }
             }
         }
@@ -260,17 +263,35 @@ enum KeychainHelper {
         check(remoteCallsAfterImplicitLocal == remoteCallsBeforeMissing, "saved on-device preference called remote")
         check(localData.machineID == "v0" && localData.oneTimePassword == "v1", "local header conversion")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == localResponseBlob, "local blob persistence")
+        let routingKey = "eilistore.anisette.local.routinginfo"
+        check(KeychainHelper.loadString(forKey: routingKey) == "v3", "local routing-info not persisted")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteBlobBeforeLocal, "local branch modified remote blob")
         let localProvisioningID = FakeAnisetteKitControl.identifier
+        FakeAnisetteKitControl.reset()
+        FakeAnisetteKitControl.configure(blob: nil, routingInfo: "returned-no-blob")
+        let restartedService = EiliAnisetteService()
+        _ = try await restartedService.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
+        check(FakeAnisetteKitControl.headers["X-Apple-I-MD-RINFO"] == "v3", "saved routing-info not reused by new service instance")
+        check(KeychainHelper.loadString(forKey: routingKey) == "returned-no-blob", "routing-info not refreshed without new blob")
+        FakeAnisetteKitControl.reset()
+        FakeAnisetteKitControl.configure(blob: nil, routingInfo: "must-not-overwrite")
         let overriddenLocal = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob,
             servers: urls, mode: .onDevice, configuration: overrideConfiguration)
         checkOverrides(overriddenLocal, configuration: overrideConfiguration)
         check(overriddenLocal.machineID == "v0" && overriddenLocal.oneTimePassword == "v1" && overriddenLocal.clientTime == "v8", "local overrides changed generated values")
         check(FakeAnisetteKitControl.headers == overrideConfiguration.requestHeaderOverrides, "local provider did not receive configured metadata")
+        check(KeychainHelper.loadString(forKey: routingKey) == "returned-no-blob", "explicit routing override polluted persisted provisioning info")
         check(FakeAnisetteKitControl.identifier == localProvisioningID, "custom device header changed local provisioning identity")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteBlobBeforeLocal, "local override changed remote identity")
         let revertedLocal = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .onDevice)
-        check(revertedLocal.clientInfo == "v6" && revertedLocal.userAgent == "v7" && FakeAnisetteKitControl.headers.isEmpty, "local overrides survived reset")
+        check(revertedLocal.clientInfo == "v6" && revertedLocal.userAgent == "v7" && FakeAnisetteKitControl.headers["X-Apple-I-MD-RINFO"] == "returned-no-blob", "local overrides survived reset or cached routing-info absent")
+        KeychainHelper.failSaveForTests(routingKey, true)
+        FakeAnisetteKitControl.reset(); FakeAnisetteKitControl.configure(blob: nil, routingInfo: "save-fails")
+        do {
+            _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
+            fatalError("routing-info save failure was ignored")
+        } catch EiliAnisetteError.storageFailed {}
+        KeychainHelper.failSaveForTests(routingKey, false)
         print("PASS: local client overrides, provider headers, reset/defaults and provisioning identity isolation")
         UserDefaults.standard.set("remote", forKey: EiliAnisetteMode.preferenceKey)
         FakeAnisetteKitControl.reset()
@@ -312,6 +333,7 @@ enum KeychainHelper {
         try await svc.resetLocal()
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == nil, "reset retained local blob")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == nil, "reset retained local identifier")
+        check(KeychainHelper.load(forKey: "eilistore.anisette.local.routinginfo") == nil, "reset retained local routing-info")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteKeep, "reset cleared remote blob")
         for (key, value) in protectedLoginValues {
             check(KeychainHelper.load(forKey: key) == value, "local reset changed protected login key: \(key)")

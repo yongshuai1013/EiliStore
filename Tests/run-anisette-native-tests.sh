@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Builds the same pinned TCI interpreter as production, for this host only.
+# Executes only self-authored synthetic ARM64 instructions and temporary dummy data.
+# Never downloads, packages or executes Apple libraries and never contacts Apple.
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REV=a53ddc9ac6d65b24936d4a37917333fcd816cfd0
+WORK="${EILI_NATIVE_TEST_WORK:-${TMPDIR:-/tmp}/eilistore-native-tci-a53ddc9}"
+SRC="${EILI_UNICORN_SOURCE:-$WORK/src}"
+BUILD="${EILI_NATIVE_TEST_BUILD:-$WORK/build}"
+CXX="${CXX:-c++}"
+for tool in cmake git "$CXX"; do command -v "$tool" >/dev/null || { echo "Missing $tool" >&2; exit 2; }; done
+if [[ ! -d "$SRC/.git" ]]; then
+  [[ -z "${EILI_UNICORN_SOURCE:-}" ]] || { echo "Provided Unicorn source is not a checkout" >&2; exit 2; }
+  mkdir -p "$SRC"
+  git -C "$SRC" init -q
+  git -C "$SRC" remote add origin https://github.com/mahee96/unicorn.git
+  GIT_TERMINAL_PROMPT=0 git -C "$SRC" fetch --depth 1 origin "$REV"
+  git -C "$SRC" checkout --detach "$REV"
+fi
+[[ "$(git -C "$SRC" rev-parse HEAD)" == "$REV" ]] || { echo "Unicorn revision mismatch" >&2; exit 1; }
+HOST_FLAGS=""
+case "$(uname -m)" in x86_64|amd64) HOST_FLAGS=-mcx16 ;; esac
+cmake -S "$SRC" -B "$BUILD" \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="$HOST_FLAGS" \
+  -DUNICORN_ARCH=aarch64 -DUNICORN_ENABLE_TCI=ON -DBUILD_SHARED_LIBS=OFF \
+  -DUNICORN_LEGACY_STATIC_ARCHIVE=ON -DUNICORN_BUILD_TESTS=OFF -DUNICORN_INSTALL=OFF
+cmake --build "$BUILD" --target unicorn_archive -j 4
+LIB="$BUILD/libunicorn.a"
+[[ -f "$LIB" ]] || { echo "Missing host Unicorn archive" >&2; exit 1; }
+OUT=$(mktemp -d)
+trap 'rm -rf "$OUT"' EXIT
+INCLUDES=(-I "$SRC/include" -I "$ROOT/Packages/AnisetteKit/Native" -I "$ROOT/Packages/AnisetteKit/Native/include")
+LOADER="$ROOT/Packages/AnisetteKit/Native/Loader/elf_loader_emulator.cpp"
+BASE="$ROOT/Packages/AnisetteKit/Native/anisette_base.cpp"
+LINK=(-pthread)
+[[ "$(uname -s)" != Linux ]] || LINK+=(-ldl -lm)
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/AndroidDynamicLinkerTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/dynamic-linker"
+"$OUT/dynamic-linker"
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/AndroidLibcStringsTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/libc-strings"
+"$OUT/libc-strings"
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeADIOutputTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/adi-output"
+"$OUT/adi-output"
+echo 'PASS: native TCI synthetic ABI, linker and provisioning-output tests (not Apple login verification)'

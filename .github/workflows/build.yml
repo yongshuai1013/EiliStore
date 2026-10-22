@@ -9,6 +9,14 @@ permissions:
   contents: read
 
 jobs:
+  native-anisette-abi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run pinned TCI native ABI tests (synthetic guest code only)
+        run: bash Tests/run-anisette-native-tests.sh
+
   settings-navigation-ui:
     runs-on: macos-latest
     timeout-minutes: 20

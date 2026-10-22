@@ -9,11 +9,20 @@ class ADILoaderContractTests(unittest.TestCase):
     def test_explicit_hooks_match_diagnostic_table(self):
         native = (ROOT / 'Packages/AnisetteKit/Native/Loader/elf_loader_emulator.cpp').read_text()
         router = native.rsplit('static void import_callback_router', 1)[1].split('static uint64_t vm_resolve_symbol', 1)[0]
-        actual = set(re.findall(r'name == "([^"]+)"', router))
+        actual = set(re.findall(r'name\s*==\s*"([^"]+)"', router))
+        strings = (ROOT / 'Packages/AnisetteKit/Native/Loader/android_libc_strings.h').read_text()
+        actual.update(re.findall(r'name\s*==\s*"([^"]+)"', strings))
+        native_table = native.split('static bool supported_guest_import', 1)[1].split('return names.count', 1)[0]
+        supported = set(re.findall(r'"([^"]+)"', native_table))
         policy = (ROOT / 'Sources/EiliStore/ADILibraryCompatibility.swift').read_text()
         declared = re.search(r'static let handledImports: Set<String> = \[(.*?)\]', policy, re.S).group(1)
         self.assertEqual(actual, set(re.findall(r'"([^"]+)"', declared)))
+        self.assertEqual(actual, supported)
         self.assertNotIn('pthread_create', actual)
+        self.assertIn('memmove', actual)
+        self.assertIn('dlerror', actual)
+        self.assertNotIn('uint64_t ret = 0;', router.rsplit('else {', 1)[1])
+        self.assertIn('uc_emu_stop(uc)', router.rsplit('else {', 1)[1])
 
     def test_six_required_entrypoints_exclude_optional_cleanup(self):
         native = (ROOT / 'Packages/AnisetteKit/Native/anisette_base.h').read_text().split('struct ADISymbols', 1)[1]

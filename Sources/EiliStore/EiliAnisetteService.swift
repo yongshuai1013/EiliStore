@@ -51,6 +51,7 @@ actor EiliAnisetteService {
     static let shared = EiliAnisetteService()
     private static let localIdentifierKey = "eilistore.anisette.local.identifier"
     private static let localBlobKey = "eilistore.anisette.local.adiblob"
+    private static let localRoutingInfoKey = "eilistore.anisette.local.routinginfo"
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
     #if EILI_ON_DEVICE_ANISETTE
@@ -158,11 +159,21 @@ actor EiliAnisetteService {
                 provider: UnicornAnisetteDataProvider(), libraryDirectoryResolver: { directory })
         }
         guard let client = localClient else { throw EiliAnisetteError.missingLibraries }
+        var requestHeaders = configuration.requestHeaderOverrides
+        let explicitRoutingOverride = requestHeaders.keys.contains { $0.caseInsensitiveCompare("X-Apple-I-MD-RINFO") == .orderedSame }
+        if !explicitRoutingOverride, let routingInfo = KeychainHelper.loadString(forKey: Self.localRoutingInfoKey) {
+            requestHeaders["X-Apple-I-MD-RINFO"] = routingInfo
+        }
         let (headers, blob) = try await client.getAnisetteData(identifier: identifier,
             storage: .memory(existingBlob: KeychainHelper.load(forKey: Self.localBlobKey)),
-            headers: .init(rawHeaders: configuration.requestHeaderOverrides))
+            headers: .init(rawHeaders: requestHeaders))
         // Save a provisioned identity before honouring cancellation, never log its payload.
         if let blob, !KeychainHelper.save(blob, forKey: Self.localBlobKey) {
+            throw EiliAnisetteError.storageFailed
+        }
+        let returnedRoutingInfo = headers.first { $0.key.caseInsensitiveCompare("X-Apple-I-MD-RINFO") == .orderedSame }?.value
+        if (blob != nil || !explicitRoutingOverride), let returnedRoutingInfo,
+           !KeychainHelper.saveString(returnedRoutingInfo, forKey: Self.localRoutingInfoKey) {
             throw EiliAnisetteError.storageFailed
         }
         try Task.checkCancellation()
@@ -299,6 +310,7 @@ actor EiliAnisetteService {
         }
         KeychainHelper.delete(forKey: Self.localIdentifierKey)
         KeychainHelper.delete(forKey: Self.localBlobKey)
+        KeychainHelper.delete(forKey: Self.localRoutingInfoKey)
         #if EILI_ON_DEVICE_ANISETTE
         localClient = nil
         resetLocalAnisetteEngine()
