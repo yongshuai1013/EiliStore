@@ -16,6 +16,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.eili.settingsnavigation.harness
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
         IPHONEOS_DEPLOYMENT_TARGET: "15.0"
   SettingsNavigationUITests:
     type: bundle.ui-testing

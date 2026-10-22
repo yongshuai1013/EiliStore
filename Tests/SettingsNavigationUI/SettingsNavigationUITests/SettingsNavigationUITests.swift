@@ -8,45 +8,56 @@ final class SettingsNavigationUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launch()
-    }
-
-    func testSettingsShortcutSurvivesDeepScrollAndBothRoutesWork() {
         let settingsTab = app.tabBars.buttons["設定"]
         XCTAssertTrue(settingsTab.waitForExistence(timeout: 10))
         settingsTab.tap()
+    }
 
+    private var settingsList: XCUIElement {
+        if app.collectionViews.firstMatch.exists { return app.collectionViews.firstMatch }
+        if app.tables.firstMatch.exists { return app.tables.firstMatch }
+        return app.scrollViews.firstMatch
+    }
+
+    func testOriginalListRouteOpensCustomizations() {
+        let route = app.buttons["settings-user-customizations"]
+        let list = settingsList
+        XCTAssertTrue(list.exists)
+        for _ in 0..<6 {
+            if route.isHittable { break }
+            list.swipeUp()
+        }
+        XCTAssertTrue(route.isHittable)
+        route.tap()
+        assertCustomizationPage()
+        attachScreenshot(named: "customizations-from-list")
+    }
+
+    func testSettingsShortcutSurvivesDeepScroll() {
         let listRoute = app.buttons["settings-user-customizations"]
         let toolbarRoute = app.buttons["settings-user-customizations-shortcut"]
         XCTAssertTrue(listRoute.waitForExistence(timeout: 5))
         XCTAssertTrue(toolbarRoute.waitForExistence(timeout: 5))
-
-        // Scroll by content landmarks rather than assuming a fixed screen distance.
-        let about = app.staticTexts["關於"]
         attachScreenshot(named: "settings-top")
-        for _ in 0..<12 where listRoute.isHittable || !about.isHittable {
-            app.swipeUp()
+
+        let list = settingsList
+        XCTAssertTrue(list.exists)
+        let about = app.staticTexts["關於"]
+        for _ in 0..<12 {
+            if !listRoute.isHittable && about.isHittable { break }
+            list.swipeUp()
         }
-        XCTAssertTrue(about.waitForExistence(timeout: 3), "About section should be reachable by scrolling")
+        XCTAssertTrue(about.isHittable, "About section should be visible after scrolling")
         XCTAssertFalse(listRoute.isHittable, "The list route should have scrolled out of the viewport")
         XCTAssertTrue(toolbarRoute.isHittable, "The navigation-bar shortcut must remain reachable")
         attachScreenshot(named: "settings-scrolled")
-
         toolbarRoute.tap()
         assertCustomizationPage()
-        attachScreenshot(named: "customizations-page")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-
-        // Verify the original list route remains present and functional after returning.
-        let restoredListRoute = app.buttons["settings-user-customizations"]
-        for _ in 0..<12 where !restoredListRoute.isHittable { app.swipeDown() }
-        XCTAssertTrue(restoredListRoute.isHittable)
-        restoredListRoute.tap()
-        assertCustomizationPage()
+        attachScreenshot(named: "customizations-from-toolbar")
     }
 
     private func assertCustomizationPage() {
-        XCTAssertTrue(app.otherElements["user-customizations-page"].waitForExistence(timeout: 5)
-            || app.descendants(matching: .any)["user-customizations-page"].waitForExistence(timeout: 1))
+        XCTAssertTrue(app.descendants(matching: .any)["user-customizations-page"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Anisette Client Configuration"].exists)
         XCTAssertTrue(app.staticTexts["SideSign Client Configuration"].exists)
     }
