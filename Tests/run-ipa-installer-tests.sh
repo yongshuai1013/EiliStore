@@ -12,11 +12,16 @@ export HOME="$build/home" TMPDIR="$build/tmp/"
 export IPA_TEST_BUNDLE_ID="test.ipa-import-$(date +%s)-$$"
 if [[ "$(uname -s)" == Darwin ]]; then extension=dylib; else extension=so; fi
 cat > "$build/SwiftUI.swift" <<'EOF'
+#if canImport(Combine)
+// Apple Foundation already supplies ObservableObject and Published aliases.
+// Do not add/re-export a second candidate from this test-only SwiftUI module.
+#else
 public protocol ObservableObject {}
 @propertyWrapper public struct Published<Value> {
     public var wrappedValue: Value
     public init(wrappedValue: Value) { self.wrappedValue = wrappedValue }
 }
+#endif
 EOF
 cat > "$build/SideSign.swift" <<'EOF'
 import Foundation
