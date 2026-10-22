@@ -79,6 +79,15 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         self.assertIn('EiliAnisetteMode.remote.rawValue', mode)
         self.assertIn('case .incompatible(let reason)', mode)
 
+    def test_library_picker_does_not_depend_on_provider_data_uti(self):
+        page = (SOURCES / "UserCustomizationsView.swift").read_text()
+        self.assertIn("allowedContentTypes: [.item], allowsMultipleSelection: true", page)
+        self.assertNotIn("allowedContentTypes: [.data]", page)
+        self.assertIn("anisette.handleImport($0)", page)
+        service = (SOURCES / "EiliAnisetteService.swift").read_text()
+        for guard in ["startAccessingSecurityScopedResource()", "isSymbolicLink", "isRegularFile", "installLibraries(urls)"]:
+            self.assertIn(guard, service)
+
     def test_opening_page_does_not_enable_or_download_anything(self):
         page = (SOURCES / "UserCustomizationsView.swift").read_text()
         for forbidden in ["@AppStorage", "UserDefaults", ".onAppear", ".task",

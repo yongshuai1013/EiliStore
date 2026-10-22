@@ -13,6 +13,7 @@ targets:
       - path: ../../Sources/EiliStore/UserCustomizationsView.swift
       - path: ../../Sources/EiliStore/AnisetteModeSection.swift
       - path: ../../Sources/EiliStore/AnisettePresentationModel.swift
+      - path: ../../Sources/EiliStore/IPAImportStore.swift
       - path: build/ExtractedNavigation.swift
     settings:
       base:

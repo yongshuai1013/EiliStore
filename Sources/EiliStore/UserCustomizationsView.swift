@@ -24,7 +24,9 @@ struct UserCustomizationsView: View {
                 .accessibilityIdentifier("customizations-sidesign-client-config")
             }
         }
-        .fileImporter(isPresented: $anisette.importing, allowedContentTypes: [.data], allowsMultipleSelection: true) { anisette.handleImport($0) }
+        // Unknown .so UTIs need not conform to public.data. The service still
+        // enforces exact names, regular files, size, ELF/ABI and atomic install.
+        .fileImporter(isPresented: $anisette.importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { anisette.handleImport($0) }
         .confirmationDialog("從第三方下載 ADI 函式庫？", isPresented: $anisette.confirmingDownload, titleVisibility: .visible) {
             Button("確認下載並替換本機函式庫") { anisette.download() }
             Button("取消", role: .cancel) {}

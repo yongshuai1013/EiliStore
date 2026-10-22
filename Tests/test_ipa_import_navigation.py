@@ -42,6 +42,19 @@ class IPAImportNavigationTests(unittest.TestCase):
         self.assertIn('Button("選擇 IPA") { showFilePicker = true }', source)
         self.assertIn('Button(installer.isWorking ? "正在處理..." : "開始簽名並安裝", action: startInstall)', source)
 
+    def test_ipa_picker_accepts_provider_item_types_but_import_still_validates(self):
+        source = (ROOT / 'Sources/EiliStore/SignViews.swift').read_text()
+        self.assertIn('allowedContentTypes: [.item]', source)
+        self.assertNotIn('UTType(filenameExtension: "ipa")', source)
+        for identifier in ['ipa-file-picker', 'ipa-import-page', 'ipa-start-install']:
+            self.assertIn(f'accessibilityIdentifier("{identifier}")', source)
+        self.assertIn('IPAImportStore.stage(url)', source)
+        self.assertIn('requireInstallableMetadata: true', source)
+        store = (ROOT / 'Sources/EiliStore/IPAImportStore.swift').read_text()
+        for guard in ['sourceURL.isFileURL', 'sourceURL.pathExtension.lowercased() == "ipa"',
+                      'values.isSymbolicLink != true', 'values.isRegularFile == true',
+                      'startAccessingSecurityScopedResource()']:
+            self.assertIn(guard, store)
 
 if __name__ == '__main__':
     unittest.main()

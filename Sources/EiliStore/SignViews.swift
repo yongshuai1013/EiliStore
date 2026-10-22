@@ -52,6 +52,7 @@ struct SignIPAView: View {
             Section("IPA 文件") {
                 Button("選擇 IPA") { showFilePicker = true }
                     .disabled(isImporting || installer.isWorking)
+                    .accessibilityIdentifier("ipa-file-picker")
                 if let selection = selectedIPA {
                     Text(selection.file.originalFilename)
                         .font(.caption)
@@ -69,6 +70,7 @@ struct SignIPAView: View {
             Section("簽名並安裝") {
                 Button(installer.isWorking ? "正在處理..." : "開始簽名並安裝", action: startInstall)
                     .disabled(isImporting || installer.isWorking || selectedIPA == nil)
+                    .accessibilityIdentifier("ipa-start-install")
                 Text("沿用已登入帳號的第一個開發者 Team 與活動證書。按下開始後才會簽名及安裝；匯入本身不會登入、佈建或安裝。")
                     .font(.caption).foregroundColor(.secondary)
             }
@@ -88,10 +90,13 @@ struct SignIPAView: View {
         }
         .navigationTitle("匯入 IPA 並安裝")
         .navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier("ipa-import-page")
         .onAppear { isVisible = true }
         .onDisappear { isVisible = false; selectedIPA = nil }
+        // File providers may label IPA archives as packages or dynamic types,
+        // not public.data. Selection is broad; stage/parser validation is not.
         .fileImporter(isPresented: $showFilePicker,
-                      allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data, .data]) { result in
+                      allowedContentTypes: [.item]) { result in
             switch result {
             case .success(let url): importIPA(url)
             case .failure(let error):

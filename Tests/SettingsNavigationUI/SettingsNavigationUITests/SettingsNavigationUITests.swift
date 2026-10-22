@@ -1,4 +1,5 @@
 import XCTest
+import UniformTypeIdentifiers
 
 final class SettingsNavigationUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -74,6 +75,40 @@ final class SettingsNavigationUITests: XCTestCase {
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         cancel.tap()
         XCTAssertTrue(importButton.waitForExistence(timeout: 5))
+    }
+
+    func testIPAImportOpensSystemDocumentPickerAndCanBeCancelled() {
+        // These are system UTType checks only; no sample file is selected.
+        for ext in ["ipa", "so", "unknown"] {
+            let type = UTType(filenameExtension: ext, conformingTo: .item)
+            XCTAssertNotNil(type, "UTType should resolve \(ext) when public.item conformance is requested")
+            XCTAssertTrue(type?.conforms(to: .item) == true, "\(ext) should be a subtype of public.item")
+        }
+        app.tabBars.buttons["主頁"].tap()
+        let launcher = app.buttons["harness-open-ipa-import"]
+        XCTAssertTrue(launcher.waitForExistence(timeout: 10))
+        launcher.tap()
+
+        let page = app.descendants(matching: .any)["ipa-import-page"]
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        let importButton = app.buttons["ipa-file-picker"]
+        XCTAssertTrue(importButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["ipa-start-install"].exists)
+        XCTAssertFalse(app.buttons["ipa-start-install"].isEnabled)
+        importButton.tap()
+
+        let picker = app.otherElements["Document Browser"]
+        let visiblePicker = picker.waitForExistence(timeout: 8)
+            || app.navigationBars["Browse"].exists
+            || app.buttons["Browse"].exists
+            || app.buttons["Cancel"].exists
+        XCTAssertTrue(visiblePicker, "The system document picker should open without selecting an IPA")
+        attachScreenshot(named: "ipa-document-picker")
+        let cancel = app.buttons["Cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        cancel.tap()
+        XCTAssertTrue(importButton.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["ipa-start-install"].isEnabled)
     }
 
     func testODAManagementNavigationAndAutomaticAcquisitionConsent() {

@@ -1,7 +1,19 @@
 import SwiftUI
 
 // Deliberately inert destination stubs: navigation coverage does not execute native services.
-struct MyAppsView: View { var body: some View { NavigationView { Text("Home") } } }
+struct MyAppsView: View {
+    @State private var opensIPA = false
+    var body: some View {
+        NavigationView {
+            Button("Open IPA import") { opensIPA = true }
+                .accessibilityIdentifier("harness-open-ipa-import")
+                .sheet(isPresented: $opensIPA) {
+                    NavigationView { SignIPAView() }
+                        .navigationViewStyle(.stack)
+                }
+        }
+    }
+}
 struct SourcesView: View { var body: some View { NavigationView { Text("Sources") } } }
 struct SignInstallView: View { var body: some View { NavigationView { Text("Sign") } } }
 struct AccountView: View { let appleID: Binding<String>; let isLoggedIn: Binding<Bool>; var body: some View { Text("Account") } }
@@ -16,6 +28,22 @@ struct FileBrowserView: View { let directory: URL; var body: some View { Text("F
 struct LogView: View { var body: some View { Text("Logs") } }
 struct AnisetteClientConfigurationView: View { var body: some View { Text("Anisette Client Configuration") } }
 struct SideSignClientConfigurationView: View { var body: some View { Text("SideSign Client Configuration") } }
+
+enum IPAParser {
+    struct AppInfo: Sendable { let name: String; let bundleId: String; let version: String }
+    enum SyntheticError: Error { case parsingUnavailable }
+    static func parse(ipaURL: URL, requireInstallableMetadata: Bool) throws -> AppInfo {
+        throw SyntheticError.parsingUnavailable
+    }
+}
+@MainActor final class SourceAppInstaller: ObservableObject {
+    static let shared = SourceAppInstaller()
+    @Published var isWorking = false
+    @Published var statusMessage = ""
+    @Published var progress: Double = -1
+    func installImportedIPA(at url: URL) async { /* Deliberately inert. */ }
+}
+
 enum EiliAnisetteMode: String { case remote, onDevice; static let preferenceKey = "anisette.mode"; static let localBuildAvailable = true }
 enum EiliAnisetteLibraryStatus { case engineUnavailable, missing, invalid, present, incompatible(String) }
 enum EiliAnisetteError: LocalizedError { case unavailable; var errorDescription: String? { "Unavailable" } }
@@ -45,7 +73,6 @@ struct EiliODASourceConfiguration: Sendable {
     let sourceURL: URL
     let fallbackURL: URL?
     let automaticAcquisition: Bool
-
     enum ValidationError: LocalizedError { case insecureSource, insecureFallback
         var errorDescription: String? { switch self { case .insecureSource: return "ODA 來源必須是沒有帳號密碼的 HTTPS 網址。"; case .insecureFallback: return "ODA 備援來源必須是沒有帳號密碼的 HTTPS 網址。" } }
     }
@@ -63,7 +90,6 @@ struct EiliODASourceConfiguration: Sendable {
     }
     private static func secure(_ url: URL) -> Bool { url.scheme?.lowercased() == "https" && !(url.host ?? "").isEmpty && url.user == nil && url.password == nil }
 }
-
 struct EiliAnisetteStorageStatus: Sendable {
     let cache: EiliAnisetteLibraryStatus
     let provisioningPresent: Bool

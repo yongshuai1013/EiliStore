@@ -17,11 +17,10 @@ mkdir -p "$BUILD_DIR"
 rm -rf "$RESULT" "$PROJECT" "$TEST_DIR/build"
 mkdir -p "$TEST_DIR/build"
 
-python3 - "$ROOT/Sources/EiliStore/EiliStoreApp.swift" "$TEST_DIR/build/ExtractedNavigation.swift" <<'PY'
+python3 - "$ROOT/Sources/EiliStore/EiliStoreApp.swift" "$ROOT/Sources/EiliStore/SignViews.swift" "$TEST_DIR/build/ExtractedNavigation.swift" <<'PY'
 import sys
 from pathlib import Path
-source = Path(sys.argv[1]).read_text()
-def extract(declaration):
+def extract(source, declaration):
     start = source.find(declaration)
     if start < 0:
         raise SystemExit(f"Could not find {declaration!r} in production app source")
@@ -53,8 +52,14 @@ def extract(declaration):
             if depth == 0: return source[start:i+1]
         i += 1
     raise SystemExit(f"Unbalanced declaration: {declaration}")
-parts = ['import SwiftUI', extract('struct MainTabView: View'), extract('struct SettingsView: View')]
-Path(sys.argv[2]).write_text('\n\n'.join(parts) + '\n')
+app_source = Path(sys.argv[1]).read_text()
+sign_source = Path(sys.argv[2]).read_text()
+parts = ['import SwiftUI', 'import UniformTypeIdentifiers',
+         extract(app_source, 'struct MainTabView: View'),
+         extract(app_source, 'struct SettingsView: View'),
+         extract(sign_source, 'private final class ImportedIPASelection'),
+         extract(sign_source, '@MainActor\nstruct SignIPAView: View')]
+Path(sys.argv[3]).write_text('\n\n'.join(parts) + '\n')
 PY
 
 xcodegen generate --spec "$TEST_DIR/project.yml" --project "$TEST_DIR"
