@@ -102,6 +102,8 @@ struct EmulatorVM {
     
     std::unordered_map<std::string, uint64_t> imported_symbols;
     std::unordered_map<uint64_t, std::string> import_stubs;
+    // Compatibility stubs are intentionally not counted as implemented ABI hooks.
+    std::unordered_map<std::string, uint64_t> fallback_import_calls;
     uint64_t next_import_address;
 
     std::unordered_map<int, int> fd_map;

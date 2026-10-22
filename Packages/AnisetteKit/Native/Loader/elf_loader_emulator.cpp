@@ -168,6 +168,16 @@ static bool supported_guest_import(const std::string &name) {
     return names.count(name) != 0;
 }
 
+// The upstream loader distinguishes data names before allocating function stubs.
+// Keep that distinction: an unresolved object/TLS symbol is not a callable ABI.
+static bool guest_data_symbol_name(const std::string &symbol) {
+    return symbol.rfind("_ZTV", 0) == 0 || symbol.rfind("_ZTI", 0) == 0 ||
+        symbol.rfind("_ZTS", 0) == 0 || symbol.rfind("kCF", 0) == 0 ||
+        symbol.rfind("kAudio", 0) == 0 || symbol.rfind("OBJC_", 0) == 0 ||
+        symbol == "__CFConstantStringClassReference" || symbol == "__sF" ||
+        symbol == "environ" || symbol == "__stack_chk_guard" || symbol == "__ctype_";
+}
+
 const AndroidSystemProperties kAndroidProperties;
 
 static thread_local uint64_t g_last_pcs[16];
@@ -292,15 +302,22 @@ uint64_t EmulatorVM::register_import(const std::string &name) {
         return it->second;
     }
 
-    if (!supported_guest_import(name) || next_import_address > kImportAddress + kImportSize - 8) {
-        execution_error = "Unsupported guest import or exhausted import area: " + name;
+    if (name.empty() || name.size() >= 4096 || guest_data_symbol_name(name) ||
+        next_import_address > kImportAddress + kImportSize - 8) {
+        execution_error = "Invalid guest function import or exhausted import area: " + name;
         return 0;
     }
     uint64_t stub_addr = next_import_address;
-    next_import_address += 8;
-
     uint32_t ret_insn = 0xD65F03C0;
-    uc_mem_write(uc, stub_addr, &ret_insn, sizeof(ret_insn));
+    if (!uc || uc_mem_write(uc, stub_addr, &ret_insn, sizeof(ret_insn)) != UC_ERR_OK) {
+        execution_error = "Cannot write guest import stub: " + name;
+        return 0;
+    }
+    next_import_address += 8;
+    if (!supported_guest_import(name)) {
+        fallback_import_calls.emplace(name, 0);
+        LOG_UC("[SideStore compatibility] Created unresolved-function guest stub: %s (not an implemented ABI)\n", name.c_str());
+    }
 
     imported_symbols[name] = stub_addr;
     import_stubs[stub_addr] = name;
@@ -919,6 +936,10 @@ static void hook_dlsym(EmulatorVM *vm) {
         }
         if (!result && (handle == 0 || handle == 1 || system_module_has_import(handle, name)) && supported_guest_import(name))
             result = vm->register_import(name);
+        // Match SideStore's dlsym fallback for otherwise unknown function names.
+        // Do not turn a known export from a different module or a data name into a stub.
+        if (!result && !supported_guest_import(name) && !guest_data_symbol_name(name) &&
+            !get_vm_symbol_address(vm, name)) result = vm->register_import(name);
         if (!result) vm->dynamic_link_error = "Guest symbol not found: " + name;
     }
     uc_reg_write(vm->uc, UC_ARM64_REG_X0, &result);
@@ -1094,8 +1115,16 @@ static void import_callback_router(uc_engine *uc, uint64_t address, uint32_t siz
     else if (name == "__android_log_print") hook_android_log_print(vm);
     else if (dispatch_android_libc_string(vm, name)) { }
     else {
-        vm->execution_error = "Unsupported guest call: " + name;
-        uc_emu_stop(uc);
+        // SideStore's unresolved-function fallback: return zero through the guest
+        // stub. This is compatibility behavior, not evidence of ABI/login success.
+        auto &calls = vm->fallback_import_calls[name];
+        if (calls++ == 0)
+            LOG_UC("[SideStore compatibility] Unimplemented function returned zero: %s\n", name.c_str());
+        uint64_t ret = 0;
+        if (uc_reg_write(uc, UC_ARM64_REG_X0, &ret) != UC_ERR_OK) {
+            vm->execution_error = "Cannot return from guest fallback: " + name;
+            uc_emu_stop(uc);
+        }
     }
 }
 
@@ -1150,8 +1179,9 @@ static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo 
     // Undefined weak symbols may legally resolve to zero. Strong data symbols
     // require a real implementation, never a fabricated zero-filled object.
     if ((sym.st_info >> 4) == 2) return 0;
-    if ((sym.st_info & 0xf) == 1) {
-        vm->execution_error = "Unsupported guest data symbol: " + sym_name;
+    const uint8_t type = sym.st_info & 0xf;
+    if ((type != 0 && type != 2) || guest_data_symbol_name(sym_name)) {
+        vm->execution_error = "Unsupported guest data/non-function symbol: " + sym_name;
         return 0;
     }
     return vm->register_import(sym_name);

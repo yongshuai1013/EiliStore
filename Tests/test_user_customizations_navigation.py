@@ -127,7 +127,13 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
             self.assertIn("configuration: clientConfiguration", source)
             self.assertIn("clientConfiguration.resolvedXcodeVersion(", source)
         service = (SOURCES / "EiliAnisetteService.swift").read_text()
-        self.assertEqual(service.count("headers: .init(rawHeaders: configuration.requestHeaderOverrides)"), 2)
+        # Local requests merge persisted routing info into a copy of the overrides;
+        # only the remote provider still receives the original dictionary directly.
+        self.assertEqual(service.count("headers: .init(rawHeaders: configuration.requestHeaderOverrides)"), 1)
+        self.assertIn("var requestHeaders = configuration.requestHeaderOverrides", service)
+        self.assertEqual(service.count("headers: .init(rawHeaders: requestHeaders)"), 1)
+        self.assertIn("if !explicitRoutingOverride, let routingInfo", service)
+        self.assertIn('requestHeaders["X-Apple-I-MD-RINFO"] = routingInfo', service)
         self.assertIn("configuration = try configuration.validated()", service)
         self.assertIn("configuration.applying(to: data)", service)
         self.assertIn("configuration.applying(to: try Self.convertHeaders(headers))", service)

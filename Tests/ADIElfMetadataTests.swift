@@ -7,6 +7,13 @@ import Foundation
         precondition(parsed.needed == ["libdep.so"] && parsed.soname == "libmain.so")
         precondition(parsed.exportedSymbols == ["global","protected"])
         precondition(parsed.undefinedStrongSymbols == ["strong"])
+        precondition(parsed.undefinedFunctionSymbols == ["strong", "weak"])
+        precondition(parsed.undefinedDataSymbols.isEmpty)
+        let typed = try ADIELFMetadata.parse(ADIElfFixture.make(soname: "libtyped.so",
+            imports: ["func", "none", "object", "tls"],
+            symbolTypes: ["func": 2, "none": 0, "object": 1, "tls": 6]))
+        precondition(typed.undefinedFunctionSymbols == ["func", "none"])
+        precondition(typed.undefinedDataSymbols == ["object", "tls"])
         precondition(parsed.relocationTypes == [1,1027])
         precondition(parsed.unsupportedDynamicTags == [0x6000000f,36])
         for name in ["../evil.so","path/libevil.so","bad\\evil.so"] {

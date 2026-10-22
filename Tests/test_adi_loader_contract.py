@@ -28,8 +28,11 @@ class ADILoaderContractTests(unittest.TestCase):
         self.assertIn('dl_iterate_phdr', actual)
         self.assertNotIn('pthread_cond_wait', actual)
         self.assertNotIn('pthread_once', actual)
-        self.assertNotIn('uint64_t ret = 0;', router.rsplit('else {', 1)[1])
-        self.assertIn('uc_emu_stop(uc)', router.rsplit('else {', 1)[1])
+        fallback = router.split('// SideStore\'s unresolved-function fallback:', 1)[1]
+        self.assertIn('uint64_t ret = 0;', fallback)
+        self.assertIn('fallback_import_calls', fallback)
+        self.assertIn('uc_reg_write(uc, UC_ARM64_REG_X0, &ret)', fallback)
+        self.assertNotIn('pthread_create', supported)
 
     def test_six_required_entrypoints_exclude_optional_cleanup(self):
         native = (ROOT / 'Packages/AnisetteKit/Native/anisette_base.h').read_text().split('struct ADISymbols', 1)[1]

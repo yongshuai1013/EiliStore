@@ -407,6 +407,41 @@ enum KeychainHelper {
         check(await svc.localLibraryStatus() == .present, "malformed import damaged cache")
         print("PASS: legacy dependency/symbol preflight, manual diagnostics, valid-cache preservation, no VM/identity/fallback/session changes")
 
+        // Unknown functions use the requested SideStore compatibility path, without
+        // making the read-only status operation execute a VM or create an identity.
+        let fallbackDir = fixtureDir.appendingPathComponent("sidestore-function-fallback")
+        try FileManager.default.createDirectory(at: fallbackDir, withIntermediateDirectories: true)
+        let fallbackFiles = try ADILibraryProfile.legacy.filenames.map { name in
+            let target = fallbackDir.appendingPathComponent(name)
+            try ADIElfFixture.make(soname: name,
+                exports: name == "libstoreservicescore.so" ? ADILibraryCompatibility.requiredEntryPoints.sorted() : [],
+                imports: name == "libCoreADI.so" ? ["sidestore_missing_function"] : []).write(to: target)
+            return target
+        }
+        FakeAnisetteKitControl.reset()
+        let identityBeforeFallback = KeychainHelper.load(forKey: "eilistore.anisette.local.identifier")
+        let blobBeforeFallback = KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")
+        let fallbackStatus = try await svc.importLibraries(fallbackFiles)
+        check(fallbackStatus == .present, "function-only fallback was blocked")
+        let fallbackReport = try ADILibraryCompatibility.read(directory: libraryDirectory, profile: .legacy)
+        check(fallbackReport.fallbackFunctionImports == ["sidestore_missing_function"] && fallbackReport.blockedDataImports.isEmpty, "function fallback diagnostics lost")
+        let resetCountBeforeFallbackStatus = FakeAnisetteKitControl.resetCount
+        check(await svc.localLibraryStatus() == .present, "read-only fallback status blocked")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == resetCountBeforeFallbackStatus, "fallback status touched engine")
+        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == identityBeforeFallback && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == blobBeforeFallback, "fallback status created identity")
+        for type: UInt8 in [1, 6] {
+            try ADIElfFixture.make(soname: "libCoreADI.so", imports: ["sidestore_missing_nonfunction"],
+                symbolTypes: ["sidestore_missing_nonfunction": type]).write(to: fallbackFiles[0])
+            do { _ = try await svc.importLibraries(fallbackFiles); fatalError("data/TLS import replaced usable fallback cache") }
+            catch EiliAnisetteError.incompatibleLibraries {}
+            check(await svc.localLibraryStatus() == .present, "data/TLS rejection damaged usable fallback cache")
+        }
+        check(EiliAnisetteMode.selected == legacyMode && EiliAnisetteMode.savedSessionMode == legacySessionMode, "fallback preflight changed mode")
+        for (key, value) in protectedLoginValues { check(KeychainHelper.load(forKey: key) == value, "fallback preflight changed protected data") }
+        try await svc.importLibraries(elfFiles)
+        print("PASS: SideStore function-stub preflight, data/TLS rejection, read-only VM/identity isolation (not login verification)")
+
+
         let modernDir = FileManager.default.temporaryDirectory.appendingPathComponent("anisette-modern-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: modernDir) }
         try FileManager.default.createDirectory(at: modernDir, withIntermediateDirectories: true)

@@ -47,8 +47,13 @@ int main() {
     assert(call(vm, "dlopen", {vm.write_string("missing.so"), 2}) == 0);
     assert(call(vm, "dlerror") != 0);
     const auto importsBefore = vm.import_stubs.size();
-    assert(call(vm, "dlsym", {0, vm.write_string("missing_function")}) == 0);
-    assert(vm.import_stubs.size() == importsBefore);
+    const auto missing = call(vm, "dlsym", {0, vm.write_string("missing_function")});
+    assert(missing && vm.import_stubs.size() == importsBefore + 1);
+    assert(vm.fallback_import_calls.at("missing_function") == 0);
+    assert(run_vm_procedure(&vm, missing, {UINT64_MAX}, 1000000, 1000) == 0);
+    assert(vm.execution_error.empty() && vm.fallback_import_calls.at("missing_function") == 1);
+    assert(call(vm, "dlerror") == 0);
+    assert(call(vm, "dlsym", {0, vm.write_string("environ")}) == 0);
     assert(call(vm, "dlerror") != 0);
     assert(call(vm, "dlsym", {0, vm.write_string("synthetic_answer")}) == code);
     assert(call(vm, "dlsym", {999, vm.write_string("strlen")}) == 0);
@@ -58,15 +63,51 @@ int main() {
     assert(!run_library_constructors(&vm));
     assert(!vm.execution_error.empty());
     vm.execution_error.clear();
-    assert(vm.register_import("unimplemented_function") == 0);
-    assert(!vm.execution_error.empty());
-    // Even a fabricated import stub traps instead of returning fake success.
+    const auto fallback = vm.register_import("unimplemented_function");
+    assert(fallback && vm.execution_error.empty());
+    assert(fallback == vm.register_import("unimplemented_function"));
+    assert(run_vm_procedure(&vm, fallback, {123}, 1000000, 1000) == 0);
+    assert(run_vm_procedure(&vm, fallback, {456}, 1000000, 1000) == 0);
+    assert(vm.execution_error.empty() && vm.fallback_import_calls.at("unimplemented_function") == 2);
+    assert(!supported_guest_import("unimplemented_function"));
+
+    // Resolve synthetic ELF symbols, without opening or executing any vendor ELF.
+    auto resolve = [&](const std::string &name, uint8_t info) {
+        EmulatorVM::LibraryInfo synthetic{};
+        Elf64_Sym sym{};
+        sym.st_info = info;
+        sym.st_name = 1;
+        const std::string strings = std::string(1, '\0') + name + std::string(1, '\0');
+        synthetic.symtab = vm.write_bytes(reinterpret_cast<const uint8_t *>(&sym), sizeof sym);
+        synthetic.strtab = vm.write_bytes(reinterpret_cast<const uint8_t *>(strings.data()), strings.size());
+        synthetic.strsz = strings.size();
+        return vm_resolve_symbol(&vm, synthetic, 0);
+    };
+    const auto typed_function = resolve("unknown_typed_function", 0x12);
+    assert(typed_function && vm.execution_error.empty());
+    assert(run_vm_procedure(&vm, typed_function, {}, 1000000, 1000) == 0);
+    assert(vm.fallback_import_calls.at("unknown_typed_function") == 1);
+    assert(resolve("unknown_notype_function", 0x10) && vm.execution_error.empty());
+    assert(resolve("synthetic_answer", 0x12) == code); // Real exports win.
+    assert(resolve("weak_function", 0x22) == 0 && vm.execution_error.empty());
+    assert(resolve("weak_object", 0x21) == 0 && vm.execution_error.empty());
+    for (const auto info : {0x11, 0x16, 0x13}) {
+        vm.execution_error.clear();
+        const std::string name = "unknown_nonfunction_" + std::to_string(info);
+        assert(resolve(name, static_cast<uint8_t>(info)) == 0 && !vm.execution_error.empty());
+        assert(!vm.imported_symbols.count(name));
+    }
+    for (const auto name : {"_ZTVMissing", "_ZTINope", "_ZTSNope", "kCFMissing", "kAudioMissing",
+                            "OBJC_Missing", "__CFConstantStringClassReference", "__sF", "environ",
+                            "__stack_chk_guard", "__ctype_"}) {
+        vm.execution_error.clear();
+        assert(resolve(name, 0x10) == 0 && !vm.execution_error.empty());
+        assert(!vm.imported_symbols.count(name));
+    }
     vm.execution_error.clear();
-    const auto trap = kImportAddress + kImportSize - 8;
-    const uint32_t ret = 0xD65F03C0;
-    assert(uc_mem_write(vm.uc, trap, &ret, sizeof ret) == UC_ERR_OK);
-    vm.import_stubs[trap] = "unimplemented_function";
-    assert(run_vm_procedure(&vm, trap, {}, 1000000, 1000) != 0);
-    assert(!vm.execution_error.empty());
-    std::cout << "PASS: synthetic guest module handles, scoped dlsym, dlerror, constructors and unknown-call failure\n";
+    assert(vm.register_import("environ") == 0 && !vm.execution_error.empty());
+    vm.execution_error.clear();
+    vm.next_import_address = kImportAddress + kImportSize;
+    assert(vm.register_import("exhausted_function") == 0 && !vm.execution_error.empty());
+    std::cout << "PASS: synthetic guest lookup, constructors, SideStore zero-return function fallback and data/TLS rejection (not login proof)\n";
 }

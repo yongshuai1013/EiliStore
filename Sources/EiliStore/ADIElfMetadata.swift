@@ -5,8 +5,17 @@ public struct ADIELFMetadata: Equatable, Sendable {
     public let soname: String?
     public let exportedSymbols: Set<String>
     public let undefinedStrongSymbols: Set<String>
+    public let undefinedFunctionSymbols: Set<String>
+    public let undefinedDataSymbols: Set<String>
     public let relocationTypes: Set<UInt32>
     public let unsupportedDynamicTags: Set<UInt64>
+
+    public init(needed: [String], soname: String?, exportedSymbols: Set<String>, undefinedStrongSymbols: Set<String>, relocationTypes: Set<UInt32>, unsupportedDynamicTags: Set<UInt64>, undefinedFunctionSymbols: Set<String> = [], undefinedDataSymbols: Set<String> = []) {
+        self.needed = needed; self.soname = soname; self.exportedSymbols = exportedSymbols
+        self.undefinedStrongSymbols = undefinedStrongSymbols; self.relocationTypes = relocationTypes
+        self.unsupportedDynamicTags = unsupportedDynamicTags; self.undefinedFunctionSymbols = undefinedFunctionSymbols
+        self.undefinedDataSymbols = undefinedDataSymbols
+    }
 
     public enum ParseError: Error, Equatable { case malformed(String) }
 
@@ -79,7 +88,7 @@ public struct ADIELFMetadata: Equatable, Sendable {
             if tag == 1 { let s=try str(val); guard Self.safeName(s) else { throw fail("unsafe DT_NEEDED") }; needed.append(s) }
             if tag == 14 { let s=try str(val); guard Self.safeName(s) else { throw fail("unsafe SONAME") }; soname=s }
         }
-        var exports:Set<String>=[], undefined:Set<String>=[], relocs:Set<UInt32>=[]
+        var exports:Set<String>=[], undefined:Set<String>=[], functions:Set<String>=[], data:Set<String>=[], relocs:Set<UInt32>=[]
         var sawDynsym=false
         for i in 0..<shnum {
             let p=try add(shoff,try mul(i,shents)), typ=try u(try add(p,4),4), off=try u(try add(p,24),8), size=try u(try add(p,32),8), link=try u(try add(p,40),4), ents=try u(try add(p,56),8)
@@ -101,14 +110,19 @@ public struct ADIELFMetadata: Equatable, Sendable {
                     let nameOff=try add(to,no), rem=ts-no
                     guard let end=b[try range(nameOff,rem)].firstIndex(of:0), let name=String(bytes:b[Int(nameOff)..<end],encoding:.utf8), !name.isEmpty else { throw fail("bad symbol string") }
                     let bind=info >> 4, vis=other & 3
-                    if shndx == 0 && bind == 1 { undefined.insert(name) }
+                    if shndx == 0 && (bind == 1 || bind == 2) {
+                        if bind == 1 { undefined.insert(name) }
+                        let type = info & 0x0f
+                        if type == 2 || type == 0 { functions.insert(name) }
+                        else { data.insert(name) }
+                    }
                     if shndx != 0 && (bind == 1 || bind == 2) && (vis == 0 || vis == 3) { exports.insert(name) }
                 }
             }
         }
         guard sawDynsym else { throw fail("missing SHT_DYNSYM") }
         let unsupported:Set<UInt64>=[0x6000000f,0x60000011,0x6fffe000,36,DT_REL,DT_RELR,DT_ANDROID_REL,DT_ANDROID_RELA]
-        return Self(needed:needed,soname:soname,exportedSymbols:exports,undefinedStrongSymbols:undefined,relocationTypes:relocs,unsupportedDynamicTags:Set(dyn.map{$0.0}).intersection(unsupported))
+        return Self(needed:needed,soname:soname,exportedSymbols:exports,undefinedStrongSymbols:undefined,relocationTypes:relocs,unsupportedDynamicTags:Set(dyn.map{$0.0}).intersection(unsupported),undefinedFunctionSymbols:functions,undefinedDataSymbols:data)
     }
 
     private static let DT_REL:UInt64=17, DT_RELA:UInt64=7, DT_RELSZ:UInt64=18, DT_RELASZ:UInt64=8, DT_RELENT:UInt64=19, DT_RELAENT:UInt64=9, DT_SYMENT:UInt64=11, DT_RELR:UInt64=36, DT_ANDROID_REL:UInt64=0x6000000f, DT_ANDROID_RELA:UInt64=0x60000011

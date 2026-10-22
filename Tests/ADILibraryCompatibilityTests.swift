@@ -2,8 +2,8 @@ import Foundation
 
 @main struct ADILibraryCompatibilityTests {
     static func main() throws {
-        func metadata(_ name: String, needed: [String] = [], exports: [String] = [], imports: [String] = [], relocations: [UInt32] = [1027], tags: [UInt64] = []) throws -> ADIELFMetadata {
-            try ADIELFMetadata.parse(ADIElfFixture.make(soname: name, needed: needed, exports: exports, imports: imports, relocations: relocations, dynamicTags: tags))
+        func metadata(_ name: String, needed: [String] = [], exports: [String] = [], imports: [String] = [], relocations: [UInt32] = [1027], tags: [UInt64] = [], types: [String: UInt8] = [:]) throws -> ADIELFMetadata {
+            try ADIELFMetadata.parse(ADIElfFixture.make(soname: name, needed: needed, exports: exports, imports: imports, relocations: relocations, dynamicTags: tags, symbolTypes: types))
         }
         let profile = ADILibraryProfile.modern
         precondition(ADILibraryProfile.selected(profile.filenames) == .modern)
@@ -40,7 +40,30 @@ import Foundation
         var unknownImportSet = legacySet
         unknownImportSet["libCoreADI.so"] = try metadata("libCoreADI.so", exports: Array(required.prefix(3)) + ["cross_library_hook"], imports: ["mystery_strong_import", "malloc"])
         let unknownImport = ADILibraryCompatibility.inspect(profile: legacy, metadata: unknownImportSet)
-        precondition(unknownImport.unhandledImports == ["mystery_strong_import"] && unknownImport.hasStaticBlockers)
+        precondition(unknownImport.unhandledImports == ["mystery_strong_import"] && !unknownImport.hasStaticBlockers)
+        precondition(unknownImport.fallbackFunctionImports == ["mystery_strong_import"] && unknownImport.blockedDataImports.isEmpty)
+        precondition(unknownImport.summary.contains("SideStore 相容 stub（回傳0），未驗證登入"))
+        for (name, type): (String, UInt8) in [("unknown_notype", 0), ("unknown_func", 2), ("environ_func", 2)] {
+            var set = legacySet
+            set["libCoreADI.so"] = try metadata("libCoreADI.so", exports: Array(required.prefix(3)) + ["cross_library_hook"], imports: [name], types: [name: type])
+            let result = ADILibraryCompatibility.inspect(profile: legacy, metadata: set)
+            precondition(!result.hasStaticBlockers && result.fallbackFunctionImports == [name])
+        }
+        for (name, type): (String, UInt8) in [("object", 1), ("tls", 6), ("section", 3), ("malloc", 1),
+                                            ("_ZTVMissing", 0), ("_ZTIMissing", 2), ("_ZTSMissing", 0),
+                                            ("kCFMissing", 0), ("kAudioMissing", 0), ("OBJC_Missing", 0),
+                                            ("environ", 0), ("__sF", 2), ("__stack_chk_guard", 0)] {
+            var set = legacySet
+            set["libCoreADI.so"] = try metadata("libCoreADI.so", exports: Array(required.prefix(3)) + ["cross_library_hook"], imports: [name], types: [name: type])
+            let result = ADILibraryCompatibility.inspect(profile: legacy, metadata: set)
+            precondition(result.hasStaticBlockers && result.blockedDataImports == [name], "data must not receive function fallback: \(name)")
+            precondition(result.fallbackFunctionImports.isEmpty)
+        }
+        var conflicting = legacySet
+        conflicting["libCoreADI.so"] = try metadata("libCoreADI.so", exports: Array(required.prefix(3)), imports: ["conflict"], types: ["conflict": 2])
+        conflicting["libstoreservicescore.so"] = try metadata("libstoreservicescore.so", exports: Array(required.dropFirst(3)), imports: ["conflict"], types: ["conflict": 6])
+        let conflict = ADILibraryCompatibility.inspect(profile: legacy, metadata: conflicting)
+        precondition(conflict.hasStaticBlockers && conflict.blockedDataImports == ["conflict"] && conflict.fallbackFunctionImports.isEmpty)
 
         // The two optional native entrypoints are not part of the six required entrypoints.
         let optionalMissing = ADILibraryCompatibility.inspect(profile: legacy, metadata: legacySet)

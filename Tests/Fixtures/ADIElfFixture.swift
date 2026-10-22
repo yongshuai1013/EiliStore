@@ -1,7 +1,7 @@
 import Foundation
 
 enum ADIElfFixture {
-    static func make(soname: String, needed: [String] = [], exports: [String] = [], imports: [String] = [], weakImports: [String] = [], hiddenExports: [String] = [], protectedExports: [String] = [], relocations: [UInt32] = [1027], dynamicTags: [UInt64] = []) -> Data {
+    static func make(soname: String, needed: [String] = [], exports: [String] = [], imports: [String] = [], weakImports: [String] = [], hiddenExports: [String] = [], protectedExports: [String] = [], relocations: [UInt32] = [1027], dynamicTags: [UInt64] = [], symbolTypes: [String: UInt8] = [:]) -> Data {
         var strings: [UInt8] = [0]
         var indexes: [String: UInt64] = [:]
         func intern(_ value: String) -> UInt64 {
@@ -35,7 +35,7 @@ enum ADIElfFixture {
             for j in 0..<4 { symbols[slot+j]=UInt8(truncatingIfNeeded:nameIndex >> (j*8)) }
             let isWeak=weakImports.contains(name) || exports.contains(name) && false
             let isDefined=exports.contains(name) || hiddenExports.contains(name) || protectedExports.contains(name)
-            symbols[slot+4]=UInt8((isWeak ? 2 : 1) << 4) | 1
+            symbols[slot+4]=UInt8((isWeak ? 2 : 1) << 4) | ((symbolTypes[name] ?? 2) & 0x0f)
             symbols[slot+5]=hiddenExports.contains(name) ? 2 : (protectedExports.contains(name) ? 3 : 0)
             symbols[slot+6]=isDefined ? 1 : 0
         }

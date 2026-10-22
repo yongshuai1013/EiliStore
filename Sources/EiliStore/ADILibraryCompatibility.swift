@@ -29,6 +29,8 @@ struct ADILibraryCompatibility: Equatable, Sendable {
     let missingDependencies: [String]
     let missingEntryPoints: [String]
     let unhandledImports: [String]
+    let fallbackFunctionImports: [String]
+    let blockedDataImports: [String]
     let unsupportedRelocations: [UInt32]
     let unsupportedDynamicTags: [UInt64]
     let mismatchedSONAMEs: [String]
@@ -38,7 +40,7 @@ struct ADILibraryCompatibility: Equatable, Sendable {
     var runtimeAdapterAvailable: Bool { profile == .legacy }
     var hasStaticBlockers: Bool {
         !missingFiles.isEmpty || !missingDependencies.isEmpty || !missingEntryPoints.isEmpty ||
-        !unhandledImports.isEmpty || !unsupportedRelocations.isEmpty ||
+        !blockedDataImports.isEmpty || !unsupportedRelocations.isEmpty ||
         !unsupportedDynamicTags.isEmpty || !mismatchedSONAMEs.isEmpty
     }
     var summary: String {
@@ -48,6 +50,8 @@ struct ADILibraryCompatibility: Equatable, Sendable {
         if !missingDependencies.isEmpty { parts.append("另有 \(missingDependencies.count) 個未提供的相依庫") }
         if !missingEntryPoints.isEmpty { parts.append("缺少 \(missingEntryPoints.count) 個必要 ADI 入口") }
         if !unhandledImports.isEmpty { parts.append("\(unhandledImports.count) 個外部符號尚無明確實作") }
+        if !fallbackFunctionImports.isEmpty { parts.append("SideStore 相容 stub（回傳0），未驗證登入：\(fallbackFunctionImports.count) 個未知函式") }
+        if !blockedDataImports.isEmpty { parts.append("\(blockedDataImports.count) 個資料/TLS 外部符號無法安全 stub") }
         if !unsupportedRelocations.isEmpty { parts.append("\(unsupportedRelocations.count) 種重定位尚未支援") }
         if !unsupportedDynamicTags.isEmpty { parts.append("含尚未支援的動態連結格式") }
         if !mismatchedSONAMEs.isEmpty { parts.append("函式庫內部名稱與檔名不符，請勿改名混用") }
@@ -56,6 +60,10 @@ struct ADILibraryCompatibility: Equatable, Sendable {
     }
 
     static let systemLibraries: Set<String> = ["libc.so", "libdl.so", "liblog.so", "libm.so", "libz.so", "libstdc++.so", "libandroid.so"]
+    static func isSideStoreDataName(_ n: String) -> Bool {
+        ["_ZTV", "_ZTI", "_ZTS", "kCF", "kAudio", "OBJC_"].contains { n.hasPrefix($0) } ||
+            ["__CFConstantStringClassReference", "__sF", "environ", "__stack_chk_guard", "__ctype_"].contains(n)
+    }
     static let requiredEntryPoints: Set<String> = ["Sph98paBcz", "nf92ngaK92", "kq56gsgHG6", "qi864985u0", "rsegvyrt87", "uv5t6nhkui"]
     // Only explicit router/adapter implementations count; this is not complete Android ABI support.
     static let handledImports: Set<String> = [
@@ -136,17 +144,23 @@ struct ADILibraryCompatibility: Equatable, Sendable {
         let provided = Set(metadata.keys)
         let exports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.exportedSymbols) }
         let imports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.undefinedStrongSymbols) }
+        let functionImports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.undefinedFunctionSymbols) }
+        let dataImports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.undefinedDataSymbols) }
         let needed = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.needed) }
         let relocations = metadata.values.reduce(into: Set<UInt32>()) { $0.formUnion($1.relocationTypes) }
         let dynamicTags = metadata.values.reduce(into: Set<UInt64>()) { $0.formUnion($1.unsupportedDynamicTags) }
         // Match vm_resolve_symbol's existing __ndk1 -> __1 lookup, not a new shim.
         let unresolved = imports.filter { name in
-            if exports.contains(name) || handledImports.contains(name) { return false }
+            if exports.contains(name) { return false }
+            if handledImports.contains(name) && functionImports.contains(name) &&
+                !dataImports.contains(name) && !isSideStoreDataName(name) { return false }
             var converted = name
             if let range = converted.range(of: "6__ndk1") { converted.replaceSubrange(range, with: "3__1") }
             else if let range = converted.range(of: "__ndk1") { converted.replaceSubrange(range, with: "__1") }
             return !exports.contains(converted)
         }
+        let fallback = unresolved.filter { functionImports.contains($0) && !dataImports.contains($0) && !isSideStoreDataName($0) }
+        let blockedData = unresolved.filter { !fallback.contains($0) }
         let mismatches = metadata.compactMap { name, value -> String? in
             // SONAME is optional in ELF; reject an explicit mismatch, not its absence.
             guard let soname = value.soname, soname != name else { return nil }
@@ -156,7 +170,7 @@ struct ADILibraryCompatibility: Equatable, Sendable {
                     missingFiles: Set(profile.filenames).subtracting(provided).sorted(),
                     missingDependencies: needed.subtracting(provided).subtracting(systemLibraries).sorted(),
                     missingEntryPoints: requiredEntryPoints.subtracting(exports).sorted(),
-                    unhandledImports: unresolved.sorted(),
+                    unhandledImports: unresolved.sorted(), fallbackFunctionImports: fallback.sorted(), blockedDataImports: blockedData.sorted(),
                     unsupportedRelocations: relocations.subtracting([0, 257, 1025, 1026, 1027]).sorted(),
                     unsupportedDynamicTags: dynamicTags.sorted(), mismatchedSONAMEs: mismatches.sorted())
     }
