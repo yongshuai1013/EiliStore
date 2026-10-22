@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Run on macOS with Xcode command-line tools, CMake, and Git installed.
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PACKAGE="$ROOT/Packages/AnisetteKit"
+PACKAGE="${EILI_UNICORN_PACKAGE:-$ROOT/Packages/AnisetteKit}"
 WORK="${TMPDIR:-/tmp}/eilistore-unicorn-a53ddc9a"
 SRC="$WORK/src"
 BUILD="$WORK/build-ios-arm64"
@@ -13,7 +13,8 @@ REPO="https://github.com/mahee96/unicorn.git"
 REV="a53ddc9ac6d65b24936d4a37917333fcd816cfd0"
 
 if [[ "$(uname -s)" != Darwin ]]; then echo "ERROR: this builder requires macOS/Xcode; no download/build attempted." >&2; exit 2; fi
-for tool in git cmake xcrun; do command -v "$tool" >/dev/null || { echo "Missing required tool: $tool" >&2; exit 2; }; done
+for tool in git cmake xcrun xcodebuild python3; do command -v "$tool" >/dev/null || { echo "Missing required tool: $tool" >&2; exit 2; }; done
+export IPHONEOS_DEPLOYMENT_TARGET=15.0
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 CC="$(xcrun --sdk iphoneos --find clang)"
 CXX="$(xcrun --sdk iphoneos --find clang++)"
@@ -31,8 +32,8 @@ mkdir -p "$PACKAGE" "$STAGE"
 cmake -S "$SRC" -B "$BUILD" \
   -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT="$SDK" -DCMAKE_OSX_ARCHITECTURES=arm64 \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
-  -DCMAKE_C_FLAGS='-arch arm64 -march=armv8-a -mno-outline-atomics' \
-  -DCMAKE_CXX_FLAGS='-arch arm64 -march=armv8-a -mno-outline-atomics' \
+  -DCMAKE_C_FLAGS='-arch arm64 -march=armv8-a -mno-outline-atomics -miphoneos-version-min=15.0' \
+  -DCMAKE_CXX_FLAGS='-arch arm64 -march=armv8-a -mno-outline-atomics -miphoneos-version-min=15.0' \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
   -DUNICORN_ARCH=aarch64 -DUNICORN_ENABLE_TCI=ON -DUNICORN_LOGGING=OFF \
   -DBUILD_SHARED_LIBS=OFF -DUNICORN_LEGACY_STATIC_ARCHIVE=ON \
@@ -47,17 +48,19 @@ LIB="$(find "$BUILD" -type f -name 'libunicorn.a' -print -quit)"
 [[ -n "$LIB" ]] || { echo "Could not locate built Unicorn static archive" >&2; exit 1; }
 HEADERS="$SRC/include"
 
+python3 "$ROOT/Scripts/audit-ios-archive.py" "$LIB"
+
 # Decode archives as Mach-O ARM64 with LSE enabled so LSE words are not left
 # looking like unknown instructions. Fail closed on tool errors or empty decode.
 DIS="$(xcrun --find llvm-objdump)"
 AUDIT="$STAGE/unicorn-disassembly.txt"
-if ! "$DIS" --macho --arch=arm64 --mattr=+lse --disassemble "$LIB" >"$AUDIT" 2>&1; then
+if ! "$DIS" --arch-name=aarch64 --mattr=+lse --disassemble --no-show-raw-insn "$LIB" >"$AUDIT" 2>&1; then
   echo "ERROR: llvm-objdump could not disassemble archive; refusing to package. See $AUDIT" >&2
   exit 1
 fi
-# Require decoded instruction records (address, bytes, mnemonic), not merely
+# Require decoded instruction records (address and mnemonic), not merely
 # archive/member headers or a successful-but-empty disassembler invocation.
-if ! grep -Eq '^[[:space:]]*[[:xdigit:]]+:[[:space:]]+([[:xdigit:]]{2}[[:space:]]+)+[[:alpha:]][[:alnum:].]*([[:space:]]|$)' "$AUDIT"; then
+if ! grep -Eq '^[[:space:]]*[[:xdigit:]]+:[[:space:]]+[[:alpha:]][[:alnum:].]*([[:space:]]|$)' "$AUDIT"; then
   echo "ERROR: no decoded machine instructions found in archive; refusing to package. See $AUDIT" >&2
   exit 1
 fi

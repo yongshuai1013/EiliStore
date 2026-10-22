@@ -2,41 +2,69 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, validation/anisette-20261022-0618]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Build IDevice xcframework for iOS 15
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_ios_archive_audit.py
           command -v cmake >/dev/null || brew install cmake
           bash Scripts/build-idevice-ios15.sh
-      
+
+      - name: Rebuild pinned Unicorn for iOS 15 (remote mode unchanged)
+        run: bash Scripts/prepare-anisette-ios15.sh
+
       - name: Install xcodegen
         run: brew install xcodegen
-        
-      - name: Generate project
-        run: xcodegen generate
-        
+
+      - name: Generate iOS 15 dependency-validation project
+        run: xcodegen generate --spec project-ios15-validation.yml
+
       - name: Build IPA
+        shell: bash
         run: |
+          set -euo pipefail
+          mkdir -p build
           xcodebuild archive \
             -project EiliStore.xcodeproj \
             -scheme EiliStore \
             -destination 'generic/platform=iOS' \
             -archivePath build/EiliStore.xcarchive \
-            CODE_SIGNING_ALLOWED=NO
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/xcodebuild.log
+          # Compare the archive's actual linker-input product, not log formatting.
+          BUILT_UNICORN=build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/EiliStore/BuildProductsPath/Release-iphoneos/libunicorn.a
+          cmp build/Dependencies/AnisetteKit/Artifacts/Unicorn.xcframework/ios-arm64/libunicorn.a "$BUILT_UNICORN"
+          python3 Scripts/audit-ios-archive.py "$BUILT_UNICORN"
+          if grep -Ei 'built for newer.*than being linked' build/xcodebuild.log; then
+            echo 'ERROR: deployment-version mismatch remains; refusing to publish IPA' >&2
+            exit 1
+          fi
           mkdir -p build/Payload
           cp -r build/EiliStore.xcarchive/Products/Applications/EiliStore.app build/Payload/
-          cd build && zip -r EiliStore.ipa Payload/ && cd ..
-          
+          cd build && zip -r EiliStore.ipa Payload/
+
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: EiliStore-ipa
           path: build/EiliStore.ipa
+
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios15-validation-logs
+          path: |
+            build/xcodebuild.log
+            build/Dependencies/AnisetteKit/.Unicorn.xcframework-stage-*/unicorn-disassembly.txt
+          if-no-files-found: ignore
+          retention-days: 7
