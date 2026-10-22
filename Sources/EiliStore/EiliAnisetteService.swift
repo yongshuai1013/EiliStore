@@ -25,6 +25,42 @@ enum EiliAnisetteMode: String, CaseIterable, Identifiable {
     }
 }
 
+
+struct EiliODASourceConfiguration: Sendable {
+    static let catalogURLKey = "paxstore.anisette.catalogURL"
+    static let sourceURLKey = "eilistore.anisette.oda.sourceURL"
+    static let fallbackURLKey = "eilistore.anisette.oda.fallbackURL"
+    static let automaticAcquisitionKey = "eilistore.anisette.oda.automaticAcquisition"
+    static let defaultCatalogURLString = "https://servers.sidestore.io/servers.json"
+    static let defaultFallbackURLString = "https://zzz.haus/oda.json"
+    let sourceURL: URL
+    let fallbackURL: URL?
+    let automaticAcquisition: Bool
+
+    enum ValidationError: LocalizedError { case insecureSource, insecureFallback
+        var errorDescription: String? { switch self { case .insecureSource: return "ODA 來源必須是沒有帳號密碼的 HTTPS 網址。"; case .insecureFallback: return "ODA 備援來源必須是沒有帳號密碼的 HTTPS 網址。" } }
+    }
+    static var selected: Self {
+        let defaults = UserDefaults.standard
+        let catalog = defaults.string(forKey: catalogURLKey) ?? defaultCatalogURLString
+        let source = defaults.string(forKey: sourceURLKey) ?? catalog
+        let fallback = defaults.string(forKey: fallbackURLKey) ?? defaultFallbackURLString
+        return Self(sourceURL: URL(string: source) ?? URL(string: "invalid:")!, fallbackURL: URL(string: fallback) ?? URL(string: "invalid:")!, automaticAcquisition: defaults.bool(forKey: automaticAcquisitionKey))
+    }
+    func validated() throws -> Self {
+        guard Self.secure(sourceURL) else { throw ValidationError.insecureSource }
+        if let fallbackURL, !Self.secure(fallbackURL) { throw ValidationError.insecureFallback }
+        return self
+    }
+    private static func secure(_ url: URL) -> Bool { url.scheme?.lowercased() == "https" && !(url.host ?? "").isEmpty && url.user == nil && url.password == nil }
+}
+
+struct EiliAnisetteStorageStatus: Sendable {
+    let cache: EiliAnisetteLibraryStatus
+    let provisioningPresent: Bool
+    let automaticAcquisition: Bool
+}
+
 enum EiliAnisetteLibraryStatus: Equatable, Sendable {
     case engineUnavailable, missing, invalid, present
     case incompatible(String)
@@ -52,6 +88,8 @@ actor EiliAnisetteService {
     private static let localIdentifierKey = "eilistore.anisette.local.identifier"
     private static let localBlobKey = "eilistore.anisette.local.adiblob"
     private static let localRoutingInfoKey = "eilistore.anisette.local.routinginfo"
+    private let stagedDownloader: (@Sendable (URL) async throws -> [URL])?
+    init(staging: (@Sendable (URL) async throws -> [URL])? = nil) { self.stagedDownloader = staging }
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
     #if EILI_ON_DEVICE_ANISETTE
@@ -75,6 +113,13 @@ actor EiliAnisetteService {
 
     /// Both layouts require bounded ELF metadata, dependencies and symbol preflight.
     /// Neither path initializes a VM/provider, creates an identity, or contacts Apple.
+    func localStorageStatus() -> EiliAnisetteStorageStatus {
+        let provisioning = root.appendingPathComponent("Provisioning", isDirectory: true).appendingPathComponent("adi.pb")
+        return EiliAnisetteStorageStatus(cache: localLibraryStatus(),
+            provisioningPresent: KeychainHelper.load(forKey: Self.localBlobKey) != nil || FileManager.default.fileExists(atPath: provisioning.path),
+            automaticAcquisition: EiliODASourceConfiguration.selected.automaticAcquisition)
+    }
+
     func localLibraryStatus() -> EiliAnisetteLibraryStatus {
         #if EILI_ON_DEVICE_ANISETTE
         let fm = FileManager.default
@@ -127,7 +172,18 @@ actor EiliAnisetteService {
         #if EILI_ON_DEVICE_ANISETTE
         switch localLibraryStatus() {
         case .engineUnavailable: throw EiliAnisetteError.localBuildRequired
-        case .missing: throw EiliAnisetteError.missingLibraries
+        case .missing:
+            guard EiliODASourceConfiguration.selected.automaticAcquisition else { throw EiliAnisetteError.missingLibraries }
+            _ = try await performDownload(using: selectedDownloaderStage())
+            // Download/import may preserve an incompatible diagnostic library set.
+            // Revalidate before creating identity, provisioning state, or a provider.
+            switch localLibraryStatus() {
+            case .present: break
+            case .engineUnavailable: throw EiliAnisetteError.localBuildRequired
+            case .missing: throw EiliAnisetteError.missingLibraries
+            case .invalid: throw EiliAnisetteError.invalidLibraries
+            case .incompatible(let reason): throw EiliAnisetteError.incompatibleLibraries(reason)
+            }
         case .invalid: throw EiliAnisetteError.invalidLibraries
         case .incompatible(let reason): throw EiliAnisetteError.incompatibleLibraries(reason)
         case .present: break
@@ -214,20 +270,43 @@ actor EiliAnisetteService {
         return try installLibraries(urls)
     }
 
-    /// Explicit opt-in only: never called by login, status checks, or remote mode.
-    /// The same gate covers network, validation and replacement so a session cannot
+    /// Manual acquisition or explicit persistent opt-in for a missing local cache;
+    /// never read-only/remote. The gate covers network, validation and replacement so a session cannot
     /// begin provisioning while its libraries are being replaced.
+    private func selectedDownloaderStage() -> @Sendable (URL) async throws -> [URL] {
+        if let stagedDownloader { return stagedDownloader }
+        return { directory in
+            let config = try EiliODASourceConfiguration.selected.validated()
+            return try await ADIRuntimeLibraryDownloader(metadataURL: config.sourceURL, fallbackURL: config.fallbackURL).stageLibraries(in: directory)
+        }
+    }
+
     @discardableResult
     func downloadLibraries() async throws -> EiliAnisetteLibraryStatus {
-        try await downloadLibraries(using: { directory in
-            try await ADIRuntimeLibraryDownloader().stageLibraries(in: directory)
-        })
+        try await downloadLibraries(using: selectedDownloaderStage())
+    }
+
+    @discardableResult
+    func ensureLibraries(force: Bool = false) async throws -> EiliAnisetteLibraryStatus {
+        await acquire()
+        defer { release() }
+        try Task.checkCancellation()
+        let status = localLibraryStatus()
+        if !force {
+            if status == .present { return status }
+            if status != .missing { throw EiliAnisetteError.invalidLibraries }
+        }
+        return try await performDownload(using: selectedDownloaderStage())
     }
 
     @discardableResult
     func downloadLibraries(using stage: @Sendable (URL) async throws -> [URL]) async throws -> EiliAnisetteLibraryStatus {
         await acquire()
         defer { release() }
+        return try await performDownload(using: stage)
+    }
+
+    private func performDownload(using stage: @Sendable (URL) async throws -> [URL]) async throws -> EiliAnisetteLibraryStatus {
         try Task.checkCancellation()
         guard EiliAnisetteMode.localBuildAvailable else { throw EiliAnisetteError.localBuildRequired }
         guard !hasActiveLocalSession else { throw EiliAnisetteError.logoutRequired }
@@ -238,8 +317,6 @@ actor EiliAnisetteService {
         defer { try? fm.removeItem(at: download) }
         let urls = try await stage(download)
         try Task.checkCancellation()
-        // Reuse the import transaction, including ABI gating and rollback. No
-        // preference, provisioning identity or remote blob is changed by download.
         return try installLibraries(urls)
     }
 

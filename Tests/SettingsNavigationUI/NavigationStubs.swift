@@ -23,6 +23,8 @@ struct ADIRuntimeLibraryDownloader { enum DownloadError: LocalizedError { case u
 final class EiliAnisetteService {
     static let shared = EiliAnisetteService()
     func localLibraryStatus() async -> EiliAnisetteLibraryStatus { .missing }
+    func localStorageStatus() async -> EiliAnisetteStorageStatus { .init(cache: .missing, provisioningPresent: false, automaticAcquisition: false) }
+    func ensureLibraries(force: Bool = false) async throws -> EiliAnisetteLibraryStatus { .missing }
     func importLibraries(_ urls: [URL]) async throws -> EiliAnisetteLibraryStatus { .missing }
     func downloadLibraries() async throws -> EiliAnisetteLibraryStatus { .missing }
     func resetLocal() async throws {}
@@ -31,4 +33,39 @@ final class PaxAuthService {
     static let shared = PaxAuthService()
     var hasSavedSession = false
     var currentAppleID: String? = nil
+}
+
+struct EiliODASourceConfiguration: Sendable {
+    static let catalogURLKey = "paxstore.anisette.catalogURL"
+    static let sourceURLKey = "eilistore.anisette.oda.sourceURL"
+    static let fallbackURLKey = "eilistore.anisette.oda.fallbackURL"
+    static let automaticAcquisitionKey = "eilistore.anisette.oda.automaticAcquisition"
+    static let defaultCatalogURLString = "https://servers.sidestore.io/servers.json"
+    static let defaultFallbackURLString = "https://zzz.haus/oda.json"
+    let sourceURL: URL
+    let fallbackURL: URL?
+    let automaticAcquisition: Bool
+
+    enum ValidationError: LocalizedError { case insecureSource, insecureFallback
+        var errorDescription: String? { switch self { case .insecureSource: return "ODA 來源必須是沒有帳號密碼的 HTTPS 網址。"; case .insecureFallback: return "ODA 備援來源必須是沒有帳號密碼的 HTTPS 網址。" } }
+    }
+    static var selected: Self {
+        let defaults = UserDefaults.standard
+        let catalog = defaults.string(forKey: catalogURLKey) ?? defaultCatalogURLString
+        let source = defaults.string(forKey: sourceURLKey) ?? catalog
+        let fallback = defaults.string(forKey: fallbackURLKey) ?? defaultFallbackURLString
+        return Self(sourceURL: URL(string: source) ?? URL(string: "invalid:")!, fallbackURL: URL(string: fallback) ?? URL(string: "invalid:")!, automaticAcquisition: defaults.bool(forKey: automaticAcquisitionKey))
+    }
+    func validated() throws -> Self {
+        guard Self.secure(sourceURL) else { throw ValidationError.insecureSource }
+        if let fallbackURL, !Self.secure(fallbackURL) { throw ValidationError.insecureFallback }
+        return self
+    }
+    private static func secure(_ url: URL) -> Bool { url.scheme?.lowercased() == "https" && !(url.host ?? "").isEmpty && url.user == nil && url.password == nil }
+}
+
+struct EiliAnisetteStorageStatus: Sendable {
+    let cache: EiliAnisetteLibraryStatus
+    let provisioningPresent: Bool
+    let automaticAcquisition: Bool
 }

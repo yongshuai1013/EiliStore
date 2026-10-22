@@ -35,6 +35,14 @@ struct AnisetteModeSection: View {
                     .font(.caption).foregroundColor(.secondary)
                 libraryStatusView
                     .accessibilityIdentifier("anisette-library-status")
+                Label(model.provisioningPresent ? "本機 adi.pb：已保存" : "本機 adi.pb：尚未佈建",
+                      systemImage: "key")
+                    .font(.caption).foregroundColor(.secondary)
+                    .accessibilityIdentifier("anisette-provisioning-status")
+                NavigationLink(destination: ODAAcquisitionSettingsView(model: model)) {
+                    Label("ODA 來源與快取管理", systemImage: "externaldrive")
+                }
+                .accessibilityIdentifier("anisette-oda-management")
                 Button("重新檢查檔案") {
                     Task {
                         model.working = true
@@ -48,7 +56,7 @@ struct AnisetteModeSection: View {
                 Button("下載 ADI 函式庫（SideStore 方式）") { model.confirmingDownload = true }
                     .disabled(model.working)
                     .accessibilityIdentifier("anisette-library-download")
-                Text("僅在確認後，從 https://zzz.haus/oda.json 取得第三方 ODA 中繼資料及其指定套件；不隨 App 打包。下載會核對中繼資料提供的 SHA-256，不符會記錄警告並繼續嘗試解壓；ZIP、CRC、大小與格式檢查仍須通過。這不是獨立釘選，也不保證來源可信或已取得授權。")
+                Text("僅在確認下載或明確允許自動取得後，從所選來源清單解析 ODA；只有缺少 ODA 時才用備援來源。套件不隨 App 打包。SHA-256 不符會記錄警告並繼續嘗試解壓；ZIP、CRC、大小與格式檢查仍須通過。這不是獨立釘選，也不保證來源可信或已取得授權。")
                     .font(.caption).foregroundColor(.secondary)
                 Button("匯入本機 ADI 函式庫") { model.importing = true }
                     .disabled(model.working)
@@ -57,7 +65,7 @@ struct AnisetteModeSection: View {
                     .font(.caption).foregroundColor(.secondary)
                 Text("舊版兩庫也須通過相依庫與符號檢查，不能僅憑檔名判定可用。不相容匯入不會覆蓋原有通過檢查的庫組。新版五庫目前只提供離線相容性診斷，尚未支援其 Android ABI，不能用於本機登入。靜態檢查不驗證來源、安全性、授權或實際登入；遠端不需要這些檔案。")
                     .font(.caption).foregroundColor(.secondary)
-                Button("重設本機 Anisette", role: .destructive) { model.resetting = true }
+                Button("重設 adi.pb（本機 Anisette）", role: .destructive) { model.resetting = true }
                     .disabled(model.working)
                     .accessibilityIdentifier("anisette-local-reset")
                 Text("本機資料與遠端身分分開保存。匯入或重設前請先登出使用本機模式的帳號；重設不會刪除遠端資料。")
@@ -94,4 +102,102 @@ struct AnisetteModeSection: View {
         }
     }
 
+}
+
+/// Settings only: opening this screen never acquires libraries or provisions an identity.
+struct ODAAcquisitionSettingsView: View {
+    @ObservedObject var model: AnisettePresentationModel
+    @State private var source = UserDefaults.standard.string(forKey: EiliODASourceConfiguration.sourceURLKey) ?? ""
+    @State private var fallback = UserDefaults.standard.string(forKey: EiliODASourceConfiguration.fallbackURLKey) ?? ""
+    @AppStorage(EiliODASourceConfiguration.automaticAcquisitionKey) private var automaticAcquisition = false
+    @State private var confirmingAutomatic = false
+    @State private var confirmingPreparation = false
+    @State private var notice: String?
+
+    private var catalogSource: String {
+        UserDefaults.standard.string(forKey: EiliODASourceConfiguration.catalogURLKey)
+            ?? EiliODASourceConfiguration.defaultCatalogURLString
+    }
+
+    var body: some View {
+        Form {
+            Section(header: Text("ODA 來源"), footer: Text("留空沿用 Anisette 伺服器清單來源。支援直接 ODA、清單內 oda 物件或中繼資料路徑；伺服器失敗不會自動換成備援來源。僅接受 HTTPS。")) {
+                TextField("來源清單或 ODA HTTPS 網址", text: $source)
+                    .textInputAutocapitalization(.never).disableAutocorrection(true)
+                    .keyboardType(.URL)
+                    .accessibilityIdentifier("oda-source-url")
+                Text("沿用來源：\(catalogSource)")
+                    .font(.caption).foregroundColor(.secondary)
+                TextField("備援：\(EiliODASourceConfiguration.defaultFallbackURLString)", text: $fallback)
+                    .textInputAutocapitalization(.never).disableAutocorrection(true)
+                    .keyboardType(.URL)
+                    .accessibilityIdentifier("oda-fallback-url")
+                Button("儲存來源設定") { saveSources() }
+                    .disabled(model.working)
+                    .accessibilityIdentifier("oda-save-sources")
+            }
+            Section(header: Text("函式庫快取"), footer: Text("已有通過檢查的快取時直接重用，不重下載、不改 adi.pb。缺少時才取得；損毀或不相容的庫不會被自動替換。手動匯入與下載共用安裝交易，失敗保留原檔。")) {
+                Toggle("本機模式缺少函式庫時自動取得", isOn: Binding(
+                    get: { automaticAcquisition },
+                    set: { value in
+                        if value { confirmingAutomatic = true }
+                        else { automaticAcquisition = false }
+                    }))
+                    .disabled(model.working)
+                    .accessibilityIdentifier("oda-automatic-acquisition")
+                Button("檢查快取／缺少時取得") { confirmingPreparation = true }
+                    .disabled(model.working)
+                    .accessibilityIdentifier("oda-ensure-cache")
+                Text(model.provisioningPresent ? "本機 adi.pb 已保存；內容不在此顯示。" : "本機尚無 provisioning 資料。")
+                    .font(.caption)
+                Text("自動取得預設關閉；只在選擇本機模式且已明確同意後生效。遠端模式不會因此下載或啟動本機引擎。取得函式庫本身不會連線 Apple；之後的本機登入佈建仍可能需要 Apple 連線。")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+        }
+        .navigationTitle("ODA 來源與快取")
+        .navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier("oda-management-page")
+        .confirmationDialog("允許自動取得第三方函式庫？", isPresented: $confirmingAutomatic, titleVisibility: .visible) {
+            Button("確認允許自動取得") {
+                do {
+                    _ = try EiliODASourceConfiguration.selected.validated()
+                    automaticAcquisition = true
+                } catch { notice = error.localizedDescription }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("會使用已儲存的來源清單與備援設定；只在本機模式缺少函式庫時下載並快取。請先儲存來源，並確認你有權取得及使用。雜湊不符僅警告；來源、授權與真機登入均未獲保證。")
+        }
+        .confirmationDialog("檢查快取並在缺少時下載？", isPresented: $confirmingPreparation, titleVisibility: .visible) {
+            Button("確認檢查／取得") { model.prepareLibraries() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("使用已儲存的來源；可用快取會原樣保留。缺少時才下載第三方 ODA 套件，不啟動引擎或登入 Apple。")
+        }
+        .alert("ODA 設定", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
+            Button("好") { notice = nil }
+        } message: { Text(notice ?? "") }
+    }
+
+    private func saveSources() {
+        let sourceText = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackText = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedSource = sourceText.isEmpty ? catalogSource : sourceText
+        let selectedFallback = fallbackText.isEmpty ? EiliODASourceConfiguration.defaultFallbackURLString : fallbackText
+        guard let sourceURL = URL(string: selectedSource), let fallbackURL = URL(string: selectedFallback) else {
+            notice = "來源與備援必須是有效的 HTTPS 網址。"
+            return
+        }
+        do {
+            _ = try EiliODASourceConfiguration(sourceURL: sourceURL, fallbackURL: fallbackURL, automaticAcquisition: false).validated()
+            let defaults = UserDefaults.standard
+            if sourceText.isEmpty { defaults.removeObject(forKey: EiliODASourceConfiguration.sourceURLKey) }
+            else { defaults.set(sourceText, forKey: EiliODASourceConfiguration.sourceURLKey) }
+            if fallbackText.isEmpty { defaults.removeObject(forKey: EiliODASourceConfiguration.fallbackURLKey) }
+            else { defaults.set(fallbackText, forKey: EiliODASourceConfiguration.fallbackURLKey) }
+            // Re-consent for this source before any later automatic acquisition.
+            automaticAcquisition = false
+            notice = "來源已儲存；如需自動取得，請重新明確允許。既有函式庫與 provisioning 資料未變更。"
+        } catch { notice = error.localizedDescription }
+    }
 }

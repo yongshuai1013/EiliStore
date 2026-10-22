@@ -69,7 +69,7 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
                            "anisette-library-import", "anisette-local-reset"]:
             self.assertIn(f'accessibilityIdentifier("{identifier}")', mode)
         for action in [".downloadLibraries()", ".importLibraries(urls)",
-                       ".localLibraryStatus()", ".resetLocal()"]:
+                       ".localStorageStatus()", ".resetLocal()"]:
             self.assertIn(action, model)
         self.assertIn(".fileImporter(isPresented: $anisette.importing", page)
         self.assertIn(".confirmationDialog(", page)
@@ -88,6 +88,22 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         self.assertIn('.task { await model.refreshLibraryStatus() }', mode)
         self.assertIn('Text("遠端（預設）")', mode)
         self.assertIn("尚未支援其 Android ABI，不能用於本機登入", mode)
+
+    def test_oda_management_has_explicit_consent_and_read_only_status(self):
+        mode = (SOURCES / "AnisetteModeSection.swift").read_text()
+        model = (SOURCES / "AnisettePresentationModel.swift").read_text()
+        page = (SOURCES / "UserCustomizationsView.swift").read_text()
+        for identifier in ["anisette-oda-management", "anisette-provisioning-status", "oda-source-url", "oda-fallback-url", "oda-save-sources", "oda-automatic-acquisition", "oda-ensure-cache"]:
+            self.assertIn(f'accessibilityIdentifier("{identifier}")', mode)
+        self.assertIn("confirmingAutomatic = true", mode)
+        self.assertIn('Button("確認允許自動取得")', mode)
+        self.assertIn("automaticAcquisition = false", mode)
+        self.assertIn(".validated()", mode)
+        self.assertIn(".ensureLibraries()", model)
+        self.assertIn(".localStorageStatus()", model)
+        self.assertIn("status.provisioningPresent", model)
+        self.assertIn("anisette.sourceSummary", page)
+        self.assertIn("本操作不會自動登出", page)
 
     def test_session_check_errors_are_not_reported_as_invalid_or_logged_out(self):
         login = (SOURCES / "LoginView.swift").read_text()

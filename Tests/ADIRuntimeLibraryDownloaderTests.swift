@@ -14,15 +14,16 @@ final class MockURLProtocol: URLProtocol {
     static let lock = NSLock()
     nonisolated(unsafe) static var replies: [String: Reply] = [:]
     nonisolated(unsafe) static var requestCount = 0
+    nonisolated(unsafe) static var requestedPaths: [String] = []
     private let cancellationLock = NSLock()
     private var stopped = false
     private var isStopped: Bool { cancellationLock.lock(); defer { cancellationLock.unlock() }; return stopped }
     static func set(_ reply: Reply, for path: String) { lock.lock(); replies[path] = reply; lock.unlock() }
-    static func clear() { lock.lock(); replies.removeAll(); requestCount = 0; lock.unlock() }
+    static func clear() { lock.lock(); replies.removeAll(); requestCount = 0; requestedPaths = []; lock.unlock() }
     override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "mock.test" }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        Self.lock.lock(); Self.requestCount += 1; let reply = Self.replies[request.url!.path]; Self.lock.unlock()
+        Self.lock.lock(); Self.requestCount += 1; Self.requestedPaths.append(request.url!.path); let reply = Self.replies[request.url!.path]; Self.lock.unlock()
         guard let reply else { client?.urlProtocol(self, didFailWithError: URLError(.fileDoesNotExist)); return }
         if reply.delay > 0 { Thread.sleep(forTimeInterval: reply.delay) }
         guard !isStopped else { return }
@@ -149,6 +150,121 @@ final class ADIRuntimeLibraryDownloaderTests: XCTestCase {
     func testHTTPRejectedBeforeNetwork() async throws {
         let d = ADIRuntimeLibraryDownloader(metadataURL: URL(string: "http://mock.test/metadata")!)
         await assertFailure(.insecure, downloader: d)
+    }
+    func testServerListEmbeddedODAObjectStagesLibraries() async throws {
+        let d = try makeDownloader()
+        let archive = try data("valid.zip")
+        let digest = try String(contentsOf: fixtures.appendingPathComponent("valid.zip.sha256"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = "{\"servers\":[],\"oda\":{\"s\":\"\(digest)\",\"l\":\"\(archive.base64EncodedString())\"}}"
+        MockURLProtocol.set(.init(status: 200, data: Data(source.utf8), delay: 0), for: "/metadata")
+        let paths = try await d.stageLibraries(in: try stageDir())
+        XCTAssertEqual(paths.map(\.lastPathComponent), ["libCoreADI.so", "libstoreservicescore.so"])
+        for path in paths { XCTAssertEqual(try Data(contentsOf: path), try data("valid.elf")) }
+        XCTAssertEqual(MockURLProtocol.requestedPaths, ["/metadata"])
+    }
+    func testServerListWithoutODAUsesFallbackOnly() async throws {
+        MockURLProtocol.clear()
+        let archive = try data("valid.zip")
+        let digest = try String(contentsOf: fixtures.appendingPathComponent("valid.zip.sha256"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"servers\":[],\"oda\":null}".utf8), delay: 0), for: "/source")
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"sha256\":\"\(digest)\",\"l\":\"\(archive.base64EncodedString())\"}".utf8), delay: 0), for: "/fallback")
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockURLProtocol.self]
+        let d = ADIRuntimeLibraryDownloader(sourceURL: URL(string: "https://mock.test/source")!, fallbackURL: URL(string: "https://mock.test/fallback")!, configuration: config)
+        _ = try await d.stageLibraries(in: try stageDir())
+        XCTAssertEqual(MockURLProtocol.requestedPaths, ["/source", "/fallback"])
+    }
+    func testServerListTopLevelArrayUsesFallback() async throws {
+        MockURLProtocol.clear()
+        let archive = try data("valid.zip")
+        let digest = try String(contentsOf: fixtures.appendingPathComponent("valid.zip.sha256"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        MockURLProtocol.set(.init(status: 200, data: Data("[]".utf8), delay: 0), for: "/source")
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"sha256\":\"\(digest)\",\"l\":\"\(archive.base64EncodedString())\"}".utf8), delay: 0), for: "/fallback")
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockURLProtocol.self]
+        let d = ADIRuntimeLibraryDownloader(sourceURL: URL(string: "https://mock.test/source")!, fallbackURL: URL(string: "https://mock.test/fallback")!, configuration: config)
+        _ = try await d.stageLibraries(in: try stageDir())
+        XCTAssertEqual(MockURLProtocol.requestedPaths, ["/source", "/fallback"])
+    }
+    func testSourceListPayloadWithoutHashIsDirectAndDoesNotFallback() async throws {
+        MockURLProtocol.clear()
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"servers\":[],\"l\":\"YWJj\"}".utf8), delay: 0), for: "/source")
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockURLProtocol.self]
+        let d = ADIRuntimeLibraryDownloader(sourceURL: URL(string: "https://mock.test/source")!, fallbackURL: URL(string: "https://mock.test/fallback")!, configuration: config)
+        await assertFailure(.metadata, downloader: d)
+        XCTAssertEqual(MockURLProtocol.requestedPaths, ["/source"])
+    }
+    func testSource503DoesNotUseFallback() async throws {
+        MockURLProtocol.clear()
+        MockURLProtocol.set(.init(status: 503, data: Data(), delay: 0), for: "/source")
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockURLProtocol.self]
+        let d = ADIRuntimeLibraryDownloader(sourceURL: URL(string: "https://mock.test/source")!, fallbackURL: URL(string: "https://mock.test/fallback")!, configuration: config)
+        await assertFailure(.network, downloader: d)
+        XCTAssertEqual(MockURLProtocol.requestedPaths, ["/source"])
+    }
+    func testRemoteArchiveAcceptsRawAndBase64WithDecodedHash() async throws {
+        let archive = try data("valid.zip")
+        let digest = try String(contentsOf: fixtures.appendingPathComponent("valid.zip.sha256"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        for body in [archive, Data(archive.base64EncodedString().utf8)] {
+            MockURLProtocol.clear()
+            MockURLProtocol.set(.init(status: 200, data: Data("{\"sha256\":\"\(digest)\",\"url\":\"https://mock.test/archive\"}".utf8), delay: 0), for: "/source")
+            MockURLProtocol.set(.init(status: 200, data: body, delay: 0), for: "/archive")
+            let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockURLProtocol.self]
+            let d = ADIRuntimeLibraryDownloader(sourceURL: URL(string: "https://mock.test/source")!, configuration: config)
+            let paths = try await d.stageLibraries(in: try stageDir())
+            XCTAssertEqual(try Data(contentsOf: paths[0]), try data("valid.elf"))
+        }
+    }
+    func testBadDirectMetadataDoesNotUseFallback() async throws {
+        MockURLProtocol.clear()
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"sha256\":\"bad\",\"l\":\"bad\"}".utf8), delay: 0), for: "/source")
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockURLProtocol.self]
+        let d = ADIRuntimeLibraryDownloader(sourceURL: URL(string: "https://mock.test/source")!, fallbackURL: URL(string: "https://mock.test/fallback")!, configuration: config)
+        await assertFailure(.metadata, downloader: d)
+        XCTAssertEqual(MockURLProtocol.requestedPaths, ["/source"])
+    }
+    func testDeclaredODAPathNetworkErrorDoesNotUseFallback() async throws {
+        MockURLProtocol.clear()
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"servers\":[],\"oda\":\"/oda.json\"}".utf8), delay: 0), for: "/source")
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockURLProtocol.self]
+        let d = ADIRuntimeLibraryDownloader(sourceURL: URL(string: "https://mock.test/source")!, fallbackURL: URL(string: "https://mock.test/fallback")!, configuration: config)
+        await assertFailure(.network, downloader: d)
+        XCTAssertEqual(MockURLProtocol.requestedPaths, ["/source", "/oda.json"])
+    }
+    func testODAPathIsResolvedRelativeToSourceAndRequiresHTTPS() async throws {
+        MockURLProtocol.clear()
+        let archive = try data("valid.zip")
+        let digest = try String(contentsOf: fixtures.appendingPathComponent("valid.zip.sha256"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"servers\":[],\"oda\":\"meta/oda.json\"}".utf8), delay: 0), for: "/dir/source")
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"sha256\":\"\(digest)\",\"l\":\"\(archive.base64EncodedString())\"}".utf8), delay: 0), for: "/dir/meta/oda.json")
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockURLProtocol.self]
+        let d = ADIRuntimeLibraryDownloader(sourceURL: URL(string: "https://mock.test/dir/source")!, configuration: config)
+        _ = try await d.stageLibraries(in: try stageDir())
+        XCTAssertEqual(MockURLProtocol.requestedPaths, ["/dir/source", "/dir/meta/oda.json"])
+        MockURLProtocol.clear()
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"servers\":[],\"oda\":null}".utf8), delay: 0), for: "/source")
+        let insecureConfig = URLSessionConfiguration.ephemeral; insecureConfig.protocolClasses = [MockURLProtocol.self]
+        let insecure = ADIRuntimeLibraryDownloader(sourceURL: URL(string: "https://mock.test/source")!, fallbackURL: URL(string: "http://mock.test/fallback")!, configuration: insecureConfig)
+        XCTAssertFalse(ADIRuntimeLibraryDownloader.isSecure(URL(string: "http://mock.test/fallback")!))
+        await assertFailure(.insecure, downloader: insecure)
+    }
+    func testODAAbsoluteMetadataPathIsResolved() async throws {
+        MockURLProtocol.clear()
+        let archive = try data("valid.zip")
+        let digest = try String(contentsOf: fixtures.appendingPathComponent("valid.zip.sha256"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"servers\":[],\"oda\":\"https://mock.test/meta/oda.json\"}".utf8), delay: 0), for: "/source")
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"sha256\":\"\(digest)\",\"l\":\"\(archive.base64EncodedString())\"}".utf8), delay: 0), for: "/meta/oda.json")
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockURLProtocol.self]
+        let d = ADIRuntimeLibraryDownloader(sourceURL: URL(string: "https://mock.test/source")!, configuration: config)
+        _ = try await d.stageLibraries(in: try stageDir())
+        XCTAssertEqual(MockURLProtocol.requestedPaths, ["/source", "/meta/oda.json"])
+    }
+    func testODACycleIsBoundedByDepthLimit() async throws {
+        MockURLProtocol.clear()
+        MockURLProtocol.set(.init(status: 200, data: Data("{\"servers\":[],\"oda\":\"https://mock.test/source\"}".utf8), delay: 0), for: "/source")
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockURLProtocol.self]
+        let d = ADIRuntimeLibraryDownloader(sourceURL: URL(string: "https://mock.test/source")!, configuration: config)
+        await assertFailure(.metadata, downloader: d)
+        XCTAssertEqual(MockURLProtocol.requestedPaths, ["/source", "/source", "/source", "/source"])
     }
     func testMetadataResponseSizeLimit() async throws {
         let d = try makeDownloader("valid.zip", limits: .init(metadataBytes: 32, archiveBytes: 1_000_000, fileBytes: 1_000_000, expandedBytes: 2_000_000))

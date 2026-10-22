@@ -29,12 +29,12 @@ struct UserCustomizationsView: View {
             Button("確認下載並替換本機函式庫") { anisette.download() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("來源：https://zzz.haus/oda.json。套件與雜湊均由第三方提供，並非獨立可信釘選；SHA-256 不符會記錄警告並繼續嘗試解壓，其他安全檢查仍須通過；再散布授權尚未確認，請確認你有權取得及使用。成功後會替換現有本機函式庫；失敗保留原檔。下載不會切換模式、連線 Apple 或開始登入，新版五庫仍可能不相容。")
+            Text("來源：\(anisette.sourceSummary)。來源清單缺少 ODA 才會使用備援，網路或驗證失敗不會盲目換源。套件與雜湊均由第三方提供，並非獨立可信釘選；SHA-256 不符會記錄警告並繼續嘗試解壓，其他安全檢查仍須通過；再散布授權尚未確認，請確認你有權取得及使用。成功後會替換現有本機函式庫；失敗保留原檔。下載不會切換模式、連線 Apple 或開始登入，新版五庫仍可能不相容。")
         }
         .confirmationDialog("重設本機 Anisette？", isPresented: $anisette.resetting, titleVisibility: .visible) {
             Button("重設本機資料", role: .destructive) { anisette.reset() }
             Button("取消", role: .cancel) {}
-        } message: { Text("會刪除本機 provisioning 身分，下一次登入須重新向 Apple 佈建。") }
+        } message: { Text("只會刪除本機 adi.pb／provisioning 身分及其 routing 資料；函式庫、Client Configuration、遠端資料與憑證保留。若正使用本機帳號，須先自行登出；本操作不會自動登出。下一次本機登入須重新向 Apple 佈建。") }
         .alert("本機 Anisette", isPresented: Binding(get: { anisette.message != nil }, set: { if !$0 { anisette.message = nil } })) {
             Button("好") { anisette.message = nil }
         } message: { Text(anisette.message ?? "") }

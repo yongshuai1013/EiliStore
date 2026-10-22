@@ -37,7 +37,13 @@ enum KeychainHelper {
         let manager = SideSign.AnisetteDataManager.shared
         let originalPreference = UserDefaults.standard.object(forKey: EiliAnisetteMode.preferenceKey)
         let originalSession = UserDefaults.standard.object(forKey: EiliAnisetteMode.sessionKey)
+        let acquisitionKeys = [EiliODASourceConfiguration.catalogURLKey, EiliODASourceConfiguration.sourceURLKey,
+            EiliODASourceConfiguration.fallbackURLKey, EiliODASourceConfiguration.automaticAcquisitionKey]
+        let originalAcquisitionSettings = acquisitionKeys.map { UserDefaults.standard.object(forKey: $0) }
         defer {
+            for (key, value) in zip(acquisitionKeys, originalAcquisitionSettings) {
+                if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+            }
             if let originalPreference { UserDefaults.standard.set(originalPreference, forKey: EiliAnisetteMode.preferenceKey) }
             else { UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.preferenceKey) }
             if let originalSession { UserDefaults.standard.set(originalSession, forKey: EiliAnisetteMode.sessionKey) }
@@ -53,6 +59,14 @@ enum KeychainHelper {
         check(!EiliAnisetteMode.localBuildAvailable, "remote build should report local unavailable")
         #endif
         check(EiliAnisetteMode.selected == .remote, "preference default must be remote")
+        let safeConfig = EiliODASourceConfiguration(sourceURL: URL(string: "https://example.invalid/oda.json")!, fallbackURL: nil, automaticAcquisition: false)
+        _ = try safeConfig.validated()
+        for unsafe in ["http://example.invalid/oda.json", "https://user:pass@example.invalid/oda.json", "file:///tmp/oda.json"] {
+            do { _ = try EiliODASourceConfiguration(sourceURL: URL(string: unsafe)!, fallbackURL: nil, automaticAcquisition: false).validated(); fatalError("unsafe ODA source accepted: \(unsafe)") }
+            catch EiliODASourceConfiguration.ValidationError.insecureSource {}
+        }
+        do { _ = try EiliODASourceConfiguration(sourceURL: safeConfig.sourceURL, fallbackURL: URL(string: "http://example.invalid/fallback")!, automaticAcquisition: false).validated(); fatalError("unsafe fallback accepted") }
+        catch EiliODASourceConfiguration.ValidationError.insecureFallback {}
         let svc = EiliAnisetteService(), id = UUID(), blob = Data([1, 2]), responseBlob = Data([9, 8])
         let urls = [URL(string: "https://first.invalid")!, URL(string: "https://second.invalid")!]
         await manager.reset()
@@ -207,7 +221,27 @@ enum KeychainHelper {
         check(await svc.localLibraryStatus() == .present, "status did not recover after valid files restored")
         check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.resetCount == 0, "read-only status initialized or reset provider")
         print("PASS: read-only ADI status (missing/invalid/present, file metadata and bounded ELF headers, no provider/reset calls)")
+        // Auto-acquisition is opt-in and must re-check installed status before provider use.
+        let autoKey = EiliODASourceConfiguration.automaticAcquisitionKey
+        UserDefaults.standard.set(false, forKey: autoKey)
+        let cacheService = EiliAnisetteService(staging: { _ in fatalError("cache hit staged libraries") })
+        let cacheResetCount = FakeAnisetteKitControl.resetCount
+        check(try await cacheService.ensureLibraries() == .present, "ensure cache hit status")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == cacheResetCount, "cache-hit ensure touched provider/reset")
         try FileManager.default.removeItem(at: libraryDirectory)
+        let offService = EiliAnisetteService(staging: { _ in fatalError("auto-off missing staged libraries") })
+        do { _ = try await offService.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("auto-off missing libraries fetched") }
+        catch EiliAnisetteError.missingLibraries {}
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == cacheResetCount, "auto-off missing touched provider")
+        UserDefaults.standard.set(true, forKey: autoKey)
+        let autoService = EiliAnisetteService(staging: { directory in try ELFLibraryFixtures.write(to: directory) })
+        FakeAnisetteKitControl.reset()
+        _ = try await autoService.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
+        check(FakeAnisetteKitControl.calls == 1 && FakeAnisetteKitControl.initializations == 1, "auto-on compatible staged set did not reach provider")
+        check(await autoService.localLibraryStatus() == .present, "auto-on compatible libraries not installed")
+        FakeAnisetteKitControl.reset()
+        try FileManager.default.removeItem(at: libraryDirectory)
+        UserDefaults.standard.set(false, forKey: autoKey)
         let remoteCallsBeforeMissing = await manager.calls
         do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("expected missing local libraries") }
         catch EiliAnisetteError.missingLibraries {}
@@ -355,6 +389,22 @@ enum KeychainHelper {
                 imports: ["CFRelease", "pthread_create"]).write(to: url)
             return url
         }
+        // An auto-downloaded incompatible set is diagnostic only: never create identity/provider state.
+        try FileManager.default.removeItem(at: libraryDirectory)
+        UserDefaults.standard.set(true, forKey: EiliODASourceConfiguration.automaticAcquisitionKey)
+        let autoBadService = EiliAnisetteService(staging: { _ in incompatibleFiles })
+        FakeAnisetteKitControl.reset()
+        let identityBeforeAutoBad = KeychainHelper.load(forKey: "eilistore.anisette.local.identifier")
+        let blobBeforeAutoBad = KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")
+        let autoBadRemoteCalls = await manager.calls
+        do { _ = try await autoBadService.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("auto-on incompatible libraries reached provider") }
+        catch EiliAnisetteError.incompatibleLibraries {}
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "auto-on incompatible staged set touched provider")
+        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == identityBeforeAutoBad && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == blobBeforeAutoBad, "auto-on incompatible staged set created identity")
+        check(!FileManager.default.fileExists(atPath: provisioning.path), "auto-on incompatible staged set created provisioning")
+        check(await manager.calls == autoBadRemoteCalls, "auto-on incompatible staged set fell back remote")
+        UserDefaults.standard.set(false, forKey: EiliODASourceConfiguration.automaticAcquisitionKey)
+        try await svc.importLibraries(elfFiles)
         FakeAnisetteKitControl.reset()
         let legacyMode = EiliAnisetteMode.selected
         let legacySessionMode = EiliAnisetteMode.savedSessionMode

@@ -20,14 +20,16 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
         var expandedBytes: UInt64 = 128 * 1024 * 1024
     }
     let metadataURL: URL
+    let fallbackURL: URL?
     private let configuration: URLSessionConfiguration
     private let limits: Limits
     private let warningHandler: @Sendable (String) -> Void
 
-    init(metadataURL: URL = Self.defaultMetadataURL,
+    init(metadataURL: URL = Self.defaultMetadataURL, fallbackURL: URL? = nil,
          configuration: URLSessionConfiguration = .ephemeral, limits: Limits = .init(),
          warningHandler: @escaping @Sendable (String) -> Void = { NSLog("%@", $0) }) {
         self.metadataURL = metadataURL
+        self.fallbackURL = fallbackURL
         self.warningHandler = warningHandler
         // Own an immutable snapshot; a caller cannot mutate policy during a request.
         let copy = configuration.copy() as! URLSessionConfiguration
@@ -43,6 +45,13 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
         self.limits = limits
     }
 
+    init(sourceURL: URL, fallbackURL: URL? = nil,
+         configuration: URLSessionConfiguration = .ephemeral, limits: Limits = .init(),
+         warningHandler: @escaping @Sendable (String) -> Void = { NSLog("%@", $0) }) {
+        self.init(metadataURL: sourceURL, fallbackURL: fallbackURL, configuration: configuration,
+                  limits: limits, warningHandler: warningHandler)
+    }
+
     static func isSecure(_ url: URL) -> Bool {
         url.scheme?.lowercased() == "https" && !(url.host ?? "").isEmpty
             && url.user == nil && url.password == nil
@@ -53,8 +62,7 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
             try Task.checkCancellation()
             guard limits.metadataBytes > 0, limits.archiveBytes > 0,
                   limits.fileBytes > 64, limits.expandedBytes > 64 else { throw DownloadError.large }
-            let meta = try await request(metadataURL, limit: limits.metadataBytes)
-            guard let obj = try JSONSerialization.jsonObject(with: meta) as? [String: Any] else { throw DownloadError.metadata }
+            let obj = try await resolveODA(from: metadataURL, depth: 0)
             let digest = ["sha256", "sha", "s"].compactMap { obj[$0] as? String }.first
             guard let digest, digest.utf8.count == 64,
                   digest.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }) else {
@@ -66,7 +74,16 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
             let payload = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             let archiveData: Data
             if let url = URL(string: payload), url.scheme != nil {
-                archiveData = try await request(url, limit: limits.archiveBytes)
+                let responseData = try await request(url, limit: limits.archiveBytes)
+                // SideStore's remote resolver accepts either a ZIP response or
+                // UTF-8 Base64 carrying the ZIP. Bound both representations.
+                if let encoded = String(data: responseData, encoding: .utf8),
+                   let decoded = Data(base64Encoded: encoded.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    guard decoded.count <= limits.archiveBytes else { throw DownloadError.large }
+                    archiveData = decoded
+                } else {
+                    archiveData = responseData
+                }
             } else {
                 guard let data = Data(base64Encoded: payload) else { throw DownloadError.metadata }
                 guard data.count <= limits.archiveBytes else { throw DownloadError.large }
@@ -87,6 +104,38 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
         } catch {
             throw DownloadError.invalid
         }
+    }
+
+    /// Mirrors SideStore's source resolution: direct ODA first; otherwise a
+    /// server-list ODA object/path; fallback is consulted only when ODA is absent.
+    private func resolveODA(from source: URL, depth: Int) async throws -> [String: Any] {
+        guard depth < 4 else { throw DownloadError.metadata }
+        let data = try await request(source, limit: limits.metadataBytes)
+        let json = try JSONSerialization.jsonObject(with: data)
+        if json is [Any] {
+            guard let fallbackURL else { throw DownloadError.metadata }
+            guard Self.isSecure(fallbackURL) else { throw DownloadError.insecure }
+            return try await resolveODA(from: fallbackURL, depth: depth + 1)
+        }
+        guard let object = json as? [String: Any] else { throw DownloadError.metadata }
+        if isDirectODA(object) { return object }
+        guard object["servers"] != nil || object["oda"] != nil else { throw DownloadError.metadata }
+        guard let oda = object["oda"], !(oda is NSNull) else {
+            guard let fallbackURL else { throw DownloadError.metadata }
+            guard Self.isSecure(fallbackURL) else { throw DownloadError.insecure }
+            return try await resolveODA(from: fallbackURL, depth: depth + 1)
+        }
+        if let direct = oda as? [String: Any], isDirectODA(direct) { return direct }
+        if let path = oda as? String, !path.isEmpty, let target = URL(string: path),
+           let resolved = target.scheme == nil ? URL(string: path, relativeTo: source)?.absoluteURL : target {
+            // A declared ODA path is authoritative: failures never invoke fallback.
+            return try await resolveODA(from: resolved, depth: depth + 1)
+        }
+        throw DownloadError.metadata
+    }
+
+    private func isDirectODA(_ object: [String: Any]) -> Bool {
+        ["l", "libraries", "payload", "data", "url"].contains { object[$0] is String }
     }
 
     private func request(_ url: URL, limit: Int) async throws -> Data {

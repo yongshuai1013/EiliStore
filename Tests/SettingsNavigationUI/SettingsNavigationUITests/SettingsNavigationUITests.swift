@@ -76,6 +76,28 @@ final class SettingsNavigationUITests: XCTestCase {
         XCTAssertTrue(importButton.waitForExistence(timeout: 5))
     }
 
+    func testODAManagementNavigationAndAutomaticAcquisitionConsent() {
+        let route = app.buttons["settings-user-customizations-shortcut"]
+        XCTAssertTrue(route.waitForExistence(timeout: 20))
+        route.tap()
+        let management = app.buttons["anisette-oda-management"]
+        XCTAssertTrue(management.waitForExistence(timeout: 20))
+        for _ in 0..<8 { if management.isHittable { break }; settingsList.swipeUp() }
+        XCTAssertTrue(management.isHittable)
+        management.tap()
+        XCTAssertTrue(app.textFields["oda-source-url"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textFields["oda-fallback-url"].exists)
+        let automatic = app.switches["oda-automatic-acquisition"]
+        for _ in 0..<8 { if automatic.isHittable { break }; settingsList.swipeUp() }
+        XCTAssertTrue(automatic.isHittable)
+        XCTAssertEqual(automatic.value as? String, "0")
+        automatic.tap()
+        XCTAssertTrue(app.buttons["確認允許自動取得"].waitForExistence(timeout: 5))
+        app.buttons["取消"].tap()
+        XCTAssertEqual(automatic.value as? String, "0")
+        attachScreenshot(named: "oda-management-consent-cancelled")
+    }
+
     private func assertCustomizationPage() {
         XCTAssertTrue(app.descendants(matching: .any)["user-customizations-page"].waitForExistence(timeout: 30))
         let list = settingsList
