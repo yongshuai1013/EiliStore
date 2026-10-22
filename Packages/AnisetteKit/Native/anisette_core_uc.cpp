@@ -63,6 +63,15 @@ static bool setup_vm_and_adi(
         return false;
     }
 
+    // Recognition is not ABI support. The legacy unknown-import zero stubs
+    // must never be treated as a working Android ABI for a libstoreapi set.
+    std::string modern_entry = std::string(lib_dir) + "/libstoreapi.so";
+    if (stat(modern_entry.c_str(), &st) == 0) {
+        out_err = "The libstoreapi library set requires an Android ABI adapter that this build does not implement. "
+                  "Use remote mode or compatible legacy libraries; do not rename libstoreapi.so.";
+        return false;
+    }
+
     if (!g_shared_vm) {
         g_shared_vm = new (std::nothrow) EmulatorVM();
         if (!g_shared_vm) {

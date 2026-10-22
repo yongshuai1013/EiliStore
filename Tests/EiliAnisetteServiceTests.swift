@@ -207,6 +207,54 @@ enum KeychainHelper {
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == nil, "reset retained local identifier")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteKeep, "reset cleared remote blob")
         check(FakeAnisetteKitControl.resetCount >= 2, "local engine not reset after import and reset")
+
+        let modernDir = FileManager.default.temporaryDirectory.appendingPathComponent("anisette-modern-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: modernDir) }
+        try FileManager.default.createDirectory(at: modernDir, withIntermediateDirectories: true)
+        var modernURLs: [URL] = []
+        for name in ADILibraryProfile.modern.filenames {
+            let url = modernDir.appendingPathComponent(name)
+            let data = ADIElfFixture.make(soname: name,
+                needed: name == "libstoreapi.so" ? Array(ADILibraryProfile.modern.filenames.dropLast()) : ["libc.so"],
+                exports: name == "libstoreapi.so" ? ADILibraryCompatibility.requiredEntryPoints.sorted() : [],
+                imports: name == "libCoreFP.so" ? ["pthread_create"] : [])
+            try data.write(to: url); modernURLs.append(url)
+        }
+        FakeAnisetteKitControl.reset()
+        let savedModeBeforeImport = EiliAnisetteMode.selected
+        let importedModern = try await svc.importLibraries(modernURLs)
+        if case .incompatible = importedModern {} else { fatalError("modern set incorrectly marked usable") }
+        check(EiliAnisetteMode.selected == savedModeBeforeImport, "modern import silently changed user preference")
+        let resetCountBeforeStatus = FakeAnisetteKitControl.resetCount
+        if case .incompatible = await svc.localLibraryStatus() {} else { fatalError("modern disk status lost incompatibility") }
+        check(FakeAnisetteKitControl.resetCount == resetCountBeforeStatus, "modern inspection reset VM")
+        let remoteBeforeBlocked = await manager.calls
+        do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("unsupported modern ABI executed") }
+        catch EiliAnisetteError.incompatibleLibraries {}
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "modern ABI initialized client or called provider")
+        let remoteAfterBlocked = await manager.calls
+        check(remoteAfterBlocked == remoteBeforeBlocked, "modern incompatibility silently fell back to remote")
+        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == nil && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == nil, "blocked modern ABI created identity")
+        check(!FileManager.default.fileExists(atPath: supportRoot.appendingPathComponent("Provisioning").path), "blocked modern ABI created provisioning directory")
+        do { _ = try await svc.importLibraries(modernURLs + [elfFiles.first { $0.lastPathComponent == "libstoreservicescore.so" }!]); fatalError("mixed set accepted") }
+        catch EiliAnisetteError.invalidLibraries {}
+        let renamed = modernDir.appendingPathComponent("libstoreservicescore.so")
+        try Data(contentsOf: modernDir.appendingPathComponent("libstoreapi.so")).write(to: renamed)
+        do { _ = try await svc.importLibraries([modernDir.appendingPathComponent("libCoreADI.so"), renamed]); fatalError("renamed libstoreapi accepted") }
+        catch EiliAnisetteError.incompatibleLibraries {}
+        check(FileManager.default.fileExists(atPath: supportRoot.appendingPathComponent("Libraries/libstoreapi.so").path), "failed import replaced previous set")
+        try FileManager.default.removeItem(at: supportRoot.appendingPathComponent("Libraries/libCoreFP.so"))
+        check(await svc.localLibraryStatus() == .missing, "incomplete modern set not reported missing")
+        try await svc.importLibraries(modernURLs)
+        UserDefaults.standard.set("remote", forKey: EiliAnisetteMode.preferenceKey)
+        await manager.reset()
+        _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls)
+        let remoteWithModernFiles = await manager.calls
+        check(remoteWithModernFiles == 1 && FakeAnisetteKitControl.calls == 0, "saved modern set broke remote routing")
+        try await svc.importLibraries(elfFiles)
+        check(await svc.localLibraryStatus() == .present, "legacy set could not be restored")
+        check(!FileManager.default.fileExists(atPath: supportRoot.appendingPathComponent("Libraries/libstoreapi.so").path), "legacy restore left stale modern entry")
+        print("PASS: modern five-library import/diagnostics, no VM/provider/identity or silent fallback, rename/mix rejection and legacy restore")
         try? FileManager.default.removeItem(at: supportRoot)
         #endif
 

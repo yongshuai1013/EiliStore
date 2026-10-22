@@ -1,0 +1,10 @@
+# User-supplied Android/Apple libraries must stay private and out of the IPA/repository.
+*.apk
+*.so
+AppleMusic*.zip
+
+# Reproducible build outputs, not source inputs.
+/build/
+/Packages/AnisetteKit/Artifacts/
+/Resources/Frameworks/
+__pycache__/

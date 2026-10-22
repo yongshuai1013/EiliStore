@@ -10,7 +10,8 @@ public enum FakeAnisetteKitControl {
     nonisolated(unsafe) private static var _throws = false
     nonisolated(unsafe) private static var _delay: UInt64 = 0
     nonisolated(unsafe) private static var _resets = 0
-    public static func reset() { lock.lock(); defer { lock.unlock() }; _calls = 0; _identifier = nil; _blob = nil; _responseBlob = Data([0xFA, 0xCE]); _throws = false; _delay = 0 }
+    nonisolated(unsafe) private static var _initializations = 0
+    public static func reset() { lock.lock(); defer { lock.unlock() }; _calls = 0; _identifier = nil; _blob = nil; _responseBlob = Data([0xFA, 0xCE]); _throws = false; _delay = 0; _initializations = 0 }
     public static func configure(blob: Data?, throwsError: Bool = false, delay: UInt64 = 0) { lock.lock(); defer { lock.unlock() }; _responseBlob = blob; _throws = throwsError; _delay = delay }
     private static func begin(identifier: UUID, blob: Data?) -> (Bool, UInt64, Data?) {
         lock.lock(); defer { lock.unlock() }
@@ -27,13 +28,15 @@ public enum FakeAnisetteKitControl {
     public static var identifier: UUID? { lock.lock(); defer { lock.unlock() }; return _identifier }
     public static var blob: Data? { lock.lock(); defer { lock.unlock() }; return _blob }
     public static var resetCount: Int { lock.lock(); defer { lock.unlock() }; return _resets }
+    public static var initializations: Int { lock.lock(); defer { lock.unlock() }; return _initializations }
+    static func didInitialize() { lock.lock(); defer { lock.unlock() }; _initializations += 1 }
     static func didReset() { lock.lock(); defer { lock.unlock() }; _resets += 1 }
 }
 public enum FakeAnisetteError: Error { case expected }
 public enum AnisetteKitLogging { public static func setLogging(_ enabled: Bool) {} }
 public struct UnicornAnisetteDataProvider: Sendable { public init() {} }
 public final class AnisetteClient: @unchecked Sendable {
-    public init(provisioningDir: URL, provider: UnicornAnisetteDataProvider, libraryDirectoryResolver: @escaping @Sendable () throws -> URL) throws {}
+    public init(provisioningDir: URL, requiredLibraries: [String] = [], provider: UnicornAnisetteDataProvider, libraryDirectoryResolver: @escaping @Sendable () throws -> URL) throws { FakeAnisetteKitControl.didInitialize() }
     public func getAnisetteData(identifier: UUID, storage: ProvisioningStorage) async throws -> (headers: [String: String], newBlob: Data?) {
         let existing: Data?; if case .memory(let value) = storage { existing = value } else { existing = nil }
         return try await FakeAnisetteKitControl.run(identifier: identifier, blob: existing)

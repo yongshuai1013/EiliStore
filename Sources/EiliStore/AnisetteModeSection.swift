@@ -14,13 +14,19 @@ struct AnisetteModeSection: View {
                 set: { mode = $0 })
     }
 
+    private var localSelectionDisabled: Bool {
+        if !EiliAnisetteMode.localBuildAvailable { return true }
+        if let libraryStatus, case .incompatible = libraryStatus { return true }
+        return false
+    }
+
     var body: some View {
         Section(header: Text("Anisette 模式"), footer: Text("遠端模式保留現有伺服器與自動輪換。本機模式只在裝置產生 Anisette，初次啟用仍須連線 Apple；失敗不會自動改用遠端。模式變更於下次登入生效，現有登入維持原模式。")) {
             Text("下次登入使用").font(.subheadline)
             Picker("下次登入使用", selection: selectedMode) {
                 Text("遠端（預設）").tag(EiliAnisetteMode.remote.rawValue)
                 Text("On-Device").tag(EiliAnisetteMode.onDevice.rawValue)
-                    .disabled(!EiliAnisetteMode.localBuildAvailable)
+                    .disabled(localSelectionDisabled)
             }
             .pickerStyle(.segmented)
             .disabled(working)
@@ -44,7 +50,9 @@ struct AnisetteModeSection: View {
                 .accessibilityHint("只讀取本機檔案，不啟動引擎或連線 Apple")
                 Button("匯入本機 ADI 函式庫") { importing = true }
                     .disabled(working)
-                Text("Apple ADI 函式庫不隨 App 提供。請同時選取有權取得及使用的 libCoreADI.so 和 libstoreservicescore.so（ARM64 ELF）；遠端模式不需要這些檔案。基本檢查不驗證來源、安全性、授權或實際登入。")
+                Text("Apple 函式庫不隨 App 提供。舊版選取 libCoreADI.so 與 libstoreservicescore.so。新版（如 6.5.3）選取 libstoreapi.so、libCoreADI.so、libCoreFP.so、libCoreLSKD.so、libFPDIFor3P.so，保留原名、勿混用版本，且須有權取得及使用。")
+                    .font(.caption).foregroundColor(.secondary)
+                Text("新版五庫目前只提供匯入與離線相容性診斷；尚未支援其 Android ABI，不能用於本機登入。請保持遠端模式。靜態檢查不驗證來源、安全性、授權或實際登入；遠端不需要這些檔案。")
                     .font(.caption).foregroundColor(.secondary)
                 Button("重設本機 Anisette", role: .destructive) { resetting = true }
                     .disabled(working)
@@ -60,8 +68,12 @@ struct AnisetteModeSection: View {
                 working = true
                 Task {
                     do {
-                        try await EiliAnisetteService.shared.importLibraries(urls)
-                        message = "本機函式庫已匯入。可選擇 On-Device 後重新登入；尚未驗證真機登入結果。"
+                        let status = try await EiliAnisetteService.shared.importLibraries(urls)
+                        if case .incompatible(let reason) = status {
+                            message = "新版庫組已保存供離線檢查，目前不能用於本機登入。\n" + reason
+                        } else {
+                            message = "舊版函式庫已匯入並通過基本檢查；尚未驗證真機登入結果。"
+                        }
                     } catch { message = safeMessage(error) }
                     await refreshLibraryStatus()
                     working = false
@@ -108,6 +120,10 @@ struct AnisetteModeSection: View {
             case .present:
                 Label("ADI 檔案基本檢查通過", systemImage: "checkmark.circle")
                     .font(.caption).foregroundColor(.secondary)
+            case .incompatible(let reason):
+                Label("新版庫組已識別，但目前引擎不相容", systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundColor(.orange)
+                Text(reason).font(.caption).foregroundColor(.secondary)
             }
         } else {
             Text("正在檢查本機 ADI 檔案…")

@@ -27,14 +27,19 @@ enum EiliAnisetteMode: String, CaseIterable, Identifiable {
 
 enum EiliAnisetteLibraryStatus: Equatable, Sendable {
     case engineUnavailable, missing, invalid, present
+    case incompatible(String)
 }
 enum EiliAnisetteError: LocalizedError {
     case localBuildRequired, missingLibraries, invalidLibraries, invalidHeaders, storageFailed, logoutRequired
+    case incompatibleLibraries(String)
+    case libraryRecoveryRequired(String)
     var errorDescription: String? {
         switch self {
         case .localBuildRequired: return "此版本未包含本機 Anisette，請使用本機相容性建置，或切回遠端模式。"
-        case .missingLibraries: return "請先匯入 libCoreADI.so 與 libstoreservicescore.so（ARM64）。"
-        case .invalidLibraries: return "必須同時選取兩個指定名稱的 ARM64 ELF 函式庫；原有資料未變更。"
+        case .missingLibraries: return "ADI 函式庫尚未完整匯入；請選取同一版本的完整舊版兩庫或新版五庫（ARM64）。"
+        case .invalidLibraries: return "請完整選取舊版兩庫或新版五庫的指定 ARM64 ELF 檔案，勿混用或改名；原有資料未變更。"
+        case .incompatibleLibraries(let reason): return reason
+        case .libraryRecoveryRequired(let backup): return "匯入及自動回復均失敗；原函式庫仍保留於 \(backup) 備份資料夾，未刪除。請保留備份，不要將此次匯入視為成功。"
         case .invalidHeaders: return "本機 Anisette 回傳不完整，未進行 Apple 登入。"
         case .storageFailed: return "無法安全保存本機 Anisette 資料，請重試。"
         case .logoutRequired: return "請先登出本機 Anisette 帳號，再匯入或重設本機資料。"
@@ -66,13 +71,14 @@ actor EiliAnisetteService {
             .appendingPathComponent("EiliStore/OnDeviceAnisette", isDirectory: true)
     }
     private var libraries: URL { root.appendingPathComponent("Libraries", isDirectory: true) }
-    private let libraryNames = ["libCoreADI.so", "libstoreservicescore.so"]
 
-    /// Only inspect local file metadata and ELF headers; never initialize a provider or identity.
+    /// Legacy uses bounded headers; modern additionally inspects ELF dependencies and symbols.
+    /// Neither path initializes a VM/provider, creates an identity, or contacts Apple.
     func localLibraryStatus() -> EiliAnisetteLibraryStatus {
         #if EILI_ON_DEVICE_ANISETTE
         let fm = FileManager.default
-        let files = libraryNames.map { libraries.appendingPathComponent($0, isDirectory: false) }
+        guard let profile = ADILibraryProfile.detected(in: libraries) else { return .invalid }
+        let files = profile.filenames.map { libraries.appendingPathComponent($0, isDirectory: false) }
         guard files.allSatisfy({ fm.fileExists(atPath: $0.path) }) else { return .missing }
         for url in files {
             guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
@@ -84,6 +90,10 @@ actor EiliAnisetteService {
             defer { try? handle.close() }
             guard let header = try? handle.read(upToCount: 64),
                   Self.validLibrary(header) else { return .invalid }
+        }
+        if profile == .modern {
+            guard let report = try? ADILibraryCompatibility.read(directory: libraries, profile: profile) else { return .invalid }
+            if !report.runtimeAdapterAvailable || report.hasStaticBlockers { return .incompatible(report.summary) }
         }
         return .present
         #else
@@ -111,8 +121,20 @@ actor EiliAnisetteService {
 
     private func fetchLocal() async throws -> SideSign.AnisetteData {
         #if EILI_ON_DEVICE_ANISETTE
-        guard libraryNames.allSatisfy({ FileManager.default.fileExists(atPath: libraries.appendingPathComponent($0).path) }) else {
-            throw EiliAnisetteError.missingLibraries
+        switch localLibraryStatus() {
+        case .engineUnavailable: throw EiliAnisetteError.localBuildRequired
+        case .missing: throw EiliAnisetteError.missingLibraries
+        case .invalid: throw EiliAnisetteError.invalidLibraries
+        case .incompatible(let reason): throw EiliAnisetteError.incompatibleLibraries(reason)
+        case .present: break
+        }
+        guard let profile = ADILibraryProfile.detected(in: libraries) else { throw EiliAnisetteError.invalidLibraries }
+        if localClient == nil && profile == .legacy {
+            let entry = libraries.appendingPathComponent("libstoreservicescore.so")
+            if let data = try? ADILibraryCompatibility.readLibrary(entry),
+               let metadata = try? ADIELFMetadata.parse(data), metadata.soname == "libstoreapi.so" {
+                throw EiliAnisetteError.incompatibleLibraries("新版 libstoreapi.so 不可改名冒充舊版函式庫；請匯入原名五庫並查看相容性提示。")
+            }
         }
         let identifier: UUID
         if let stored = KeychainHelper.loadString(forKey: Self.localIdentifierKey), let uuid = UUID(uuidString: stored) {
@@ -129,6 +151,7 @@ actor EiliAnisetteService {
             try FileManager.default.createDirectory(at: provisioning, withIntermediateDirectories: true)
             AnisetteKitLogging.setLogging(false)
             localClient = try AnisetteClient(provisioningDir: provisioning,
+                requiredLibraries: profile.filenames,
                 provider: UnicornAnisetteDataProvider(), libraryDirectoryResolver: { directory })
         }
         guard let client = localClient else { throw EiliAnisetteError.missingLibraries }
@@ -166,13 +189,14 @@ actor EiliAnisetteService {
             && bytes[16] == 3 && bytes[17] == 0 && bytes[18] == 183 && bytes[19] == 0
     }
 
-    func importLibraries(_ urls: [URL]) async throws {
+    @discardableResult
+    func importLibraries(_ urls: [URL]) async throws -> EiliAnisetteLibraryStatus {
         await acquire()
         defer { release() }
         try Task.checkCancellation()
         guard EiliAnisetteMode.localBuildAvailable else { throw EiliAnisetteError.localBuildRequired }
         guard !hasActiveLocalSession else { throw EiliAnisetteError.logoutRequired }
-        guard urls.count == 2, Set(urls.map(\.lastPathComponent)) == Set(libraryNames) else {
+        guard let profile = ADILibraryProfile.selected(urls.map(\.lastPathComponent)) else {
             throw EiliAnisetteError.invalidLibraries
         }
         let fm = FileManager.default
@@ -186,18 +210,31 @@ actor EiliAnisetteService {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             #endif
-            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard size > 64 && size <= 64 * 1024 * 1024 else { throw EiliAnisetteError.invalidLibraries }
-            let data = try Data(contentsOf: url)
+            let data: Data
+            do { data = try ADILibraryCompatibility.readLibrary(url) }
+            catch { throw EiliAnisetteError.invalidLibraries }
             guard Self.validLibrary(data) else { throw EiliAnisetteError.invalidLibraries }
+            if profile == .legacy, let metadata = try? ADIELFMetadata.parse(data), metadata.soname == "libstoreapi.so" {
+                throw EiliAnisetteError.incompatibleLibraries("新版 libstoreapi.so 不可改名冒充 libstoreservicescore.so；舊檔案未變更。")
+            }
             try data.write(to: staging.appendingPathComponent(url.lastPathComponent), options: .atomic)
         }
+        let status: EiliAnisetteLibraryStatus
+        if profile == .modern {
+            let report: ADILibraryCompatibility
+            do { report = try ADILibraryCompatibility.read(directory: staging, profile: profile) }
+            catch { throw EiliAnisetteError.invalidLibraries }
+            status = report.runtimeAdapterAvailable && !report.hasStaticBlockers ? .present : .incompatible(report.summary)
+        } else { status = .present }
         try Task.checkCancellation()
         let hadLibraries = fm.fileExists(atPath: libraries.path)
         if hadLibraries { try fm.moveItem(at: libraries, to: backup) }
         do { try fm.moveItem(at: staging, to: libraries) }
         catch {
-            if hadLibraries { try? fm.moveItem(at: backup, to: libraries) }
+            if hadLibraries {
+                do { try fm.moveItem(at: backup, to: libraries) }
+                catch { throw EiliAnisetteError.libraryRecoveryRequired(backup.lastPathComponent) }
+            }
             throw error
         }
         if hadLibraries { try? fm.removeItem(at: backup) }
@@ -205,6 +242,7 @@ actor EiliAnisetteService {
         localClient = nil
         resetLocalAnisetteEngine()
         #endif
+        return status
     }
 
     func resetLocal() async throws {
