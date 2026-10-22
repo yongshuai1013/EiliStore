@@ -90,6 +90,46 @@ final class ADIRuntimeLibraryDownloaderTests: XCTestCase {
         XCTAssertEqual(remotePaths.map(\.lastPathComponent), ["libCoreADI.so", "libstoreservicescore.so"])
         XCTAssertEqual(try Data(contentsOf: remotePaths[0]), try data("valid.elf"))
     }
+    func testAppleDoubleMetadataAcceptedWithoutWritingMetadata() async throws {
+        for archive in ["metadata-two.zip", "metadata-five.zip", "metadata-dir.zip"] {
+            let dir = try stageDir()
+            let paths = try await makeDownloader(archive).stageLibraries(in: dir)
+            XCTAssertEqual(paths.map(\.lastPathComponent), archive == "metadata-five.zip"
+                ? ["libCoreADI.so", "libCoreFP.so", "libCoreLSKD.so", "libFPDIFor3P.so", "libstoreapi.so"]
+                : ["libCoreADI.so", "libstoreservicescore.so"])
+            for path in paths { XCTAssertEqual(try Data(contentsOf: path), try data("valid.elf")) }
+            XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)), Set(paths.map(\.lastPathComponent)))
+        }
+    }
+    func testRejectsUnsafeAppleDoubleMetadataEntries() async throws {
+        for archive in ["metadata-unknown.zip", "metadata-traversal.zip", "metadata-nested.zip", "metadata-duplicate.zip",
+                        "metadata-symlink.zip", "metadata-orphan.zip", "metadata-badcrc.zip", "metadata-duplicate-dir.zip",
+                        "metadata-nonempty-dir.zip", "metadata-root-wrapper.zip", "metadata-incomplete.zip", "metadata-mixed-set.zip"] {
+            await assertFailure(.archive, downloader: try makeDownloader(archive))
+        }
+    }
+    func testMetadataEntriesCountTowardExpandedSizeLimits() async throws {
+        let sized = try makeDownloader("metadata-sized.zip", limits: .init(fileBytes: 300, expandedBytes: 2_000))
+        await assertFailure(.large, downloader: sized)
+        let total = try makeDownloader("metadata-total.zip", limits: .init(fileBytes: 300, expandedBytes: 512))
+        await assertFailure(.large, downloader: total)
+    }
+    func testWrongDigestDoesNotSkipMetadataCRCValidation() async throws {
+        let d = try makeDownloader("metadata-badcrc.zip")
+        try setMismatchedMetadata("metadata-badcrc.zip")
+        await assertFailure(.archive, downloader: d)
+    }
+    func testMetadataArchiveNeverOverwritesNonemptyStagingDirectory() async throws {
+        let d = try makeDownloader("metadata-two.zip")
+        let directory = try stageDir()
+        let existing = directory.appendingPathComponent("sentinel")
+        let original = Data("existing sentinel".utf8)
+        try original.write(to: existing)
+        do { _ = try await d.stageLibraries(in: directory); XCTFail("nonempty staging accepted") }
+        catch let error as ADIRuntimeLibraryDownloader.DownloadError { XCTAssertEqual(error, .archive) }
+        XCTAssertEqual(try Data(contentsOf: existing), original)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["sentinel"])
+    }
     private func setMismatchedMetadata(_ archive: String?, key: String = "s") throws {
         let payload = try archive.map { "\"l\":\"\(try data($0).base64EncodedString())\"" }
             ?? "\"url\":\"https://mock.test/archive\""

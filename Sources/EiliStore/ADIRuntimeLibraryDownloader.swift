@@ -162,41 +162,61 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
         catch { throw DownloadError.archive }
         var entries: [Entry] = []
         for entry in archive {
-            guard entries.count < 5 else { throw DownloadError.archive }
+            // Five libraries, their exact AppleDouble companions, one directory.
+            guard entries.count < 11 else { throw DownloadError.archive }
             entries.append(entry)
         }
-        guard entries.count == 2 || entries.count == 5 else { throw DownloadError.archive }
-        let permitted: Set<String> = entries.count == 2
-            ? ["libCoreADI.so", "libstoreservicescore.so"]
-            : ["libCoreADI.so", "libCoreFP.so", "libCoreLSKD.so", "libFPDIFor3P.so", "libstoreapi.so"]
+        let twoLibraries: Set<String> = ["libCoreADI.so", "libstoreservicescore.so"]
+        let fiveLibraries: Set<String> = ["libCoreADI.so", "libCoreFP.so", "libCoreLSKD.so", "libFPDIFor3P.so", "libstoreapi.so"]
+        let libraryNames = Set(entries.map { $0.path(using: .utf8) }).intersection(twoLibraries.union(fiveLibraries))
+        guard libraryNames == twoLibraries || libraryNames == fiveLibraries else { throw DownloadError.archive }
+        let permitted = libraryNames
+        let companions = Set(permitted.map { "__MACOSX/._" + $0 })
         var seen = Set<String>(), total: UInt64 = 0
         for entry in entries {
             // Permitted names are ASCII (and therefore UTF-8). Do not rely on
             // platform-specific DOS codepage support for ZIP's default encoding.
             let name = entry.path(using: .utf8)
-            guard permitted.contains(name), seen.insert(name).inserted,
-                  entry.type == .file, entry.uncompressedSize > 64 else { throw DownloadError.archive }
+            guard seen.insert(name).inserted else { throw DownloadError.archive }
+            if name == "__MACOSX/" {
+                guard entry.type == .directory, entry.uncompressedSize == 0,
+                      entry.compressedSize == 0, entry.checksum == 0 else { throw DownloadError.archive }
+                continue
+            }
+            guard permitted.contains(name) || companions.contains(name), entry.type == .file else {
+                throw DownloadError.archive
+            }
+            if permitted.contains(name), entry.uncompressedSize <= 64 { throw DownloadError.archive }
+            // Discarded metadata still counts against all expansion limits.
             guard entry.uncompressedSize <= limits.fileBytes,
                   entry.uncompressedSize <= limits.expandedBytes - min(total, limits.expandedBytes) else { throw DownloadError.large }
             total += entry.uncompressedSize
         }
-        guard seen == permitted else { throw DownloadError.archive }
         for entry in entries {
             try Task.checkCancellation()
-            let output = directory.appendingPathComponent(entry.path(using: .utf8))
-            guard fm.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
-                throw DownloadError.archive
+            let name = entry.path(using: .utf8)
+            if name == "__MACOSX/" { continue }
+            let isLibrary = permitted.contains(name)
+            let output = directory.appendingPathComponent(name)
+            let handle: FileHandle?
+            if isLibrary {
+                guard fm.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                    throw DownloadError.archive
+                }
+                handle = try FileHandle(forWritingTo: output)
+            } else {
+                // Validate companions without ever creating a path for them.
+                handle = nil
             }
-            let handle = try FileHandle(forWritingTo: output)
             do {
-                defer { try? handle.close() }
+                defer { try? handle?.close() }
                 var written: UInt64 = 0
                 let crc = try archive.extract(entry, bufferSize: 64 * 1024, skipCRC32: false) { chunk in
                     try Task.checkCancellation()
                     guard UInt64(chunk.count) <= entry.uncompressedSize - min(written, entry.uncompressedSize),
                           UInt64(chunk.count) <= limits.fileBytes - min(written, limits.fileBytes) else { throw DownloadError.large }
                     written += UInt64(chunk.count)
-                    try handle.write(contentsOf: chunk)
+                    try handle?.write(contentsOf: chunk)
                 }
                 // ZIPFoundation's consumer API RETURNS the checksum; it does not
                 // compare it against the archive's CRC for us.
@@ -204,6 +224,7 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
             } catch is CancellationError { throw CancellationError() }
             catch let error as DownloadError { throw error }
             catch { throw DownloadError.archive }
+            guard isLibrary else { continue }
             let reader = try FileHandle(forReadingFrom: output)
             defer { try? reader.close() }
             let header = [UInt8](try reader.read(upToCount: 64) ?? Data())
