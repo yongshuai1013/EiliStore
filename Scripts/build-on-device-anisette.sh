@@ -20,8 +20,26 @@ CC="$(xcrun --sdk iphoneos --find clang)"
 CXX="$(xcrun --sdk iphoneos --find clang++)"
 
 mkdir -p "$WORK"
-if [[ ! -d "$SRC/.git" ]]; then git clone --no-checkout "$REPO" "$SRC"; fi
-git -C "$SRC" fetch --depth 1 origin "$REV"
+if [[ ! -d "$SRC/.git" ]]; then
+  mkdir -p "$SRC"
+  git -C "$SRC" init -q
+  git -C "$SRC" remote add origin "$REPO"
+fi
+# Retry only source transfer, never compilation or a failed compatibility audit.
+# Fetch just the pinned commit instead of cloning the full upstream history.
+FETCH_STATUS=1
+for ATTEMPT in 1 2 3; do
+  if GIT_TERMINAL_PROMPT=0 git -C "$SRC" fetch --depth 1 origin "$REV"; then
+    FETCH_STATUS=0
+    break
+  else
+    FETCH_STATUS=$?
+  fi
+  [[ "$ATTEMPT" -lt 3 ]] || break
+  echo "Unicorn source fetch failed (attempt $ATTEMPT/3); retrying in 15 seconds." >&2
+  sleep 15
+done
+[[ "$FETCH_STATUS" -eq 0 ]] || exit "$FETCH_STATUS"
 git -C "$SRC" checkout --detach "$REV"
 [[ "$(git -C "$SRC" rev-parse HEAD)" == "$REV" ]] || { echo "Pinned Unicorn revision mismatch" >&2; exit 1; }
 

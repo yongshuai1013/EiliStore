@@ -23,20 +23,52 @@ enum KeychainHelper {
     static func check(_ value: Bool, _ message: String) { if !value { fatalError(message) } }
     static func main() async throws {
         let manager = SideSign.AnisetteDataManager.shared
+        let originalPreference = UserDefaults.standard.object(forKey: EiliAnisetteMode.preferenceKey)
+        let originalSession = UserDefaults.standard.object(forKey: EiliAnisetteMode.sessionKey)
+        defer {
+            if let originalPreference { UserDefaults.standard.set(originalPreference, forKey: EiliAnisetteMode.preferenceKey) }
+            else { UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.preferenceKey) }
+            if let originalSession { UserDefaults.standard.set(originalSession, forKey: EiliAnisetteMode.sessionKey) }
+            else { UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.sessionKey) }
+        }
         await manager.reset()
         UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.preferenceKey)
         UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.sessionKey)
+        check(EiliAnisetteMode.allCases == [.remote, .onDevice], "mode cases must include remote and on-device")
+        #if EILI_ON_DEVICE_ANISETTE
+        check(EiliAnisetteMode.localBuildAvailable, "local build flag should report local availability")
+        #else
+        check(!EiliAnisetteMode.localBuildAvailable, "remote build should report local unavailable")
+        #endif
         check(EiliAnisetteMode.selected == .remote, "preference default must be remote")
+        let svc = EiliAnisetteService(), id = UUID(), blob = Data([1, 2]), responseBlob = Data([9, 8])
+        let urls = [URL(string: "https://first.invalid")!, URL(string: "https://second.invalid")!]
+        await manager.reset()
+        #if EILI_ON_DEVICE_ANISETTE
+        FakeAnisetteKitControl.reset()
+        #endif
+        _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls)
+        var implicitCalls = await manager.calls
+        check(implicitCalls == 1, "cold-boot implicit fetch must route remote")
+        #if EILI_ON_DEVICE_ANISETTE
+        check(FakeAnisetteKitControl.calls == 0, "cold-boot implicit fetch called local provider")
+        #endif
+        await manager.reset()
         UserDefaults.standard.set("nonsense", forKey: EiliAnisetteMode.preferenceKey)
         check(EiliAnisetteMode.selected == .remote, "unknown preference must default remote")
+        _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls)
+        implicitCalls = await manager.calls
+        check(implicitCalls == 1, "unknown preference implicit fetch must route remote")
+        #if EILI_ON_DEVICE_ANISETTE
+        check(FakeAnisetteKitControl.calls == 0, "unknown preference implicit fetch called local provider")
+        #endif
         UserDefaults.standard.set("nonsense", forKey: EiliAnisetteMode.sessionKey)
         check(EiliAnisetteMode.savedSessionMode == .remote, "unknown session mode must default remote")
         UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.sessionKey)
         check(EiliAnisetteMode.savedSessionMode == .onDevice, "session mode mapping")
         UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.sessionKey)
 
-        let svc = EiliAnisetteService(), id = UUID(), blob = Data([1, 2]), responseBlob = Data([9, 8])
-        let urls = [URL(string: "https://first.invalid")!, URL(string: "https://second.invalid")!]
+        await manager.reset()
         _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .remote)
         let callCount = await manager.calls, gotServers = await manager.lastServers, gotID = await manager.lastIdentifier, gotBlob = await manager.lastBlob
         check(callCount == 1 && gotServers == urls && gotID == id && gotBlob == blob, "remote routing parameters")
@@ -50,6 +82,7 @@ enum KeychainHelper {
 
         await manager.reset()
         if !EiliAnisetteMode.localBuildAvailable {
+            check(await svc.localLibraryStatus() == .engineUnavailable, "disabled engine status")
             do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("expected localBuildRequired") }
             catch EiliAnisetteError.localBuildRequired {}
             let localCalls = await manager.calls; check(localCalls == 0, "unavailable local mode called remote")
@@ -61,8 +94,71 @@ enum KeychainHelper {
         let elfFiles = try ELFLibraryFixtures.write(to: fixtureDir)
         let supportRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("EiliStore/OnDeviceAnisette", isDirectory: true)
+        let backupURL = supportRoot.deletingLastPathComponent().appendingPathComponent("OnDeviceAnisette-test-backup-\(UUID().uuidString)")
+        let supportRootExisted = FileManager.default.fileExists(atPath: supportRoot.path)
+        if supportRootExisted { try FileManager.default.copyItem(at: supportRoot, to: backupURL) }
+        let originalLocalBlob = KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")
+        let originalRemoteBlob = KeychainHelper.load(forKey: "paxstore.anisette.adiblob")
+        let originalAuthSession = KeychainHelper.load(forKey: "paxstore.auth.session")
+        defer {
+            try? FileManager.default.removeItem(at: supportRoot)
+            if supportRootExisted { try? FileManager.default.moveItem(at: backupURL, to: supportRoot) }
+            else { try? FileManager.default.removeItem(at: backupURL) }
+            for (key, value) in [("eilistore.anisette.local.adiblob", originalLocalBlob), ("paxstore.anisette.adiblob", originalRemoteBlob), ("paxstore.auth.session", originalAuthSession)] {
+                if let value { KeychainHelper.save(value, forKey: key) } else { KeychainHelper.delete(forKey: key) }
+            }
+        }
         try? FileManager.default.removeItem(at: supportRoot)
+        UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.preferenceKey)
+        UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.sessionKey)
+        let localStatusBlob = Data([0x91, 0x92])
+        KeychainHelper.save(localStatusBlob, forKey: "eilistore.anisette.local.adiblob")
+        KeychainHelper.save(Data([0x93]), forKey: "paxstore.anisette.adiblob")
+        KeychainHelper.save(Data([0x94]), forKey: "paxstore.auth.session")
         FakeAnisetteKitControl.reset()
+        check(await svc.localLibraryStatus() == .missing, "missing library status")
+        check(!FileManager.default.fileExists(atPath: supportRoot.path), "status created missing library directory")
+        check(UserDefaults.standard.string(forKey: EiliAnisetteMode.preferenceKey) == "onDevice" && UserDefaults.standard.string(forKey: EiliAnisetteMode.sessionKey) == "onDevice", "status changed saved mode")
+        check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == localStatusBlob && KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == Data([0x93]) && KeychainHelper.load(forKey: "paxstore.auth.session") == Data([0x94]), "status changed keychain state")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.resetCount == 0, "status called local provider")
+        KeychainHelper.delete(forKey: "paxstore.auth.session")
+        UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.sessionKey)
+        try FileManager.default.createDirectory(at: supportRoot.appendingPathComponent("Libraries", isDirectory: true), withIntermediateDirectories: true)
+        let libraryDirectory = supportRoot.appendingPathComponent("Libraries", isDirectory: true)
+        try Data(repeating: 0, count: 128).write(to: libraryDirectory.appendingPathComponent("libCoreADI.so"))
+        try Data(repeating: 1, count: 128).write(to: libraryDirectory.appendingPathComponent("libstoreservicescore.so"))
+        check(await svc.localLibraryStatus() == .invalid, "invalid ELF library status")
+        let validFixtureDir = FileManager.default.temporaryDirectory.appendingPathComponent("anisette-valid-elf-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: validFixtureDir) }
+        let validFixtures = try ELFLibraryFixtures.write(to: validFixtureDir)
+        for source in validFixtures { try Data(contentsOf: source).write(to: libraryDirectory.appendingPathComponent(source.lastPathComponent), options: .atomic) }
+        check(await svc.localLibraryStatus() == .present, "valid ELF library status")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.resetCount == 0, "status touched local provider")
+        let coreFile = libraryDirectory.appendingPathComponent("libCoreADI.so")
+        let servicesFile = libraryDirectory.appendingPathComponent("libstoreservicescore.so")
+        let validCore = try Data(contentsOf: coreFile)
+        let validServices = try Data(contentsOf: servicesFile)
+        try FileManager.default.removeItem(at: coreFile)
+        try FileManager.default.createDirectory(at: coreFile, withIntermediateDirectories: false)
+        try FileManager.default.removeItem(at: servicesFile)
+        check(await svc.localLibraryStatus() == .missing, "missing file must take priority over invalid metadata")
+        try validServices.write(to: servicesFile)
+        check(await svc.localLibraryStatus() == .invalid, "directory accepted as ADI library")
+        try FileManager.default.removeItem(at: coreFile)
+        try FileManager.default.createSymbolicLink(at: coreFile, withDestinationURL: validFixtures.first!)
+        check(await svc.localLibraryStatus() == .invalid, "symbolic link accepted as ADI library")
+        try FileManager.default.removeItem(at: coreFile)
+        try Data(validCore.prefix(64)).write(to: coreFile)
+        check(await svc.localLibraryStatus() == .invalid, "header-only file accepted as complete library")
+        let oversized = try FileHandle(forWritingTo: coreFile)
+        try oversized.truncate(atOffset: 64 * 1024 * 1024 + 1)
+        try oversized.close()
+        check(await svc.localLibraryStatus() == .invalid, "oversized file accepted as ADI library")
+        try validCore.write(to: coreFile, options: .atomic)
+        check(await svc.localLibraryStatus() == .present, "status did not recover after valid files restored")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.resetCount == 0, "read-only status initialized or reset provider")
+        print("PASS: read-only ADI status (missing/invalid/present, file metadata and bounded ELF headers, no provider/reset calls)")
+        try FileManager.default.removeItem(at: libraryDirectory)
         let remoteCallsBeforeMissing = await manager.calls
         do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("expected missing local libraries") }
         catch EiliAnisetteError.missingLibraries {}
@@ -70,16 +166,27 @@ enum KeychainHelper {
         let remoteCallsAfterMissing = await manager.calls
         check(remoteCallsBeforeMissing == remoteCallsAfterMissing, "missing local libraries fell back to remote")
         try await svc.importLibraries(elfFiles)
+        UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.preferenceKey)
         let localResponseBlob = Data([0x10, 0x20, 0x30])
         FakeAnisetteKitControl.reset()
         FakeAnisetteKitControl.configure(blob: localResponseBlob)
         let remoteBlobBeforeLocal = Data([0xBA, 0xAD])
         KeychainHelper.save(remoteBlobBeforeLocal, forKey: "paxstore.anisette.adiblob")
-        let localData = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .onDevice)
+        let localData = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls)
         check(FakeAnisetteKitControl.calls == 1 && FakeAnisetteKitControl.identifier != nil, "local provider not called")
+        let remoteCallsAfterImplicitLocal = await manager.calls
+        check(remoteCallsAfterImplicitLocal == remoteCallsBeforeMissing, "saved on-device preference called remote")
         check(localData.machineID == "v0" && localData.oneTimePassword == "v1", "local header conversion")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == localResponseBlob, "local blob persistence")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteBlobBeforeLocal, "local branch modified remote blob")
+        UserDefaults.standard.set("remote", forKey: EiliAnisetteMode.preferenceKey)
+        FakeAnisetteKitControl.reset()
+        await manager.reset()
+        _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls)
+        let remoteAfterSwitch = await manager.calls
+        check(remoteAfterSwitch == 1 && FakeAnisetteKitControl.calls == 0, "switching saved preference to remote did not route remote exclusively")
+        check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteBlobBeforeLocal, "remote switch unexpectedly replaced response blob")
+        UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.preferenceKey)
         FakeAnisetteKitControl.reset()
         FakeAnisetteKitControl.configure(blob: Data([0x44]), delay: 100_000_000)
         let cancelledLocal = Task { try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice) }
@@ -143,9 +250,9 @@ enum KeychainHelper {
         do { try await serialized.resetLocal(); fatalError("expected logoutRequired") } catch EiliAnisetteError.logoutRequired {}
         KeychainHelper.delete(forKey: "paxstore.auth.session"); UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.sessionKey)
         #if EILI_ON_DEVICE_ANISETTE
-        print("PASS: 19 coverage groups (14 shared/remote groups plus local missing-library isolation, ELF import and local identity/blob isolation, persist-before-cancellation, no remote fallback, reset isolation)")
+        print("PASS: implicit cold-boot remote, unknown-preference remote, saved on-device local, preference switch to remote, build availability/mode cases, plus local/remote isolation and existing service checks")
         #else
-        print("PASS: 14 coverage groups (mode mapping, remote defaults/routing/blob, local unavailable, 11 required headers, ELF variants, cancellation, serialization gate, active-session reset guard)")
+        print("PASS: implicit cold-boot remote, unknown-preference remote, build availability/mode cases, plus remote routing/blob, local unavailable, header/ELF validation, cancellation, serialization and session guard checks")
         #endif
     }
 }

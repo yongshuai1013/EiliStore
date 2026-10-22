@@ -25,6 +25,9 @@ enum EiliAnisetteMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum EiliAnisetteLibraryStatus: Equatable, Sendable {
+    case engineUnavailable, missing, invalid, present
+}
 enum EiliAnisetteError: LocalizedError {
     case localBuildRequired, missingLibraries, invalidLibraries, invalidHeaders, storageFailed, logoutRequired
     var errorDescription: String? {
@@ -64,6 +67,29 @@ actor EiliAnisetteService {
     }
     private var libraries: URL { root.appendingPathComponent("Libraries", isDirectory: true) }
     private let libraryNames = ["libCoreADI.so", "libstoreservicescore.so"]
+
+    /// Only inspect local file metadata and ELF headers; never initialize a provider or identity.
+    func localLibraryStatus() -> EiliAnisetteLibraryStatus {
+        #if EILI_ON_DEVICE_ANISETTE
+        let fm = FileManager.default
+        let files = libraryNames.map { libraries.appendingPathComponent($0, isDirectory: false) }
+        guard files.allSatisfy({ fm.fileExists(atPath: $0.path) }) else { return .missing }
+        for url in files {
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
+                  values.isRegularFile == true, values.isSymbolicLink != true,
+                  let size = values.fileSize, size > 64, size <= 64 * 1024 * 1024 else {
+                return .invalid
+            }
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return .invalid }
+            defer { try? handle.close() }
+            guard let header = try? handle.read(upToCount: 64),
+                  Self.validLibrary(header) else { return .invalid }
+        }
+        return .present
+        #else
+        return .engineUnavailable
+        #endif
+    }
 
     func fetch(remoteIdentifier: UUID, remoteBlob: Data?, servers: [URL],
                mode: EiliAnisetteMode = .selected) async throws -> SideSign.AnisetteData {
