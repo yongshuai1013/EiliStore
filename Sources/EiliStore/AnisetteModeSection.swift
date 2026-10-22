@@ -5,6 +5,7 @@ struct AnisetteModeSection: View {
     @AppStorage(EiliAnisetteMode.preferenceKey) private var mode = EiliAnisetteMode.remote.rawValue
     @State private var importing = false
     @State private var resetting = false
+    @State private var confirmingDownload = false
     @State private var working = false
     @State private var message: String?
     @State private var libraryStatus: EiliAnisetteLibraryStatus?
@@ -48,6 +49,11 @@ struct AnisetteModeSection: View {
                 .disabled(working)
                 .accessibilityIdentifier("anisette-library-recheck")
                 .accessibilityHint("只讀取本機檔案，不啟動引擎或連線 Apple")
+                Button("下載 ADI 函式庫（SideStore 方式）") { confirmingDownload = true }
+                    .disabled(working)
+                    .accessibilityIdentifier("anisette-library-download")
+                Text("僅在確認後，從 https://zzz.haus/oda.json 取得第三方 ODA 中繼資料及其指定套件；不隨 App 打包。下載會核對中繼資料提供的 SHA-256，不符即拒絕；這不是獨立釘選，也不保證來源可信或已取得授權。")
+                    .font(.caption).foregroundColor(.secondary)
                 Button("匯入本機 ADI 函式庫") { importing = true }
                     .disabled(working)
                 Text("Apple 函式庫不隨 App 提供。舊版選取 libCoreADI.so 與 libstoreservicescore.so。新版（如 6.5.3）選取 libstoreapi.so、libCoreADI.so、libCoreFP.so、libCoreLSKD.so、libFPDIFor3P.so，保留原名、勿混用版本，且須有權取得及使用。")
@@ -81,6 +87,26 @@ struct AnisetteModeSection: View {
             case .failure:
                 message = "無法讀取選取的檔案，請重試。"
             }
+        }
+        .confirmationDialog("從第三方下載 ADI 函式庫？", isPresented: $confirmingDownload, titleVisibility: .visible) {
+            Button("確認下載並替換本機函式庫") {
+                working = true
+                Task {
+                    do {
+                        let status = try await EiliAnisetteService.shared.downloadLibraries()
+                        if case .incompatible(let reason) = status {
+                            message = "函式庫已下載並保存，但目前不能用於本機登入。\n" + reason
+                        } else {
+                            message = "函式庫已下載，通過 SHA-256 與基本格式檢查；尚未驗證真機登入，遠端仍為預設。"
+                        }
+                    } catch { message = safeMessage(error) }
+                    await refreshLibraryStatus()
+                    working = false
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("來源：https://zzz.haus/oda.json。套件與雜湊均由第三方提供，並非獨立可信釘選；再散布授權尚未確認，請確認你有權取得及使用。成功後會替換現有本機函式庫；失敗保留原檔。下載不會切換模式、連線 Apple 或開始登入，新版五庫仍可能不相容。")
         }
         .confirmationDialog("重設本機 Anisette？", isPresented: $resetting, titleVisibility: .visible) {
             Button("重設本機資料", role: .destructive) {
@@ -139,6 +165,7 @@ struct AnisetteModeSection: View {
 
     private func safeMessage(_ error: Error) -> String {
         if error is CancellationError { return "操作已取消。" }
+        if let downloadError = error as? ADIRuntimeLibraryDownloader.DownloadError { return downloadError.localizedDescription }
         return (error as? EiliAnisetteError)?.localizedDescription ?? "本機資料操作未完成，請檢查檔案並重試。"
     }
 }

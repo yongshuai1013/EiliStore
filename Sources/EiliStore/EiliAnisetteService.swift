@@ -193,6 +193,39 @@ actor EiliAnisetteService {
     func importLibraries(_ urls: [URL]) async throws -> EiliAnisetteLibraryStatus {
         await acquire()
         defer { release() }
+        return try installLibraries(urls)
+    }
+
+    /// Explicit opt-in only: never called by login, status checks, or remote mode.
+    /// The same gate covers network, validation and replacement so a session cannot
+    /// begin provisioning while its libraries are being replaced.
+    @discardableResult
+    func downloadLibraries() async throws -> EiliAnisetteLibraryStatus {
+        try await downloadLibraries(using: { directory in
+            try await ADIRuntimeLibraryDownloader().stageLibraries(in: directory)
+        })
+    }
+
+    @discardableResult
+    func downloadLibraries(using stage: @Sendable (URL) async throws -> [URL]) async throws -> EiliAnisetteLibraryStatus {
+        await acquire()
+        defer { release() }
+        try Task.checkCancellation()
+        guard EiliAnisetteMode.localBuildAvailable else { throw EiliAnisetteError.localBuildRequired }
+        guard !hasActiveLocalSession else { throw EiliAnisetteError.logoutRequired }
+        let fm = FileManager.default
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let download = root.appendingPathComponent(".download-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: download, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(at: download) }
+        let urls = try await stage(download)
+        try Task.checkCancellation()
+        // Reuse the import transaction, including ABI gating and rollback. No
+        // preference, provisioning identity or remote blob is changed by download.
+        return try installLibraries(urls)
+    }
+
+    private func installLibraries(_ urls: [URL]) throws -> EiliAnisetteLibraryStatus {
         try Task.checkCancellation()
         guard EiliAnisetteMode.localBuildAvailable else { throw EiliAnisetteError.localBuildRequired }
         guard !hasActiveLocalSession else { throw EiliAnisetteError.logoutRequired }

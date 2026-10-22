@@ -86,6 +86,10 @@ enum KeychainHelper {
             do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("expected localBuildRequired") }
             catch EiliAnisetteError.localBuildRequired {}
             let localCalls = await manager.calls; check(localCalls == 0, "unavailable local mode called remote")
+            do {
+                _ = try await svc.downloadLibraries(using: { _ in fatalError("disabled build started download") })
+                fatalError("disabled build allowed download")
+            } catch EiliAnisetteError.localBuildRequired {}
         }
 
         #if EILI_ON_DEVICE_ANISETTE
@@ -166,6 +170,42 @@ enum KeychainHelper {
         let remoteCallsAfterMissing = await manager.calls
         check(remoteCallsBeforeMissing == remoteCallsAfterMissing, "missing local libraries fell back to remote")
         try await svc.importLibraries(elfFiles)
+        // Runtime retrieval reuses the atomic importer, never starts provisioning,
+        // and leaves remote defaults/identity untouched. All payloads are synthetic.
+        let downloadMode = EiliAnisetteMode.selected
+        let downloadRemoteBlob = KeychainHelper.load(forKey: "paxstore.anisette.adiblob")
+        FakeAnisetteKitControl.reset()
+        let downloadedStatus = try await svc.downloadLibraries(using: { directory in
+            try ELFLibraryFixtures.write(to: directory)
+        })
+        check(downloadedStatus == .present, "valid download not installed")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "download initialized provider")
+        check(EiliAnisetteMode.selected == downloadMode, "download changed selected mode")
+        check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == downloadRemoteBlob, "download modified remote identity")
+        let coreBeforeFailedDownload = try Data(contentsOf: coreFile)
+        do {
+            _ = try await svc.downloadLibraries(using: { directory in
+                try Data([1, 2]).write(to: directory.appendingPathComponent("partial"))
+                throw ADIRuntimeLibraryDownloader.UnexpectedDownload.networkMustNotRun
+            })
+            fatalError("partial failed download accepted")
+        } catch ADIRuntimeLibraryDownloader.UnexpectedDownload.networkMustNotRun {}
+        check(try Data(contentsOf: coreFile) == coreBeforeFailedDownload, "failed download damaged cache")
+        let cancelledDownload = Task {
+            try await svc.downloadLibraries(using: { directory in
+                let files = try ELFLibraryFixtures.write(to: directory)
+                try await Task.sleep(nanoseconds: 500_000_000)
+                return files
+            })
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        cancelledDownload.cancel()
+        do { _ = try await cancelledDownload.value; fatalError("cancelled download installed") }
+        catch is CancellationError {}
+        check(try Data(contentsOf: coreFile) == coreBeforeFailedDownload, "cancelled download damaged cache")
+        let leftoverDownloads = try FileManager.default.contentsOfDirectory(atPath: supportRoot.path).filter { $0.hasPrefix(".download-") }
+        check(leftoverDownloads.isEmpty, "temporary download payloads leaked")
+        print("PASS: runtime download transaction, synthetic install, failure/cancellation cleanup and mode/identity isolation")
         UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.preferenceKey)
         let localResponseBlob = Data([0x10, 0x20, 0x30])
         FakeAnisetteKitControl.reset()
@@ -222,7 +262,14 @@ enum KeychainHelper {
         }
         FakeAnisetteKitControl.reset()
         let savedModeBeforeImport = EiliAnisetteMode.selected
-        let importedModern = try await svc.importLibraries(modernURLs)
+        let modernSources = modernURLs
+        let importedModern = try await svc.downloadLibraries(using: { directory in
+            try modernSources.map { source in
+                let target = directory.appendingPathComponent(source.lastPathComponent)
+                try FileManager.default.copyItem(at: source, to: target)
+                return target
+            }
+        })
         if case .incompatible = importedModern {} else { fatalError("modern set incorrectly marked usable") }
         check(EiliAnisetteMode.selected == savedModeBeforeImport, "modern import silently changed user preference")
         let resetCountBeforeStatus = FakeAnisetteKitControl.resetCount
@@ -296,6 +343,12 @@ enum KeychainHelper {
         UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.sessionKey)
         KeychainHelper.save(Data([1]), forKey: "paxstore.auth.session")
         do { try await serialized.resetLocal(); fatalError("expected logoutRequired") } catch EiliAnisetteError.logoutRequired {}
+        #if EILI_ON_DEVICE_ANISETTE
+        do {
+            _ = try await serialized.downloadLibraries(using: { _ in fatalError("active local session reached network") })
+            fatalError("active local session allowed download")
+        } catch EiliAnisetteError.logoutRequired {}
+        #endif
         KeychainHelper.delete(forKey: "paxstore.auth.session"); UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.sessionKey)
         #if EILI_ON_DEVICE_ANISETTE
         print("PASS: implicit cold-boot remote, unknown-preference remote, saved on-device local, preference switch to remote, build availability/mode cases, plus local/remote isolation and existing service checks")
