@@ -96,12 +96,16 @@ final class SettingsNavigationUITests: XCTestCase {
         let nativeSwitch = automatic.switches.firstMatch
         XCTAssertTrue(nativeSwitch.exists)
         nativeSwitch.tap()
-        XCTAssertTrue(app.buttons["確認允許自動取得"].waitForExistence(timeout: 5))
-        app.buttons["取消"].tap()
+        let consent = app.alerts.firstMatch
+        XCTAssertTrue(consent.waitForExistence(timeout: 10))
+        XCTAssertTrue(consent.buttons["確認允許自動取得"].exists)
+        let cancel = consent.buttons.matching(NSPredicate(format: "label IN %@", ["取消", "Cancel"])).firstMatch
+        XCTAssertTrue(cancel.exists)
+        cancel.tap()
         XCTAssertEqual(automatic.value as? String, "0")
         attachScreenshot(named: "oda-management-consent-cancelled")
         nativeSwitch.tap()
-        let confirm = app.buttons["確認允許自動取得"]
+        let confirm = app.alerts.buttons["確認允許自動取得"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
         confirm.tap()
         XCTAssertEqual(automatic.value as? String, "1")

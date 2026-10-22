@@ -157,26 +157,33 @@ struct ODAAcquisitionSettingsView: View {
         .navigationTitle("ODA 來源與快取")
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("oda-management-page")
-        .confirmationDialog("允許自動取得第三方函式庫？", isPresented: $confirmingAutomatic, titleVisibility: .visible) {
-            Button("確認允許自動取得") {
-                do {
-                    _ = try EiliODASourceConfiguration.selected.validated()
-                    automaticAcquisition = true
-                } catch { notice = error.localizedDescription }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("會使用已儲存的來源清單與備援設定；只在本機模式缺少函式庫時下載並快取。請先儲存來源，並確認你有權取得及使用。雜湊不符僅警告；來源、授權與真機登入均未獲保證。")
-        }
         .confirmationDialog("檢查快取並在缺少時下載？", isPresented: $confirmingPreparation, titleVisibility: .visible) {
             Button("確認檢查／取得") { model.prepareLibraries() }
             Button("取消", role: .cancel) {}
         } message: {
             Text("使用已儲存的來源；可用快取會原樣保留。缺少時才下載第三方 ODA 套件，不啟動引擎或登入 Apple。")
         }
-        .alert("ODA 設定", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
-            Button("好") { notice = nil }
-        } message: { Text(notice ?? "") }
+        // One alert presenter avoids competing alerts. Unlike an adaptive
+        // confirmation popover, this always has an explicit cancel action.
+        .alert(confirmingAutomatic ? "允許自動取得第三方函式庫？" : "ODA 設定",
+               isPresented: Binding(get: { confirmingAutomatic || notice != nil },
+                                    set: { if !$0 { confirmingAutomatic = false; notice = nil } })) {
+            if confirmingAutomatic {
+                Button("確認允許自動取得") {
+                    do {
+                        _ = try EiliODASourceConfiguration.selected.validated()
+                        automaticAcquisition = true
+                    } catch { notice = error.localizedDescription }
+                }
+                Button("取消", role: .cancel) { confirmingAutomatic = false }
+            } else {
+                Button("好") { notice = nil }
+            }
+        } message: {
+            if confirmingAutomatic {
+                Text("會使用已儲存的來源清單與備援設定；只在本機模式缺少函式庫時下載並快取。請先儲存來源，並確認你有權取得及使用。雜湊不符僅警告；來源、授權與真機登入均未獲保證。")
+            } else { Text(notice ?? "") }
+        }
     }
 
     private func saveSources() {
