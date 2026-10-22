@@ -109,10 +109,19 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             LD_GENERATE_MAP_FILE=YES \
-            LD_MAP_FILE_PATH="$PWD/build/on-device-link-map.txt" \
+            'LD_MAP_FILE_PATH=$(TARGET_TEMP_DIR)/$(PRODUCT_NAME)-$(CURRENT_VARIANT)-$(CURRENT_ARCH)-LinkMap.txt' \
             2>&1 | tee build/on-device-xcodebuild.log
           grep -E -- '-D[[:space:]]*EILI_ON_DEVICE_ANISETTE([[:space:]]|$)' build/on-device-xcodebuild.log >/dev/null
           grep -F 'Packages/AnisetteKit/Native/anisette_core_uc.cpp' build/on-device-xcodebuild.log >/dev/null
+          # TARGET_TEMP_DIR is target/configuration-specific. Collect the App map
+          # only after all linker tasks finish; never share a linker output path.
+          APP_LINK_MAPS=()
+          while IFS= read -r map; do APP_LINK_MAPS+=("$map"); done < <(
+            find build/OnDeviceDerivedData/Build/Intermediates.noindex/ArchiveIntermediates/EiliStore/IntermediateBuildFilesPath/EiliStore.build \
+              -type f -name 'EiliStore-*-LinkMap.txt'
+          )
+          [[ ${#APP_LINK_MAPS[@]} -eq 1 ]] || { echo 'ERROR: expected exactly one App Link Map' >&2; exit 1; }
+          cp "${APP_LINK_MAPS[0]}" build/on-device-link-map.txt
           grep -F '_get_anisette_headers_uc' build/on-device-link-map.txt >/dev/null
           BUILT_UNICORN=build/OnDeviceDerivedData/Build/Intermediates.noindex/ArchiveIntermediates/EiliStore/BuildProductsPath/Release-iphoneos/libunicorn.a
           cmp Packages/AnisetteKit/Artifacts/Unicorn.xcframework/ios-arm64/libunicorn.a "$BUILT_UNICORN"
@@ -139,6 +148,7 @@ jobs:
           path: |
             build/on-device-xcodebuild.log
             build/on-device-link-map.txt
+            build/OnDeviceDerivedData/**/*-LinkMap.txt
             Packages/AnisetteKit/.Unicorn.xcframework-stage-*/unicorn-disassembly.txt
           if-no-files-found: ignore
           retention-days: 7
