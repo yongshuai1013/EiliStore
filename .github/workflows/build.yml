@@ -21,6 +21,7 @@ jobs:
           bash Tests/run-ipa-import-tests.sh
           bash Tests/run-ipa-installer-tests.sh
           PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_ios_archive_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_unicorn_source_fetch.py
           printf '#include "anisette_core.h"\nvoid test_reset(void) { reset_anisette_vm_uc(); }\n' | xcrun clang -x c -std=c11 -Werror=implicit-function-declaration -fsyntax-only -I Packages/AnisetteKit/Native/include -
 
       - name: Build IDevice xcframework for iOS 15
