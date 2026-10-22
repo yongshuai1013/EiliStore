@@ -91,11 +91,22 @@ final class SettingsNavigationUITests: XCTestCase {
         for _ in 0..<8 { if automatic.isHittable { break }; settingsList.swipeUp() }
         XCTAssertTrue(automatic.isHittable)
         XCTAssertEqual(automatic.value as? String, "0")
-        automatic.tap()
+        // SwiftUI on recent iOS exposes a row-sized Switch containing a native
+        // Switch. Tapping the row midpoint hits its non-interactive text label.
+        let nativeSwitch = automatic.switches.firstMatch
+        XCTAssertTrue(nativeSwitch.exists)
+        nativeSwitch.tap()
         XCTAssertTrue(app.buttons["確認允許自動取得"].waitForExistence(timeout: 5))
         app.buttons["取消"].tap()
         XCTAssertEqual(automatic.value as? String, "0")
         attachScreenshot(named: "oda-management-consent-cancelled")
+        nativeSwitch.tap()
+        let confirm = app.buttons["確認允許自動取得"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        XCTAssertEqual(automatic.value as? String, "1")
+        nativeSwitch.tap()
+        XCTAssertEqual(automatic.value as? String, "0")
     }
 
     private func assertCustomizationPage() {
