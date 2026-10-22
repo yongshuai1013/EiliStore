@@ -82,6 +82,7 @@ enum KeychainHelper {
 
         await manager.reset()
         if !EiliAnisetteMode.localBuildAvailable {
+            check(await svc.localLibraryStatus() == .engineUnavailable, "disabled engine status")
             do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("expected localBuildRequired") }
             catch EiliAnisetteError.localBuildRequired {}
             let localCalls = await manager.calls; check(localCalls == 0, "unavailable local mode called remote")
@@ -93,8 +94,71 @@ enum KeychainHelper {
         let elfFiles = try ELFLibraryFixtures.write(to: fixtureDir)
         let supportRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("EiliStore/OnDeviceAnisette", isDirectory: true)
+        let backupURL = supportRoot.deletingLastPathComponent().appendingPathComponent("OnDeviceAnisette-test-backup-\(UUID().uuidString)")
+        let supportRootExisted = FileManager.default.fileExists(atPath: supportRoot.path)
+        if supportRootExisted { try FileManager.default.copyItem(at: supportRoot, to: backupURL) }
+        let originalLocalBlob = KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")
+        let originalRemoteBlob = KeychainHelper.load(forKey: "paxstore.anisette.adiblob")
+        let originalAuthSession = KeychainHelper.load(forKey: "paxstore.auth.session")
+        defer {
+            try? FileManager.default.removeItem(at: supportRoot)
+            if supportRootExisted { try? FileManager.default.moveItem(at: backupURL, to: supportRoot) }
+            else { try? FileManager.default.removeItem(at: backupURL) }
+            for (key, value) in [("eilistore.anisette.local.adiblob", originalLocalBlob), ("paxstore.anisette.adiblob", originalRemoteBlob), ("paxstore.auth.session", originalAuthSession)] {
+                if let value { KeychainHelper.save(value, forKey: key) } else { KeychainHelper.delete(forKey: key) }
+            }
+        }
         try? FileManager.default.removeItem(at: supportRoot)
+        UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.preferenceKey)
+        UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.sessionKey)
+        let localStatusBlob = Data([0x91, 0x92])
+        KeychainHelper.save(localStatusBlob, forKey: "eilistore.anisette.local.adiblob")
+        KeychainHelper.save(Data([0x93]), forKey: "paxstore.anisette.adiblob")
+        KeychainHelper.save(Data([0x94]), forKey: "paxstore.auth.session")
         FakeAnisetteKitControl.reset()
+        check(await svc.localLibraryStatus() == .missing, "missing library status")
+        check(!FileManager.default.fileExists(atPath: supportRoot.path), "status created missing library directory")
+        check(UserDefaults.standard.string(forKey: EiliAnisetteMode.preferenceKey) == "onDevice" && UserDefaults.standard.string(forKey: EiliAnisetteMode.sessionKey) == "onDevice", "status changed saved mode")
+        check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == localStatusBlob && KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == Data([0x93]) && KeychainHelper.load(forKey: "paxstore.auth.session") == Data([0x94]), "status changed keychain state")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.resetCount == 0, "status called local provider")
+        KeychainHelper.delete(forKey: "paxstore.auth.session")
+        UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.sessionKey)
+        try FileManager.default.createDirectory(at: supportRoot.appendingPathComponent("Libraries", isDirectory: true), withIntermediateDirectories: true)
+        let libraryDirectory = supportRoot.appendingPathComponent("Libraries", isDirectory: true)
+        try Data(repeating: 0, count: 128).write(to: libraryDirectory.appendingPathComponent("libCoreADI.so"))
+        try Data(repeating: 1, count: 128).write(to: libraryDirectory.appendingPathComponent("libstoreservicescore.so"))
+        check(await svc.localLibraryStatus() == .invalid, "invalid ELF library status")
+        let validFixtureDir = FileManager.default.temporaryDirectory.appendingPathComponent("anisette-valid-elf-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: validFixtureDir) }
+        let validFixtures = try ELFLibraryFixtures.write(to: validFixtureDir)
+        for source in validFixtures { try Data(contentsOf: source).write(to: libraryDirectory.appendingPathComponent(source.lastPathComponent), options: .atomic) }
+        check(await svc.localLibraryStatus() == .present, "valid ELF library status")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.resetCount == 0, "status touched local provider")
+        let coreFile = libraryDirectory.appendingPathComponent("libCoreADI.so")
+        let servicesFile = libraryDirectory.appendingPathComponent("libstoreservicescore.so")
+        let validCore = try Data(contentsOf: coreFile)
+        let validServices = try Data(contentsOf: servicesFile)
+        try FileManager.default.removeItem(at: coreFile)
+        try FileManager.default.createDirectory(at: coreFile, withIntermediateDirectories: false)
+        try FileManager.default.removeItem(at: servicesFile)
+        check(await svc.localLibraryStatus() == .missing, "missing file must take priority over invalid metadata")
+        try validServices.write(to: servicesFile)
+        check(await svc.localLibraryStatus() == .invalid, "directory accepted as ADI library")
+        try FileManager.default.removeItem(at: coreFile)
+        try FileManager.default.createSymbolicLink(at: coreFile, withDestinationURL: validFixtures.first!)
+        check(await svc.localLibraryStatus() == .invalid, "symbolic link accepted as ADI library")
+        try FileManager.default.removeItem(at: coreFile)
+        try Data(validCore.prefix(64)).write(to: coreFile)
+        check(await svc.localLibraryStatus() == .invalid, "header-only file accepted as complete library")
+        let oversized = try FileHandle(forWritingTo: coreFile)
+        try oversized.truncate(atOffset: 64 * 1024 * 1024 + 1)
+        try oversized.close()
+        check(await svc.localLibraryStatus() == .invalid, "oversized file accepted as ADI library")
+        try validCore.write(to: coreFile, options: .atomic)
+        check(await svc.localLibraryStatus() == .present, "status did not recover after valid files restored")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.resetCount == 0, "read-only status initialized or reset provider")
+        print("PASS: read-only ADI status (missing/invalid/present, file metadata and bounded ELF headers, no provider/reset calls)")
+        try FileManager.default.removeItem(at: libraryDirectory)
         let remoteCallsBeforeMissing = await manager.calls
         do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("expected missing local libraries") }
         catch EiliAnisetteError.missingLibraries {}
