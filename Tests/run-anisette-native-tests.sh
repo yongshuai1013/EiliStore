@@ -47,4 +47,6 @@ LINK=(-pthread)
 "$OUT/module-iteration"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeELFProgramHeadersTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/elf-headers"
 "$OUT/elf-headers"
-echo 'PASS: native TCI synthetic ABI, linker and provisioning-output tests (not Apple login verification)'
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeVMStartupTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/vm-startup"
+"$OUT/vm-startup"
+echo 'PASS: native TCI synthetic ABI, linker, VM startup and provisioning-output tests (not Apple login verification)'

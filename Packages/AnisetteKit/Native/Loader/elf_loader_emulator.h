@@ -33,9 +33,12 @@
 
 static const uint64_t kReturnAddress = 0xDEAD0000;
 static const uint64_t kHeapAddress   = 0x48000000;
-static const uint32_t kHeapSize      = 0x20000000;
+// Mobile budgets, not the desktop Unicorn defaults. Exhaustion must return
+// an error/null guest allocation instead of growing the host without bounds.
+static const uint32_t kHeapSize      = 32u * 1024u * 1024u;
+static const uint32_t kTCGBufferSize = 8u * 1024u * 1024u;
 static const uint64_t kStackAddress  = 0x70000000;
-static const uint32_t kStackSize     = 0x1000000;
+static const uint32_t kStackSize     = 2u * 1024u * 1024u;
 static const uint64_t kImportAddress = 0x80000000;
 static const uint32_t kImportSize    = 0x10000;
 

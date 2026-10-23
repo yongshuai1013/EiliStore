@@ -85,6 +85,7 @@ static inline int gettimeofday(struct timeval *tv, void *tz) {
 #include <unordered_map>
 #include <sstream>
 #include <random>
+#include <algorithm>
 
 #include <unordered_set>
 #include "android_libc_strings.h"
@@ -269,6 +270,11 @@ EmulatorVM::EmulatorVM()
         if (result != UC_ERR_OK) initialization_error = result;
         return result == UC_ERR_OK;
     };
+    // uc_open is lazy. The FIRST uc_mem_map initializes TCG, whose pinned
+    // upstream default is 1 GiB on a 64-bit host and calls exit(1) if its
+    // buffer cannot be mapped. Set the budget before any initializing API;
+    // doing this after uc_mem_map only changes the reported setting.
+    if (!initialized(uc_ctl_set_tcg_buffer_size(uc, kTCGBufferSize))) return;
     if (!initialized(uc_mem_map(uc, kHeapAddress, kHeapSize, UC_PROT_READ | UC_PROT_WRITE))) return;
     if (!initialized(uc_mem_map(uc, kStackAddress, kStackSize, UC_PROT_READ | UC_PROT_WRITE))) return;
     if (!initialized(uc_mem_map(uc, kImportAddress, kImportSize, UC_PROT_ALL))) return;
@@ -374,7 +380,7 @@ static void hook_intr(uc_engine *uc, uint32_t intno, void *user_data) {
 static void hook_malloc(EmulatorVM *vm) {
     uint64_t size = 0;
     uc_reg_read(vm->uc, UC_ARM64_REG_X0, &size);
-    uint64_t ptr = vm->heap.alloc(size + 16);
+    uint64_t ptr = size > UINT64_MAX - 16 ? 0 : vm->heap.alloc(size + 16);
     uc_reg_write(vm->uc, UC_ARM64_REG_X0, &ptr);
 }
 
@@ -382,11 +388,21 @@ static void hook_calloc(EmulatorVM *vm) {
     uint64_t num = 0, size = 0;
     uc_reg_read(vm->uc, UC_ARM64_REG_X0, &num);
     uc_reg_read(vm->uc, UC_ARM64_REG_X1, &size);
-    uint64_t total = num * size;
-    uint64_t ptr = vm->heap.alloc(total + 16);
-    std::vector<uint8_t> zeros(total, 0);
-    if (total > 0) {
-        uc_mem_write(vm->uc, ptr, zeros.data(), total);
+    uint64_t ptr = 0;
+    if (size == 0 || num <= (UINT64_MAX - 16) / size) {
+        const uint64_t total = num * size;
+        ptr = vm->heap.alloc(total + 16);
+        // A failed guest allocation must not allocate a host vector anyway.
+        // Zero in fixed chunks so temporary host memory stays bounded.
+        const uint8_t zeros[4096] = {};
+        for (uint64_t offset = 0; ptr && offset < total;) {
+            const size_t count = static_cast<size_t>(std::min<uint64_t>(sizeof zeros, total - offset));
+            if (uc_mem_write(vm->uc, ptr + offset, zeros, count) != UC_ERR_OK) {
+                ptr = 0;
+                break;
+            }
+            offset += count;
+        }
     }
     uc_reg_write(vm->uc, UC_ARM64_REG_X0, &ptr);
 }
@@ -395,8 +411,8 @@ static void hook_realloc(EmulatorVM *vm) {
     uint64_t ptr = 0, new_size = 0;
     uc_reg_read(vm->uc, UC_ARM64_REG_X0, &ptr);
     uc_reg_read(vm->uc, UC_ARM64_REG_X1, &new_size);
-    uint64_t new_ptr = vm->heap.alloc(new_size + 16);
-    if (ptr != 0 && new_size > 0) {
+    uint64_t new_ptr = new_size > UINT64_MAX - 16 ? 0 : vm->heap.alloc(new_size + 16);
+    if (new_ptr && ptr != 0 && new_size > 0) {
         std::vector<uint8_t> buf(new_size);
         uc_mem_read(vm->uc, ptr, buf.data(), new_size);
         uc_mem_write(vm->uc, new_ptr, buf.data(), new_size);

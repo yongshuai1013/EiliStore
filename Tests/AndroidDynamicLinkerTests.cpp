@@ -15,6 +15,24 @@ static uint64_t call(EmulatorVM &vm, const char *name, std::vector<uint64_t> arg
 int main() {
     EmulatorVM vm;
     assert(vm.initialization_error == UC_ERR_OK);
+    // Failed guest allocations must not wrap padding/multiplication or try
+    // to allocate a huge host vector after the bounded guest heap says no.
+    assert(call(vm, "malloc", {UINT64_MAX}) == 0);
+    assert(call(vm, "malloc", {kHeapSize}) == 0);
+    assert(call(vm, "calloc", {UINT64_MAX, 2}) == 0);
+    assert(call(vm, "calloc", {1, UINT64_MAX}) == 0);
+    assert(call(vm, "calloc", {1, kHeapSize}) == 0);
+    const auto allocation = call(vm, "calloc", {3, 4097});
+    assert(allocation);
+    uint8_t zeroed[3 * 4097];
+    assert(uc_mem_read(vm.uc, allocation, zeroed, sizeof zeroed) == UC_ERR_OK);
+    for (const auto byte : zeroed) assert(byte == 0);
+    const uint8_t oldValue = 0xAB;
+    assert(uc_mem_write(vm.uc, allocation, &oldValue, 1) == UC_ERR_OK);
+    assert(call(vm, "realloc", {allocation, UINT64_MAX}) == 0);
+    assert(call(vm, "realloc", {allocation, kHeapSize}) == 0);
+    uint8_t retained = 0;
+    assert(uc_mem_read(vm.uc, allocation, &retained, 1) == UC_ERR_OK && retained == oldValue);
     const uint64_t code = 0x05000000;
     assert(uc_mem_map(vm.uc, code, 0x10000, UC_PROT_ALL) == UC_ERR_OK);
     const uint32_t instructions[] = {0xD2800540, 0xD65F03C0}; // mov x0,#42; ret
