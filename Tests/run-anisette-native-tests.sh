@@ -54,10 +54,11 @@ LINK=(-pthread)
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeConstructorFaultTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/constructor-faults"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeGuestTLSTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/guest-tls"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeCxaAtexitBranchTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/cxa-atexit-branches"
-python3 - "$OUT/constructor-faults" "$OUT/guest-tls" "$OUT/cxa-atexit-branches" <<'PY'
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeOperatorNewTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/operator-new"
+python3 - "$OUT/constructor-faults" "$OUT/guest-tls" "$OUT/cxa-atexit-branches" "$OUT/operator-new" <<'PY'
 import subprocess
 import sys
 for executable in sys.argv[1:]:
     subprocess.run([executable], check=True, timeout=90)
 PY
-echo 'PASS: native TCI synthetic ABI, linker, VM startup, guest stack-guard TLS, constructor-fault and provisioning-output tests (not Apple login verification)'
+echo 'PASS: native TCI synthetic ABI, linker, VM startup, guest stack-guard TLS, scalar operator new, constructor-fault and provisioning-output tests (not Apple login verification)'

@@ -77,6 +77,7 @@ struct ADILibraryCompatibility: Equatable, Sendable {
     static let requiredEntryPoints: Set<String> = ["Sph98paBcz", "nf92ngaK92", "kq56gsgHG6", "qi864985u0", "rsegvyrt87", "uv5t6nhkui"]
     // Only explicit router/adapter implementations count; this is not complete Android ABI support.
     static let handledImports: Set<String> = [
+        "_Znwm",
         "__android_log_print",
         "__cxa_allocate_exception",
         "__cxa_begin_catch",

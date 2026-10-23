@@ -243,6 +243,7 @@ const char *EmulatorVM::constructor_library_name(ConstructorLibrary library) {
 
 static bool supported_guest_import(const std::string &name) {
     static const std::unordered_set<std::string> names = {
+        "_Znwm",
         "__android_log_print",
         "__cxa_allocate_exception",
         "__cxa_begin_catch",
@@ -375,6 +376,10 @@ static bool hook_mem_invalid(uc_engine *uc, uc_mem_type type,
 }
 
 uint64_t PageAllocator::alloc(uint64_t bytes) {
+    // Reject malformed arenas/alignment before rounding or address arithmetic.
+    // Failure never advances the bump pointer or terminates the host process.
+    if (!alignment || (alignment & (alignment - 1)) || !base ||
+        (base & (alignment - 1)) || size > UINT64_MAX - base) return 0;
     uint64_t align_mask = alignment - 1;
     if (bytes > UINT64_MAX - align_mask) return 0;
     uint64_t aligned_size = (bytes + align_mask) & ~align_mask;
@@ -568,6 +573,34 @@ static void hook_malloc(EmulatorVM *vm) {
     uint64_t ptr = size > UINT64_MAX - 16 ? 0 : vm->heap.alloc(size + 16);
     if (ptr) vm->malloc_sizes[ptr] = size;
     uc_reg_write(vm->uc, UC_ARM64_REG_X0, &ptr);
+}
+
+static void hook_operator_new(EmulatorVM *vm) {
+    // AArch64 _Znwm: unsigned long size in X0, guest pointer result in X0.
+    // The mapped guest bump heap already provides >= max_align_t alignment.
+    // alloc(0) reserves one aligned unit, preserving scalar new(0) semantics.
+    // No host allocation, host pointer, array/delete or exception-runtime shim.
+    auto fail = [vm](uc_err error, const char *message) {
+        vm->record_fault(EmulatorVM::FaultReason::libc, error != UC_ERR_OK, error);
+        vm->execution_error = message;
+        uc_emu_stop(vm->uc);
+    };
+    uint64_t size = 0;
+    const uc_err read_error = uc_reg_read(vm->uc, UC_ARM64_REG_X0, &size);
+    if (read_error != UC_ERR_OK) {
+        fail(read_error, "Cannot read guest operator new size");
+        return;
+    }
+    const uint64_t ptr = vm->heap.alloc(size);
+    if (!ptr) {
+        // No guest C++ unwinder/new_handler contract exists here. Use the VM's
+        // established provider-error path instead of returning null from throwing
+        // new or throwing a host exception across the Unicorn callback boundary.
+        fail(UC_ERR_OK, "Guest operator new allocation failed");
+        return;
+    }
+    const uc_err write_error = uc_reg_write(vm->uc, UC_ARM64_REG_X0, &ptr);
+    if (write_error != UC_ERR_OK) fail(write_error, "Cannot return guest operator new pointer");
 }
 
 static void hook_calloc(EmulatorVM *vm) {
@@ -1324,6 +1357,7 @@ static void import_callback_router(uc_engine *uc, uint64_t address, uint32_t siz
     const std::string &name = it->second;
 
     if (name == "malloc") hook_malloc(vm);
+    else if (name == "_Znwm") hook_operator_new(vm);
     else if (name == "calloc") hook_calloc(vm);
     else if (name == "realloc") hook_realloc(vm);
     else if (name == "free") hook_free(vm);
