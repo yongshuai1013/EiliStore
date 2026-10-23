@@ -45,6 +45,16 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
             let constructorIndex: UInt64?
             let constructorLibrary: ConstructorLibrary?
             let reason: Reason?
+            var fetchAddress: UInt64? = nil
+            var pcTrail: [UInt64]? = nil
+            func sanitizedFetchFields(phase: Phase?) -> Fault {
+                var copy = self
+                let eligible = phase == .libraryConstructors && unicornCode == 8 && reason == .engine
+                    && constructorKind != nil && constructorIndex != nil && constructorLibrary != nil
+                if !eligible { copy.fetchAddress = nil; copy.pcTrail = nil }
+                else if let trail = copy.pcTrail, trail.count > 16 { copy.pcTrail = Array(trail.suffix(16)) }
+                return copy
+            }
         }
         let operation: Operation
         let result: Result
@@ -150,7 +160,10 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
         case .parsed: stage = .nativeResponseParsed
         default: stage = .nativeResponseFailed
         }
-        journal.current?.entries.append(Entry(stage: stage, date: Date(), native: native))
+        let safeFault = native.fault?.sanitizedFetchFields(phase: native.phase)
+        let safeNative = NativeDetail(operation: native.operation, result: native.result, phase: native.phase,
+            code: native.code, nativeCode: native.nativeCode, fault: safeFault)
+        journal.current?.entries.append(Entry(stage: stage, date: Date(), native: safeNative))
         if let count = journal.current?.entries.count, count > 48 {
             journal.current?.entries.removeFirst(count - 48)
         }
@@ -173,6 +186,7 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
     func report() -> String {
         lock.lock(); defer { lock.unlock() }
         var lines = ["EiliStore 登入階段診斷 v4", "僅記錄固定階段、數字狀態碼、guest PC、constructor 位置、時間及版本；不含帳號、密碼、驗證碼、Session、檔案路徑或 Anisette 內容。", "未完成不等於已確認閃退；也可能是強制關閉或系統終止。", "bridge 為 C 邊界回傳碼；native 為 VM 呼叫回傳碼，不一定是 Apple 錯誤碼。", "unicorn 為原始引擎狀態；0 不表示 constructor 成功，仍須看 fault。ctor index 為零起算；DT_INIT 固定為 0。PC 是 guest 位址，不是裝置記憶體位址。"]
+        lines.append("constructor fetch fault 的 guestPC 是引擎返回後讀取的 PC；fetchAddress 才是無映射取指回呼的實際位址，兩者不一定相同。pcTrail 是由舊到新最多 16 個觀察到的 guest 指令 PC，不是呼叫堆疊或指令已完成執行的證明；不能單憑這些資料確定根因。")
         if writeFailed { lines.append("注意：診斷寫入失敗，重開後的紀錄可能不完整。") }
         let formatter = ISO8601DateFormatter()
         for (label, attempt) in [("最近一次", journal.current), ("前一次", journal.previous)] {
@@ -180,7 +194,10 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
             lines += ["", "\(label)：\(attempt.outcome.rawValue)", "模式：\(attempt.mode)；App：\(attempt.build)；系統：\(attempt.os)"]
             lines += attempt.entries.map { entry in
                 var line = "\(formatter.string(from: entry.date)) \(entry.stage.rawValue)"
-                if let native = entry.native {
+                if let storedNative = entry.native {
+                    let native = NativeDetail(operation: storedNative.operation, result: storedNative.result,
+                        phase: storedNative.phase, code: storedNative.code, nativeCode: storedNative.nativeCode,
+                        fault: storedNative.fault?.sanitizedFetchFields(phase: storedNative.phase))
                     line += " op=\(native.operation.rawValue) result=\(native.result.rawValue) bridge=\(native.code)"
                     if let phase = native.phase { line += " phase=\(phase.rawValue)" }
                     if let code = native.nativeCode {
@@ -190,6 +207,8 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
                         if let reason = fault.reason { line += " fault=\(reason.rawValue)" }
                         if let code = fault.unicornCode { line += " unicorn=\(code)" }
                         if let pc = fault.guestPC { line += " guestPC=0x\(String(pc, radix: 16))" }
+                        if let address = fault.fetchAddress { line += " fetchAddress=0x\(String(address, radix: 16))" }
+                        if let trail = fault.pcTrail { line += " pcTrail=[\(trail.map { "0x\(String($0, radix: 16))" }.joined(separator: ","))]" }
                         if let library = fault.constructorLibrary { line += " ctorLibrary=\(library.rawValue)" }
                         if let kind = fault.constructorKind { line += " ctorKind=\(kind.rawValue)" }
                         if let index = fault.constructorIndex { line += " ctorIndex=\(index)" }

@@ -139,6 +139,110 @@ void first_fault_and_shared_reset() {
     assert(g_shared_vm == nullptr && !g_libraries_initialized);
 }
 
+void fetch_target_is_not_returned_pc() {
+    EmulatorVM vm;
+    vm.constructor_context = {true, Kind::initArray, Library::storeservicescore, 0};
+    vm.execution_depth = 1;
+    vm.observe_pc(kCode);
+    vm.observe_pc(kCode + 4);
+    vm.capture_fetch_unmapped(kBadCode);
+    vm.observe_pc(kCode + 8); // Later hooks cannot alter the captured trail.
+    vm.capture_fetch_unmapped(kBadCode + 4);
+    constexpr uint64_t returned_pc = 0x20000102a0d63;
+    vm.record_fault(Reason::engine, true, UC_ERR_FETCH_UNMAPPED, true, returned_pc);
+    vm.complete_fault(UC_ERR_OK, true, kCode);
+    assert(vm.fault.guest_pc == returned_pc);
+    assert(vm.fault.fetch.present && vm.fault.fetch.address == kBadCode);
+    assert(vm.fault.fetch.count == 2 && vm.fault.fetch.pcs[0] == kCode && vm.fault.fetch.pcs[1] == kCode + 4);
+    const auto json = diagnostic_error_json("fixed error", "libraryConstructors", false, 0, &vm.fault);
+    assert(json.find("\"fetch_address\":" + std::to_string(kBadCode)) != std::string::npos);
+    assert(json.find("\"guest_pc\":" + std::to_string(returned_pc)) != std::string::npos);
+    assert(json.find("\"pc_trail\":[" + std::to_string(kCode) + "," + std::to_string(kCode + 4) + "]") != std::string::npos);
+    assert(diagnostic_error_json("fixed error", "provisionStart", false, 0, &vm.fault).find("fetch_address") == std::string::npos);
+    vm.fault.reason = Reason::libc;
+    assert(diagnostic_error_json("fixed error", "libraryConstructors", false, 0, &vm.fault).find("pc_trail") == std::string::npos);
+}
+bool synthetic_fetch_with_different_return_pc(uc_engine *uc, uc_mem_type type,
+                                             uint64_t address, int, int64_t, void *context) {
+    assert(type == UC_MEM_FETCH_UNMAPPED);
+    static_cast<EmulatorVM *>(context)->capture_fetch_unmapped(address);
+    // Test injection only: force a distinct return-time register observation.
+    // This does not claim Unicorn naturally reproduces the device's PC behavior.
+    const uint64_t returned_pc = 0x20000102a0d63;
+    assert(uc_reg_write(uc, UC_ARM64_REG_PC, &returned_pc) == UC_ERR_OK);
+    uc_emu_stop(uc);
+    return false;
+}
+void fetch_callback_to_return_pc_separation() {
+    EmulatorVM vm;
+    assert(uc_hook_del(vm.uc, vm.invalid_hook) == UC_ERR_OK);
+    assert(uc_hook_add(vm.uc, &vm.invalid_hook, UC_HOOK_MEM_FETCH_UNMAPPED,
+        reinterpret_cast<void *>(synthetic_fetch_with_different_return_pc), &vm, 1, 0) == UC_ERR_OK);
+    library(vm, "libstoreservicescore.so").init_func = kBadCode;
+    assert(!run_library_constructors(&vm));
+    assert(vm.fault.reason == Reason::engine && vm.fault.unicorn_code == UC_ERR_FETCH_UNMAPPED);
+    assert(vm.fault.fetch.present && vm.fault.fetch.address == kBadCode && vm.fault.fetch.count == 0);
+    assert(vm.fault.has_guest_pc && vm.fault.guest_pc == 0x20000102a0d63);
+    assert(vm.fault.guest_pc != vm.fault.fetch.address);
+}
+void actual_fetch_hook_wrap_reset_isolation() {
+    EmulatorVM vm;
+    assert(uc_mem_map(vm.uc, kCode, 0x1000, UC_PROT_ALL) == UC_ERR_OK);
+    std::vector<uint32_t> words(24, 0xD503201F); // nop, then ldr x16,literal; br x16.
+    words.push_back(0x58000050);
+    words.push_back(0xD61F0200);
+    put(vm, kCode, words.data(), words.size() * sizeof(uint32_t));
+    put(vm, kCode + words.size() * sizeof(uint32_t), &kBadCode, sizeof(kBadCode));
+    library(vm, "libstoreservicescore.so").init_func = kCode;
+    assert(!run_library_constructors(&vm));
+    assert(vm.fault.unicorn_code == UC_ERR_FETCH_UNMAPPED && vm.fault.fetch.present);
+    assert(vm.fault.fetch.address == kBadCode && vm.fault.fetch.count == 16);
+    for (size_t i = 0; i < 16; ++i) assert(vm.fault.fetch.pcs[i] == kCode + (10 + i) * 4);
+    assert(vm.observed_pc_count == 16 && vm.observed_pc_next < 16);
+    const auto saved = vm.fault;
+    assert(run_vm_procedure(&vm, kCode, {}) == -1000);
+    assert(vm.fault.fetch.address == saved.fetch.address && vm.fault.fetch.count == saved.fetch.count);
+    for (size_t i = 0; i < 16; ++i) assert(vm.fault.fetch.pcs[i] == saved.fetch.pcs[i]);
+
+    EmulatorVM isolated;
+    library(isolated, "libCoreADI.so").init_func = kBadCode;
+    assert(!run_library_constructors(&isolated));
+    assert(isolated.fault.fetch.present && isolated.fault.fetch.count == 0);
+    assert(vm.fault.fetch.count == 16); // Same host thread, separate VM.
+
+    vm.execution_error.clear();
+    vm.loaded_libraries[0].init_func = kBadCode;
+    assert(!run_library_constructors(&vm));
+    assert(vm.fault.fetch.present && vm.fault.fetch.count == 0);
+    vm.execution_error.clear();
+    const uint32_t ret = 0xD65F03C0;
+    put(vm, kCode + 0x200, &ret, sizeof ret);
+    assert(run_vm_procedure(&vm, kCode + 0x200, {}, 1000000, 16) == 0);
+    assert(!vm.fault.present && !vm.pending_fetch.present && vm.observed_pc_count == 1);
+    vm.observe_pc(kCode + 0x300);
+    vm.execution_depth = 1; // Nested entry retains outer history.
+    assert(run_vm_procedure(&vm, kCode + 0x200, {}, 1000000, 16) == 0);
+    assert(vm.observed_pc_count == 3 && vm.execution_depth == 1);
+    vm.execution_depth = 0;
+
+    EmulatorVM ordinary;
+    assert(run_vm_procedure(&ordinary, kBadCode, {}, 1000000, 16) < 0);
+    assert(!ordinary.fault.fetch.present);
+    assert(diagnostic_error_json("fixed error", "provisionStart", false, 0, &ordinary.fault).find("pc_trail") == std::string::npos);
+}
+void earlier_fault_blocks_fetch_snapshot() {
+    EmulatorVM vm;
+    vm.constructor_context = {true, Kind::dtInit, Library::coreadi, 0};
+    vm.execution_depth = 1;
+    vm.observe_pc(kCode);
+    vm.record_fault(Reason::libc, true, UC_ERR_READ_UNMAPPED, true, kCode);
+    vm.capture_fetch_unmapped(kBadCode);
+    vm.record_fault(Reason::engine, true, UC_ERR_FETCH_UNMAPPED, true, kBadCode);
+    vm.complete_fault(UC_ERR_FETCH_UNMAPPED, true, kBadCode);
+    assert(vm.fault.reason == Reason::libc && vm.fault.unicorn_code == UC_ERR_READ_UNMAPPED);
+    assert(vm.fault.guest_pc == kCode && !vm.fault.fetch.present && !vm.pending_fetch.present);
+}
+
 // Two tiny ELF files are generated here, not copied from any vendor. The first
 // DT_INIT is a single ldr x0,[x0], guaranteeing failure before any ADI symbols.
 void write_synthetic_elf(const std::string &path, bool constructor) {
@@ -208,6 +312,13 @@ int main() {
     callback_fault_codes_and_fixed_sources();
     std::cout << "constructor fault test: first fault and reset" << std::endl;
     first_fault_and_shared_reset();
+    std::cout << "constructor fault test: separate actual fetch target and returned PC" << std::endl;
+    fetch_target_is_not_returned_pc();
+    fetch_callback_to_return_pc_separation();
+    std::cout << "constructor fault test: real fetch hook, wrap, reset and VM isolation" << std::endl;
+    actual_fetch_hook_wrap_reset_isolation();
+    std::cout << "constructor fault test: first error blocks later fetch snapshot" << std::endl;
+    earlier_fault_blocks_fetch_snapshot();
     std::cout << "constructor fault test: actual C bridge" << std::endl;
     actual_c_bridge_setup_propagation();
     std::cout << "PASS: synthetic constructors, raw engine/callback faults, first-fault/reset and all C bridge setup paths\n";

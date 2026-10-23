@@ -238,12 +238,17 @@ actor EiliAnisetteService {
                     guard let operation = EiliLoginDiagnostics.NativeDetail.Operation(rawValue: event.operation.rawValue),
                           let result = EiliLoginDiagnostics.NativeDetail.Result(rawValue: event.result.rawValue) else { return }
                     let fault = event.fault.map { value in
-                        EiliLoginDiagnostics.NativeDetail.Fault(
+                        let eligibleFetch = event.phase == .libraryConstructors && value.unicornCode == 8 && value.reason == .engine
+                            && value.constructorKind != nil && value.constructorIndex != nil
+                            && value.constructorLibrary != nil
+                        return EiliLoginDiagnostics.NativeDetail.Fault(
                             unicornCode: value.unicornCode, guestPC: value.guestPC,
                             constructorKind: value.constructorKind.flatMap { .init(rawValue: $0.rawValue) },
                             constructorIndex: value.constructorIndex,
                             constructorLibrary: value.constructorLibrary.flatMap { .init(rawValue: $0.rawValue) },
-                            reason: value.reason.flatMap { .init(rawValue: $0.rawValue) })
+                            reason: value.reason.flatMap { .init(rawValue: $0.rawValue) },
+                            fetchAddress: eligibleFetch ? value.fetchAddress : nil,
+                            pcTrail: eligibleFetch ? value.pcTrail.map { Array($0.suffix(16)) } : nil)
                     }
                     diagnostics.record(native: .init(operation: operation, result: result,
                         phase: event.phase.flatMap { EiliLoginDiagnostics.NativeDetail.Phase(rawValue: $0.rawValue) },

@@ -94,6 +94,17 @@ static std::string diagnostic_error_json(const std::string &error, const char *p
         if (const char *reason = EmulatorVM::fault_reason_name(fault->reason)) {
             ss << ",\"fault_reason\":\"" << reason << "\"";
         }
+        if (strcmp(phase, "libraryConstructors") == 0 && fault->has_constructor &&
+            fault->reason == EmulatorVM::FaultReason::engine && fault->has_unicorn_code &&
+            fault->unicorn_code == UC_ERR_FETCH_UNMAPPED && fault->fetch.present &&
+            fault->fetch.count <= EmulatorVM::kPCTraceCapacity) {
+            ss << ",\"fetch_address\":" << fault->fetch.address << ",\"pc_trail\":[";
+            for (size_t i = 0; i < fault->fetch.count; ++i) {
+                if (i) ss << ',';
+                ss << fault->fetch.pcs[i];
+            }
+            ss << ']';
+        }
     }
     ss << "}";
     return ss.str();

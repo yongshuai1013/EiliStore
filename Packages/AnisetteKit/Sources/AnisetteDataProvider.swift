@@ -67,10 +67,13 @@ public struct AnisetteProviderDiagnostic: Sendable, Equatable {
         public let constructorIndex: UInt64?
         public let constructorLibrary: ConstructorLibrary?
         public let reason: Reason?
+        public let fetchAddress: UInt64?
+        public let pcTrail: [UInt64]?
         public init(
             unicornCode: Int32? = nil, guestPC: UInt64? = nil,
             constructorKind: ConstructorKind? = nil, constructorIndex: UInt64? = nil,
-            constructorLibrary: ConstructorLibrary? = nil, reason: Reason? = nil
+            constructorLibrary: ConstructorLibrary? = nil, reason: Reason? = nil,
+            fetchAddress: UInt64? = nil, pcTrail: [UInt64]? = nil
         ) {
             self.unicornCode = unicornCode
             self.guestPC = guestPC
@@ -78,6 +81,8 @@ public struct AnisetteProviderDiagnostic: Sendable, Equatable {
             self.constructorIndex = constructorIndex
             self.constructorLibrary = constructorLibrary
             self.reason = reason
+            self.fetchAddress = fetchAddress
+            self.pcTrail = pcTrail
         }
     }
     public let fault: Fault?
@@ -224,19 +229,37 @@ extension AnisetteDataProvider {
         let native = integer("native_code").flatMap { Int32($0.stringValue) }
         let phase = (dict["diagnostic_phase"] as? String).flatMap(
             AnisetteProviderDiagnostic.Phase.init(rawValue:))
+        let unicornCode = integer("unicorn_code").flatMap { Int32($0.stringValue) }.flatMap { $0 >= 0 ? $0 : nil }
+        let constructorKind = (dict["constructor_kind"] as? String).flatMap(
+            AnisetteProviderDiagnostic.Fault.ConstructorKind.init(rawValue:))
+        let constructorIndex = unsigned("constructor_index")
+        let constructorLibrary = (dict["constructor_library"] as? String).flatMap(
+            AnisetteProviderDiagnostic.Fault.ConstructorLibrary.init(rawValue:))
+        let reason = (dict["fault_reason"] as? String).flatMap(AnisetteProviderDiagnostic.Fault.Reason.init(rawValue:))
+        let isFetchFault = phase == .libraryConstructors && unicornCode == 8 && reason == .engine
+            && constructorKind != nil && constructorIndex != nil && constructorLibrary != nil
+        let fetchAddress = isFetchFault ? unsigned("fetch_address") : nil
+        let pcTrail: [UInt64]? = {
+            guard isFetchFault, let raw = dict["pc_trail"] else { return nil }
+            guard let values = raw as? [Any] else { return nil }
+            var parsed: [UInt64] = []
+            for value in values {
+                guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                    ["i", "l", "q", "s", "I", "L", "Q", "S", "C"].contains(String(cString: number.objCType)),
+                    let item = UInt64(number.stringValue) else { return nil }
+                parsed.append(item)
+            }
+            return Array(parsed.suffix(16))
+        }()
         let fault = AnisetteProviderDiagnostic.Fault(
-            unicornCode: integer("unicorn_code").flatMap { Int32($0.stringValue) }.flatMap { $0 >= 0 ? $0 : nil },
-            guestPC: unsigned("guest_pc"),
-            constructorKind: (dict["constructor_kind"] as? String).flatMap(
-                AnisetteProviderDiagnostic.Fault.ConstructorKind.init(rawValue:)),
-            constructorIndex: unsigned("constructor_index"),
-            constructorLibrary: (dict["constructor_library"] as? String).flatMap(
-                AnisetteProviderDiagnostic.Fault.ConstructorLibrary.init(rawValue:)),
-            reason: (dict["fault_reason"] as? String).flatMap(
-                AnisetteProviderDiagnostic.Fault.Reason.init(rawValue:)))
+            unicornCode: unicornCode, guestPC: unsigned("guest_pc"),
+            constructorKind: constructorKind, constructorIndex: constructorIndex,
+            constructorLibrary: constructorLibrary, reason: reason,
+            fetchAddress: fetchAddress, pcTrail: pcTrail)
         let hasFault =
             fault.unicornCode != nil || fault.guestPC != nil || fault.constructorKind != nil
             || fault.constructorIndex != nil || fault.constructorLibrary != nil || fault.reason != nil
+            || fault.fetchAddress != nil || fault.pcTrail != nil
         return (native, phase, hasFault ? fault : nil)
     }
 }

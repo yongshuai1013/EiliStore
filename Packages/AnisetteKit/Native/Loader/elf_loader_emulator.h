@@ -109,6 +109,13 @@ struct EmulatorVM {
     };
     enum class ConstructorKind { none, dtInit, initArray };
     enum class ConstructorLibrary { other, storeservicescore, coreadi };
+    static constexpr size_t kPCTraceCapacity = 16;
+    struct FetchSnapshot {
+        bool present = false;
+        uint64_t address = 0;
+        size_t count = 0;
+        uint64_t pcs[kPCTraceCapacity] = {};
+    } pending_fetch;
     struct FaultSnapshot {
         bool present = false;
         bool has_unicorn_code = false;
@@ -120,6 +127,7 @@ struct EmulatorVM {
         FaultReason reason = FaultReason::none;
         ConstructorKind constructor_kind = ConstructorKind::none;
         ConstructorLibrary constructor_library = ConstructorLibrary::other;
+        FetchSnapshot fetch;
     } fault;
     struct ConstructorContext {
         bool active = false;
@@ -128,6 +136,14 @@ struct EmulatorVM {
         uint64_t index = 0;
     } constructor_context;
     uint32_t execution_depth = 0;
+
+    // Observed hook PCs, not a call stack or proof that an instruction retired.
+    // Both indices stay bounded even across arbitrarily long guest procedures.
+    uint64_t observed_pcs[kPCTraceCapacity] = {};
+    size_t observed_pc_count = 0;
+    size_t observed_pc_next = 0;
+    void observe_pc(uint64_t pc);
+    void capture_fetch_unmapped(uint64_t address);
 
     // Allocation-free fixed vocabulary. First fault wins across nested execution.
     void record_fault(FaultReason reason, bool has_code = false, int32_t code = 0,

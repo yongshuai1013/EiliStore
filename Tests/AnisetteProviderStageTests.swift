@@ -191,6 +191,28 @@ struct AnisetteProviderStageTests {
             successBox.snapshot().map(\.result) == [.boundaryReturned, .parsed], "success diagnostics")
         setMode(0)
 
+        func parseFaultJSON(_ json: String) throws -> AnisetteProviderDiagnostic.Fault? {
+            let pointer = strdup(json)
+            defer { free(pointer) }
+            let box = DiagnosticBox()
+            do {
+                _ = try UnicornAnisetteDataProvider().parseHeadersResponse(
+                    code: -1, outPtr: pointer, providerName: "synthetic",
+                    diagnostic: { result, _, _, fault in
+                        box.append(.init(operation: .headers, result: result, code: -1, fault: fault))
+                    })
+            } catch {}
+            return box.snapshot().last?.fault
+        }
+        let trailJSON = String((0..<20).map(String.init).joined(separator: ","))
+        let validFault = try parseFaultJSON("{\"error\":\"safe\",\"unicorn_code\":8,\"constructor_kind\":\"initArray\",\"constructor_index\":2,\"constructor_library\":\"coreadi\",\"fault_reason\":\"engine\",\"diagnostic_phase\":\"libraryConstructors\",\"fetch_address\":18446744073709551615,\"pc_trail\":[\(trailJSON)]}")
+        check(validFault?.fetchAddress == UInt64.max, "fetch address parsed unsigned")
+        check(validFault?.pcTrail == Array(UInt64(4)...UInt64(19)), "trail capped to newest 16 entries")
+        let malformedTrail = try parseFaultJSON("{\"error\":\"safe\",\"unicorn_code\":8,\"constructor_kind\":\"initArray\",\"constructor_index\":2,\"constructor_library\":\"coreadi\",\"fault_reason\":\"engine\",\"diagnostic_phase\":\"libraryConstructors\",\"pc_trail\":[1,true,3]}")
+        check(malformedTrail?.pcTrail == nil, "invalid trail rejected as a whole")
+        let unrelatedFault = try parseFaultJSON("{\"error\":\"safe\",\"unicorn_code\":0,\"constructor_kind\":\"dtInit\",\"constructor_index\":0,\"constructor_library\":\"coreadi\",\"fault_reason\":\"libc\",\"fetch_address\":123,\"pc_trail\":[1]}")
+        check(unrelatedFault?.fetchAddress == nil && unrelatedFault?.pcTrail == nil, "unrelated fault fields ignored")
+
         let expectedFaults: [(Int32, AnisetteProviderDiagnostic.Fault)] = [
             (
                 10,

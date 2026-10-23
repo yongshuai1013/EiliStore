@@ -20,6 +20,8 @@ public struct AnisetteProviderDiagnostic: Sendable {
         public let constructorIndex: UInt64?
         public let constructorLibrary: ConstructorLibrary?
         public let reason: Reason?
+        public var fetchAddress: UInt64? = nil
+        public var pcTrail: [UInt64]? = nil
     }
     public let operation: Operation
     public let result: Result
@@ -98,7 +100,8 @@ public final class AnisetteClient: @unchecked Sendable {
             provider.onDiagnostic?(.init(operation: .provisionStart, result: .providerError,
                 phase: .libraryConstructors, code: -2, nativeCode: nil,
                 fault: .init(unicornCode: 8, guestPC: 0x51000000, constructorKind: .initArray,
-                    constructorIndex: 3, constructorLibrary: .coreadi, reason: .engine)))
+                    constructorIndex: 3, constructorLibrary: .coreadi, reason: .engine,
+                    fetchAddress: 0x52000000, pcTrail: [0x50000000, 0x50000004])))
             return try await FakeAnisetteKitControl.run(identifier: identifier, blob: existing, headers: headers?.rawHeaders ?? [:])
         }
         provider.onDiagnostic?(.init(operation: .provisionStart, result: .boundaryReturned, phase: nil, code: 0, nativeCode: nil))

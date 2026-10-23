@@ -91,7 +91,8 @@ import Glibc
             phase: nil, code: -2, nativeCode: nil))
         relay.record(native: native)
         let fault = EiliLoginDiagnostics.NativeDetail.Fault(unicornCode: 8, guestPC: UInt64.max,
-            constructorKind: .initArray, constructorIndex: 3, constructorLibrary: .coreadi, reason: .engine)
+            constructorKind: .initArray, constructorIndex: 3, constructorLibrary: .coreadi, reason: .engine,
+            fetchAddress: 0xfedcba9876543210, pcTrail: [0x100, 0x200])
         relay.record(native: .init(operation: .provisionStart, result: .providerError,
             phase: .libraryConstructors, code: -2, nativeCode: nil, fault: fault))
         relay.record(native: .init(operation: .provisionStart, result: .providerError,
@@ -103,8 +104,41 @@ import Glibc
         precondition(nativeReport.contains("診斷 v4"))
         precondition(nativeReport.contains("nativeBoundaryReturned op=provisionStart result=boundaryReturned bridge=-2"))
         precondition(nativeReport.contains("nativeResponseFailed op=provisionStart result=providerError bridge=-2 phase=loadLibrary native=-42 (0xffffffd6)"))
-        precondition(nativeReport.contains("fault=engine unicorn=8 guestPC=0xffffffffffffffff ctorLibrary=coreadi ctorKind=initArray ctorIndex=3"))
+        precondition(nativeReport.contains("fault=engine unicorn=8 guestPC=0xffffffffffffffff"))
+        precondition(nativeReport.contains("ctorLibrary=coreadi ctorKind=initArray ctorIndex=3"))
+        precondition(nativeReport.contains("fetchAddress=0xfedcba9876543210 pcTrail=[0x100,0x200]"))
+        let isolatedFile = file.deletingLastPathComponent().appendingPathComponent("sanitized.json")
+        let isolated = EiliLoginDiagnostics(file: isolatedFile)
+        let isolatedID = isolated.begin(onDevice: true)
+        let unrelated = EiliLoginDiagnostics.NativeDetail.Fault(unicornCode: 8, guestPC: 1, constructorKind: .initArray, constructorIndex: 0, constructorLibrary: .coreadi, reason: .engine, fetchAddress: 999, pcTrail: Array(0..<20).map(UInt64.init))
+        isolated.record(native: .init(operation: .headers, result: .providerError, phase: .loadLibrary, code: -2, nativeCode: nil, fault: unrelated), for: isolatedID)
+        let safeReport = isolated.report()
+        precondition(!safeReport.contains("fetchAddress=0x3e7"), "unrelated phase fetch metadata must be omitted")
+        let afterUnsafe = try JSONSerialization.jsonObject(with: Data(contentsOf: isolatedFile)) as! [String: Any]
+        let currentAfterUnsafe = afterUnsafe["current"] as! [String: Any]
+        let unsafeEntry = (currentAfterUnsafe["entries"] as! [[String: Any]]).first {
+            let native = $0["native"] as? [String: Any]
+            return native?["phase"] as? String == "loadLibrary" && native?["fault"] != nil
+        }!
+        let unsafeFault = ((unsafeEntry["native"] as! [String: Any])["fault"] as! [String: Any])
+        precondition(unsafeFault["fetchAddress"] == nil && unsafeFault["pcTrail"] == nil, "unrelated phase fetch metadata not persisted")
+        let longFault = EiliLoginDiagnostics.NativeDetail.Fault(unicornCode: 8, guestPC: 1, constructorKind: .initArray, constructorIndex: 0, constructorLibrary: .coreadi, reason: .engine, fetchAddress: 999, pcTrail: Array(0..<20).map(UInt64.init))
+        isolated.record(native: .init(operation: .headers, result: .providerError, phase: .libraryConstructors, code: -2, nativeCode: nil, fault: longFault), for: isolatedID)
+        let afterLong = try JSONSerialization.jsonObject(with: Data(contentsOf: isolatedFile)) as! [String: Any]
+        let longEntries = ((afterLong["current"] as! [String: Any])["entries"] as! [[String: Any]])
+        let longEntry = longEntries.first { ((($0["native"] as? [String: Any])?["fault"] as? [String: Any])?["fetchAddress"] as? NSNumber)?.uint64Value == 999 }!
+        let longTrail = (((longEntry["native"] as! [String: Any])["fault"] as! [String: Any])["pcTrail"] as! [NSNumber]).map(\.uint64Value)
+        precondition(longTrail == Array(UInt64(4)...UInt64(19)), "persist only newest sixteen PCs")
+        let bounded = EiliLoginDiagnostics.NativeDetail.Fault(unicornCode: 8, guestPC: 1, constructorKind: .initArray, constructorIndex: 0, constructorLibrary: .coreadi, reason: .engine, fetchAddress: 999, pcTrail: Array(0..<20).map(UInt64.init)).sanitizedFetchFields(phase: .libraryConstructors)
+        precondition(bounded.pcTrail == Array(UInt64(4)...UInt64(19)), "persisted report trail bounded to newest 16")
         precondition(nativeReport.contains("fault=libc unicorn=0 guestPC=0x51000000 ctorLibrary=storeservicescore ctorKind=dtInit ctorIndex=0"))
+        let persisted = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+        let savedCurrent = persisted["current"] as! [String: Any]
+        let savedEntries = savedCurrent["entries"] as! [[String: Any]]
+        let savedFaultEntry = savedEntries.first { ($0["native"] as? [String: Any])?["fault"] != nil }!
+        let savedFault = (savedFaultEntry["native"] as! [String: Any])["fault"] as! [String: Any]
+        precondition((savedFault["fetchAddress"] as? NSNumber)?.uint64Value == 0xfedcba9876543210)
+        precondition((savedFault["pcTrail"] as? [NSNumber])?.map(\.uint64Value) == [0x100, 0x200])
         relay.record(native: .init(operation: .headers, result: .invalidJSON, phase: nil, code: -5, nativeCode: nil))
         precondition(!store.report().contains("result=invalidJSON"))
         var v3Journal = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]

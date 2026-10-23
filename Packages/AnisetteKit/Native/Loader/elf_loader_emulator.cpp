@@ -92,6 +92,23 @@ static inline int gettimeofday(struct timeval *tv, void *tz) {
 #include "android_pthread_sync.h"
 #include "android_module_iteration.h"
 
+void EmulatorVM::observe_pc(uint64_t pc) {
+    observed_pcs[observed_pc_next] = pc;
+    observed_pc_next = (observed_pc_next + 1) % kPCTraceCapacity;
+    if (observed_pc_count < kPCTraceCapacity) ++observed_pc_count;
+}
+
+void EmulatorVM::capture_fetch_unmapped(uint64_t address) {
+    if (fault.present || pending_fetch.present || !execution_depth || !constructor_context.active) return;
+    pending_fetch.present = true;
+    pending_fetch.address = address; // Invalid-fetch callback target, not UC_ARM64_REG_PC.
+    pending_fetch.count = observed_pc_count;
+    const size_t start = (observed_pc_next + kPCTraceCapacity - observed_pc_count) % kPCTraceCapacity;
+    for (size_t i = 0; i < observed_pc_count; ++i) {
+        pending_fetch.pcs[i] = observed_pcs[(start + i) % kPCTraceCapacity];
+    }
+}
+
 void EmulatorVM::record_fault(FaultReason reason, bool has_code, int32_t code,
                               bool has_pc, uint64_t pc) {
     if (fault.present) return;
@@ -111,6 +128,9 @@ void EmulatorVM::record_fault(FaultReason reason, bool has_code, int32_t code,
         fault.constructor_kind = constructor_context.kind;
         fault.constructor_library = constructor_context.library;
         fault.constructor_index = constructor_context.index;
+        if (reason == FaultReason::engine && has_code && code == UC_ERR_FETCH_UNMAPPED) {
+            fault.fetch = pending_fetch;
+        }
     }
 }
 
@@ -253,13 +273,9 @@ static bool guest_data_symbol_name(const std::string &symbol) {
 
 const AndroidSystemProperties kAndroidProperties;
 
-static thread_local uint64_t g_last_pcs[16];
-static thread_local size_t g_pc_idx = 0;
-
 static void trace_pc_hook(uc_engine *uc, uint64_t address, uint32_t size, void *user_data) {
-    (void)uc; (void)size; (void)user_data;
-    g_last_pcs[g_pc_idx % 16] = address;
-    g_pc_idx++;
+    (void)uc; (void)size;
+    static_cast<EmulatorVM *>(user_data)->observe_pc(address);
 }
 
 static bool hook_mem_invalid(uc_engine *uc, uc_mem_type type,
@@ -267,17 +283,12 @@ static bool hook_mem_invalid(uc_engine *uc, uc_mem_type type,
                              void *user_data) {
     (void)size;
     (void)value;
-    (void)user_data;
     uint64_t page_addr = address & ~0xFFFFULL;
 
     if (type == UC_MEM_FETCH_UNMAPPED) {
-        LOG_UC("[Emulator - UC] FETCH_UNMAPPED at 0x%llx - stopping VM\n", (unsigned long long)address);
-        LOG_UC("[TRACE] Last PCs before stop:\n");
-        for (int i = 15; i >= 0; i--) {
-            size_t idx = (g_pc_idx + 16 - 1 - i) % 16;
-            LOG_UC("  [-%d] PC=0x%llx\n", i, (unsigned long long)g_last_pcs[idx]);
-        }
-        fflush(stdout);
+        // Never write this trail to general logs. The fixed constructor fault
+        // allowlist is its only export, after emulation returns its error code.
+        static_cast<EmulatorVM *>(user_data)->capture_fetch_unmapped(address);
         uc_emu_stop(uc);
         return false;
     }
@@ -1644,11 +1655,19 @@ uint64_t get_vm_symbol_address(EmulatorVM *vm, const std::string &name) {
 
 int32_t run_vm_procedure(EmulatorVM *vm, uint64_t proc_addr, const std::vector<uint64_t> &args, uint64_t timeout_us, size_t max_count) {
     if (!vm) return -1;
+    if (!vm->execution_depth) {
+        vm->observed_pc_count = 0;
+        vm->observed_pc_next = 0;
+        std::fill(std::begin(vm->observed_pcs), std::end(vm->observed_pcs), 0);
+    }
     if (!vm->execution_error.empty()) {
         vm->record_fault(EmulatorVM::FaultReason::preexistingError);
         return -1000;
     }
-    if (!vm->execution_depth) vm->fault = {};
+    if (!vm->execution_depth) {
+        vm->fault = {};
+        vm->pending_fetch = {};
+    }
     if (vm->initialization_error != UC_ERR_OK) {
         vm->record_fault(EmulatorVM::FaultReason::engine, true, vm->initialization_error);
         vm->execution_error = "Guest VM initialization failed";
