@@ -248,7 +248,12 @@ actor EiliAnisetteService {
                             constructorLibrary: value.constructorLibrary.flatMap { .init(rawValue: $0.rawValue) },
                             reason: value.reason.flatMap { .init(rawValue: $0.rawValue) },
                             fetchAddress: eligibleFetch ? value.fetchAddress : nil,
-                            pcTrail: eligibleFetch ? value.pcTrail.map { Array($0.suffix(16)) } : nil)
+                            pcTrail: eligibleFetch ? value.pcTrail.map { Array($0.suffix(16)) } : nil,
+                            cxaAtexitBranch: eligibleFetch && value.constructorLibrary == .storeservicescore ? value.cxaAtexitBranch.map { branch in
+                                .init(target: branch.target, gotAddress: branch.gotAddress,
+                                      gotValue: branch.gotValue, registeredStub: branch.registeredStub,
+                                      resolutionSource: .init(rawValue: branch.resolutionSource.rawValue)!)
+                            } : nil)
                     }
                     diagnostics.record(native: .init(operation: operation, result: result,
                         phase: event.phase.flatMap { EiliLoginDiagnostics.NativeDetail.Phase(rawValue: $0.rawValue) },

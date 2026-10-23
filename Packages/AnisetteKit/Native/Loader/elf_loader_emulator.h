@@ -110,11 +110,35 @@ struct EmulatorVM {
     enum class ConstructorKind { none, dtInit, initArray };
     enum class ConstructorLibrary { other, storeservicescore, coreadi };
     static constexpr size_t kPCTraceCapacity = 16;
+    enum class ResolutionSource {
+        unresolved, definedSymbol, selfSymbol, librarySymbol, convertedSymbol, functionStub, dataFallback
+    };
+    struct CxaAtexitSlot {
+        uint64_t address = 0;
+        uint64_t code_begin = 0;
+        uint64_t code_end = 0;
+        ResolutionSource source = ResolutionSource::unresolved;
+    };
+    // Only relocation-identified __cxa_atexit slots in storeservicescore.
+    std::vector<CxaAtexitSlot> cxa_atexit_slots;
+    struct CxaAtexitBranch {
+        bool present = false;
+        bool has_got_value = false;
+        bool registered_stub = false;
+        uint64_t branch_pc = 0;
+        uint64_t target = 0;
+        uint64_t got_address = 0;
+        uint64_t got_value = 0;
+        ResolutionSource source = ResolutionSource::unresolved;
+    } pending_cxa_branch;
+    void observe_cxa_atexit_branch(uint64_t pc);
+    static const char *resolution_source_name(ResolutionSource source);
     struct FetchSnapshot {
         bool present = false;
         uint64_t address = 0;
         size_t count = 0;
         uint64_t pcs[kPCTraceCapacity] = {};
+        CxaAtexitBranch cxa_branch;
     } pending_fetch;
     struct FaultSnapshot {
         bool present = false;

@@ -139,6 +139,53 @@ import Glibc
         let savedFault = (savedFaultEntry["native"] as! [String: Any])["fault"] as! [String: Any]
         precondition((savedFault["fetchAddress"] as? NSNumber)?.uint64Value == 0xfedcba9876543210)
         precondition((savedFault["pcTrail"] as? [NSNumber])?.map(\.uint64Value) == [0x100, 0x200])
+        let branchFile = file.deletingLastPathComponent().appendingPathComponent("branch-persisted.json")
+        let branchStore = EiliLoginDiagnostics(file: branchFile)
+        let branchID = branchStore.begin(onDevice: true)
+        let allowedBranch = EiliLoginDiagnostics.NativeDetail.Fault(
+            unicornCode: 8, guestPC: 0x1234, constructorKind: .initArray, constructorIndex: 2,
+            constructorLibrary: .storeservicescore, reason: .engine, fetchAddress: 0x5678,
+            pcTrail: [0x10, 0x20], cxaAtexitBranch: .init(target: 0x30, gotAddress: 0x40,
+                gotValue: nil, registeredStub: true, resolutionSource: .functionStub))
+        branchStore.record(native: .init(operation: .headers, result: .providerError,
+            phase: .libraryConstructors, code: -2, nativeCode: nil, fault: allowedBranch), for: branchID)
+        let branchJSONData = try Data(contentsOf: branchFile)
+        let branchJournal = try JSONSerialization.jsonObject(with: branchJSONData) as! [String: Any]
+        let branchAttempt = branchJournal["current"] as! [String: Any]
+        let branchEntries = branchAttempt["entries"] as! [[String: Any]]
+        let branchEntry = branchEntries.first { ($0["native"] as? [String: Any])?["fault"] != nil }!
+        let persistedNative = branchEntry["native"] as! [String: Any]
+        let persistedFault = persistedNative["fault"] as! [String: Any]
+        let persistedBranch = persistedFault["cxaAtexitBranch"] as! [String: Any]
+        precondition(persistedBranch["target"] as? UInt64 == 0x30)
+        precondition(persistedBranch["gotAddress"] as? UInt64 == 0x40)
+        precondition(persistedBranch["gotValue"] == nil && persistedBranch["registeredStub"] as? Bool == true)
+        precondition(persistedBranch["resolutionSource"] as? String == "functionStub")
+        let branchReloaded = EiliLoginDiagnostics(file: branchFile).report()
+        precondition(branchReloaded.contains("cxaAtexit x17=0x30 gotAddress=0x40"))
+        precondition(branchReloaded.contains("registeredStub=true resolutionSource=functionStub"))
+        precondition(!branchReloaded.contains("gotValue="), "missing gotValue should remain optional")
+        let otherContext = EiliLoginDiagnostics.NativeDetail.Fault(
+            unicornCode: 8, guestPC: 1, constructorKind: .initArray, constructorIndex: 1,
+            constructorLibrary: .coreadi, reason: .engine, fetchAddress: 0xabc, pcTrail: [0x11],
+            cxaAtexitBranch: .init(target: 0x22, gotAddress: 0x33, gotValue: 0x44,
+                registeredStub: false, resolutionSource: .unresolved))
+        branchStore.record(native: .init(operation: .headers, result: .providerError,
+            phase: .libraryConstructors, code: -2, nativeCode: nil, fault: otherContext), for: branchID)
+        let sanitizedJournal = try JSONSerialization.jsonObject(with: Data(contentsOf: branchFile)) as! [String: Any]
+        let sanitizedEntries = ((sanitizedJournal["current"] as! [String: Any])["entries"] as! [[String: Any]])
+        let coreEntry = sanitizedEntries.first { entry in
+            let native = entry["native"] as? [String: Any]
+            let fault = native?["fault"] as? [String: Any]
+            return (fault?["constructorLibrary"] as? String) == "coreadi"
+        }!
+        let coreFault = ((coreEntry["native"] as! [String: Any])["fault"] as! [String: Any])
+        precondition(coreFault["fetchAddress"] != nil && coreFault["pcTrail"] != nil,
+            "legacy CoreADI fetchAddress/pcTrail must remain persisted")
+        precondition(coreFault["cxaAtexitBranch"] == nil, "branch must be removed from CoreADI")
+        let sanitizedReload = EiliLoginDiagnostics(file: branchFile).report()
+        precondition(!sanitizedReload.contains("x17=0x22") && !sanitizedReload.contains("gotAddress=0x33"))
+        precondition(sanitizedReload.contains("fetchAddress=0xabc") && sanitizedReload.contains("pcTrail=[0x11]"))
         relay.record(native: .init(operation: .headers, result: .invalidJSON, phase: nil, code: -5, nativeCode: nil))
         precondition(!store.report().contains("result=invalidJSON"))
         var v3Journal = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]

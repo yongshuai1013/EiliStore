@@ -51,7 +51,8 @@ LINK=(-pthread)
 "$OUT/vm-startup"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeConstructorFaultTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/constructor-faults"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeGuestTLSTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/guest-tls"
-python3 - "$OUT/constructor-faults" "$OUT/guest-tls" <<'PY'
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeCxaAtexitBranchTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/cxa-atexit-branches"
+python3 - "$OUT/constructor-faults" "$OUT/guest-tls" "$OUT/cxa-atexit-branches" <<'PY'
 import subprocess
 import sys
 for executable in sys.argv[1:]:

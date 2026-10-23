@@ -47,12 +47,21 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
             let reason: Reason?
             var fetchAddress: UInt64? = nil
             var pcTrail: [UInt64]? = nil
+            struct CxaAtexitBranch: Codable, Sendable {
+                enum ResolutionSource: String, Codable, Sendable { case definedSymbol, selfSymbol, librarySymbol, convertedSymbol, functionStub, dataFallback, unresolved }
+                let target, gotAddress: UInt64
+                let gotValue: UInt64?
+                let registeredStub: Bool
+                let resolutionSource: ResolutionSource
+            }
+            var cxaAtexitBranch: CxaAtexitBranch? = nil
             func sanitizedFetchFields(phase: Phase?) -> Fault {
                 var copy = self
                 let eligible = phase == .libraryConstructors && unicornCode == 8 && reason == .engine
                     && constructorKind != nil && constructorIndex != nil && constructorLibrary != nil
                 if !eligible { copy.fetchAddress = nil; copy.pcTrail = nil }
                 else if let trail = copy.pcTrail, trail.count > 16 { copy.pcTrail = Array(trail.suffix(16)) }
+                if !eligible || constructorLibrary != .storeservicescore { copy.cxaAtexitBranch = nil }
                 return copy
             }
         }
@@ -212,6 +221,11 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
                         if let library = fault.constructorLibrary { line += " ctorLibrary=\(library.rawValue)" }
                         if let kind = fault.constructorKind { line += " ctorKind=\(kind.rawValue)" }
                         if let index = fault.constructorIndex { line += " ctorIndex=\(index)" }
+                        if let branch = fault.cxaAtexitBranch {
+                            line += " cxaAtexit x17=0x\(String(branch.target, radix: 16)) gotAddress=0x\(String(branch.gotAddress, radix: 16))"
+                            if let value = branch.gotValue { line += " gotValue=0x\(String(value, radix: 16))" }
+                            line += " registeredStub=\(branch.registeredStub) resolutionSource=\(branch.resolutionSource.rawValue)"
+                        }
                     }
                 }
                 return line

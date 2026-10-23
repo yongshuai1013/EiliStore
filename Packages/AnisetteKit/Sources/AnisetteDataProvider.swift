@@ -69,11 +69,20 @@ public struct AnisetteProviderDiagnostic: Sendable, Equatable {
         public let reason: Reason?
         public let fetchAddress: UInt64?
         public let pcTrail: [UInt64]?
+        public struct CxaAtexitBranch: Sendable, Equatable {
+            public enum ResolutionSource: String, Sendable { case definedSymbol, selfSymbol, librarySymbol, convertedSymbol, functionStub, dataFallback, unresolved }
+            public let target, gotAddress: UInt64
+            public let gotValue: UInt64?
+            public let registeredStub: Bool
+            public let resolutionSource: ResolutionSource
+        }
+        public let cxaAtexitBranch: CxaAtexitBranch?
         public init(
             unicornCode: Int32? = nil, guestPC: UInt64? = nil,
             constructorKind: ConstructorKind? = nil, constructorIndex: UInt64? = nil,
             constructorLibrary: ConstructorLibrary? = nil, reason: Reason? = nil,
-            fetchAddress: UInt64? = nil, pcTrail: [UInt64]? = nil
+            fetchAddress: UInt64? = nil, pcTrail: [UInt64]? = nil,
+            cxaAtexitBranch: CxaAtexitBranch? = nil
         ) {
             self.unicornCode = unicornCode
             self.guestPC = guestPC
@@ -83,6 +92,7 @@ public struct AnisetteProviderDiagnostic: Sendable, Equatable {
             self.reason = reason
             self.fetchAddress = fetchAddress
             self.pcTrail = pcTrail
+            self.cxaAtexitBranch = cxaAtexitBranch
         }
     }
     public let fault: Fault?
@@ -251,16 +261,40 @@ extension AnisetteDataProvider {
             }
             return Array(parsed.suffix(16))
         }()
+        let eligibleBranch = isFetchFault && constructorLibrary == .storeservicescore
+        let branch: AnisetteProviderDiagnostic.Fault.CxaAtexitBranch? = {
+            guard eligibleBranch, let raw = dict["cxa_atexit_branch"] as? [String: Any],
+                  Set(raw.keys).isSubset(of: Set(["target", "got_address", "got_value", "registered_stub", "resolution_source"])),
+                  Set(["target", "got_address", "registered_stub", "resolution_source"]).isSubset(of: Set(raw.keys)),
+                  let target = strictUnsigned(raw["target"]),
+                  let gotAddress = strictUnsigned(raw["got_address"]),
+                  let registered = strictBool(raw["registered_stub"]),
+                  let sourceText = raw["resolution_source"] as? String,
+                  let source = AnisetteProviderDiagnostic.Fault.CxaAtexitBranch.ResolutionSource(rawValue: sourceText) else { return nil }
+            let got: UInt64?
+            if let value = raw["got_value"], !(value is NSNull) { guard let parsed = strictUnsigned(value) else { return nil }; got = parsed }
+            else { got = nil }
+            return .init(target: target, gotAddress: gotAddress, gotValue: got, registeredStub: registered, resolutionSource: source)
+        }()
         let fault = AnisetteProviderDiagnostic.Fault(
             unicornCode: unicornCode, guestPC: unsigned("guest_pc"),
             constructorKind: constructorKind, constructorIndex: constructorIndex,
             constructorLibrary: constructorLibrary, reason: reason,
-            fetchAddress: fetchAddress, pcTrail: pcTrail)
+            fetchAddress: fetchAddress, pcTrail: pcTrail, cxaAtexitBranch: branch)
         let hasFault =
             fault.unicornCode != nil || fault.guestPC != nil || fault.constructorKind != nil
             || fault.constructorIndex != nil || fault.constructorLibrary != nil || fault.reason != nil
             || fault.fetchAddress != nil || fault.pcTrail != nil
-        return (native, phase, hasFault ? fault : nil)
+        return (native, phase, hasFault || branch != nil ? fault : nil)
+    }
+    private func strictUnsigned(_ value: Any?) -> UInt64? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              ["i", "l", "q", "s", "I", "L", "Q", "S", "C"].contains(String(cString: number.objCType)) else { return nil }
+        return UInt64(number.stringValue)
+    }
+    private func strictBool(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
     }
 }
 

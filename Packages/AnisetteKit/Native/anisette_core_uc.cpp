@@ -104,6 +104,14 @@ static std::string diagnostic_error_json(const std::string &error, const char *p
                 ss << fault->fetch.pcs[i];
             }
             ss << ']';
+            const auto &branch = fault->fetch.cxa_branch;
+            if (branch.present && fault->constructor_library == EmulatorVM::ConstructorLibrary::storeservicescore) {
+                ss << ",\"cxa_atexit_branch\":{\"target\":" << branch.target
+                   << ",\"got_address\":" << branch.got_address;
+                if (branch.has_got_value) ss << ",\"got_value\":" << branch.got_value;
+                ss << ",\"registered_stub\":" << (branch.registered_stub ? "true" : "false")
+                   << ",\"resolution_source\":\"" << EmulatorVM::resolution_source_name(branch.source) << "\"}";
+            }
         }
     }
     ss << "}";

@@ -92,6 +92,59 @@ static inline int gettimeofday(struct timeval *tv, void *tz) {
 #include "android_pthread_sync.h"
 #include "android_module_iteration.h"
 
+const char *EmulatorVM::resolution_source_name(ResolutionSource source) {
+    switch (source) {
+    case ResolutionSource::definedSymbol: return "definedSymbol";
+    case ResolutionSource::selfSymbol: return "selfSymbol";
+    case ResolutionSource::librarySymbol: return "librarySymbol";
+    case ResolutionSource::convertedSymbol: return "convertedSymbol";
+    case ResolutionSource::functionStub: return "functionStub";
+    case ResolutionSource::dataFallback: return "dataFallback";
+    case ResolutionSource::unresolved: return "unresolved";
+    }
+    return "unresolved";
+}
+
+void EmulatorVM::observe_cxa_atexit_branch(uint64_t pc) {
+    // Clear on every observed instruction: a later unrelated fetch must never
+    // inherit an earlier PLT observation. No register bank or guest data dump.
+    pending_cxa_branch = {};
+    if (fault.present || !execution_depth || !constructor_context.active ||
+        constructor_context.library != ConstructorLibrary::storeservicescore || pc < 12) return;
+    if (observed_pc_count < 4) return;
+    for (size_t i = 0; i < 4; ++i) {
+        if (observed_pcs[(observed_pc_next + kPCTraceCapacity - 4 + i) % kPCTraceCapacity] != pc - 12 + i * 4) return;
+    }
+    for (const auto &slot : cxa_atexit_slots) {
+        if (pc - 12 < slot.code_begin || pc > slot.code_end || slot.code_end - pc < 4) continue;
+        uint32_t branch = 0;
+        if (uc_mem_read(uc, pc, &branch, sizeof branch) != UC_ERR_OK || branch != 0xD61F0220) continue; // br x17
+        uint32_t words[3]{};
+        if (uc_mem_read(uc, pc - 12, words, sizeof words) != UC_ERR_OK) continue;
+        // Standard AArch64 PLT only: adrp x16; ldr x17,[x16,#imm]; add x16,x16,#imm; br x17.
+        if ((words[0] & 0x9F00001F) != 0x90000010 ||
+            (words[1] & 0xFFC003FF) != 0xF9400211 ||
+            (words[2] & 0xFFC003FF) != 0x91000210) continue;
+        const uint64_t raw = ((uint64_t(words[0] >> 5) & 0x7FFFF) << 2) | ((words[0] >> 29) & 3);
+        const int64_t pages = static_cast<int64_t>(raw ^ 0x100000) - 0x100000;
+        const uint64_t page = ((pc - 12) & ~uint64_t(0xFFF)) + pages * 4096;
+        const uint64_t load_offset = ((words[1] >> 10) & 0xFFF) * 8;
+        const uint64_t add_offset = (words[2] >> 10) & 0xFFF;
+        if (load_offset != add_offset || page + load_offset != slot.address) continue;
+        CxaAtexitBranch result;
+        if (uc_reg_read(uc, UC_ARM64_REG_X17, &result.target) != UC_ERR_OK) return;
+        result.present = true;
+        result.branch_pc = pc;
+        result.got_address = slot.address;
+        result.has_got_value = uc_mem_read(uc, slot.address, &result.got_value, sizeof result.got_value) == UC_ERR_OK;
+        const auto stub = import_stubs.find(result.target);
+        result.registered_stub = stub != import_stubs.end() && stub->second == "__cxa_atexit";
+        result.source = slot.source; // Resolution provenance, not a guess based on target range.
+        pending_cxa_branch = result;
+        return;
+    }
+}
+
 void EmulatorVM::observe_pc(uint64_t pc) {
     observed_pcs[observed_pc_next] = pc;
     observed_pc_next = (observed_pc_next + 1) % kPCTraceCapacity;
@@ -103,6 +156,10 @@ void EmulatorVM::capture_fetch_unmapped(uint64_t address) {
     pending_fetch.present = true;
     pending_fetch.address = address; // Invalid-fetch callback target, not UC_ARM64_REG_PC.
     pending_fetch.count = observed_pc_count;
+    if (pending_cxa_branch.present && observed_pc_count &&
+        observed_pcs[(observed_pc_next + kPCTraceCapacity - 1) % kPCTraceCapacity] == pending_cxa_branch.branch_pc) {
+        pending_fetch.cxa_branch = pending_cxa_branch;
+    }
     const size_t start = (observed_pc_next + kPCTraceCapacity - observed_pc_count) % kPCTraceCapacity;
     for (size_t i = 0; i < observed_pc_count; ++i) {
         pending_fetch.pcs[i] = observed_pcs[(start + i) % kPCTraceCapacity];
@@ -276,6 +333,7 @@ const AndroidSystemProperties kAndroidProperties;
 static void trace_pc_hook(uc_engine *uc, uint64_t address, uint32_t size, void *user_data) {
     (void)uc; (void)size;
     static_cast<EmulatorVM *>(user_data)->observe_pc(address);
+    static_cast<EmulatorVM *>(user_data)->observe_cxa_atexit_branch(address);
 }
 
 static bool hook_mem_invalid(uc_engine *uc, uc_mem_type type,
@@ -1323,7 +1381,15 @@ static void import_callback_router(uc_engine *uc, uint64_t address, uint32_t siz
     }
 }
 
-static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo &current_lib, uint32_t sym_idx) {
+static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo &current_lib, uint32_t sym_idx,
+    EmulatorVM::ResolutionSource *source = nullptr, bool *is_cxa_atexit = nullptr) {
+    using Source = EmulatorVM::ResolutionSource;
+    if (source) *source = Source::unresolved;
+    if (is_cxa_atexit) *is_cxa_atexit = false;
+    auto resolved = [&](uint64_t address, Source from) {
+        if (source) *source = from;
+        return address;
+    };
     if (!current_lib.symtab || !current_lib.strtab) return 0;
     Elf64_Sym sym;
     if (uc_mem_read(vm->uc, current_lib.symtab + sym_idx * sizeof(Elf64_Sym), &sym, sizeof(sym)) != UC_ERR_OK) {
@@ -1337,21 +1403,22 @@ static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo 
         sym_name = name_buf.data();
     }
 
+    if (is_cxa_atexit) *is_cxa_atexit = sym_name == "__cxa_atexit";
     if (sym_name.empty()) {
-        if (sym.st_value != 0) return current_lib.base_address + (sym.st_value - current_lib.min_vaddr);
+        if (sym.st_value != 0) return resolved(current_lib.base_address + (sym.st_value - current_lib.min_vaddr), Source::definedSymbol);
         return current_lib.base_address;
     }
 
     if (sym.st_value != 0 && sym.st_shndx != 0) {
-        return current_lib.base_address + (sym.st_value - current_lib.min_vaddr);
+        return resolved(current_lib.base_address + (sym.st_value - current_lib.min_vaddr), Source::definedSymbol);
     }
 
     auto self_it = current_lib.symbols.find(sym_name);
-    if (self_it != current_lib.symbols.end()) return self_it->second;
+    if (self_it != current_lib.symbols.end()) return resolved(self_it->second, Source::selfSymbol);
 
     for (const auto &lib : vm->loaded_libraries) {
         auto it = lib.symbols.find(sym_name);
-        if (it != lib.symbols.end()) return it->second;
+        if (it != lib.symbols.end()) return resolved(it->second, Source::librarySymbol);
     }
 
     std::string converted = sym_name;
@@ -1367,15 +1434,15 @@ static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo 
     if (converted != sym_name) {
         for (const auto &lib : vm->loaded_libraries) {
             auto it = lib.symbols.find(converted);
-            if (it != lib.symbols.end()) return it->second;
+            if (it != lib.symbols.end()) return resolved(it->second, Source::convertedSymbol);
         }
     }
 
     // Upstream resolves both weak and strong imports through these fallbacks.
     // Data must never be allocated an executable function stub.
     const uint8_t type = sym.st_info & 0xf;
-    if (type == 1 || guest_data_symbol_name(sym_name)) return vm->register_data_import(sym_name);
-    return vm->register_import(sym_name);
+    if (type == 1 || guest_data_symbol_name(sym_name)) return resolved(vm->register_data_import(sym_name), Source::dataFallback);
+    return resolved(vm->register_import(sym_name), Source::functionStub);
 }
 
 static void apply_vm_relocations(EmulatorVM *vm, EmulatorVM::LibraryInfo &lib) {
@@ -1396,7 +1463,19 @@ static void apply_vm_relocations(EmulatorVM *vm, EmulatorVM::LibraryInfo &lib) {
                 uc_mem_write(vm->uc, target_addr, &final_val, sizeof(final_val));
                 applied++;
             } else if (type == R_AARCH64_JUMP_SLOT || type == R_AARCH64_GLOB_DAT || type == R_AARCH64_ABS64) {
-                uint64_t sym_addr = vm_resolve_symbol(vm, lib, sym_idx);
+                EmulatorVM::ResolutionSource source;
+                bool is_cxa_atexit = false;
+                uint64_t sym_addr = vm_resolve_symbol(vm, lib, sym_idx, &source, &is_cxa_atexit);
+                if (is_cxa_atexit && type == R_AARCH64_JUMP_SLOT && lib.name == kADISymbols.lib_ssc &&
+                    lib.max_vaddr >= lib.min_vaddr && lib.base_address <= UINT64_MAX - (lib.max_vaddr - lib.min_vaddr)) {
+                    // Fixed upper bound; no arbitrary symbol names or library paths retained.
+                    auto it = std::find_if(vm->cxa_atexit_slots.begin(), vm->cxa_atexit_slots.end(),
+                        [&](const EmulatorVM::CxaAtexitSlot &slot) { return slot.address == target_addr; });
+                    EmulatorVM::CxaAtexitSlot slot{target_addr, lib.base_address,
+                        lib.base_address + (lib.max_vaddr - lib.min_vaddr), source};
+                    if (it != vm->cxa_atexit_slots.end()) *it = slot;
+                    else if (vm->cxa_atexit_slots.size() < 8) vm->cxa_atexit_slots.push_back(slot);
+                }
                 if (!vm->execution_error.empty()) return;
                 if (sym_addr != 0) {
                     uint64_t final_val = sym_addr + r.r_addend;
@@ -1667,6 +1746,7 @@ int32_t run_vm_procedure(EmulatorVM *vm, uint64_t proc_addr, const std::vector<u
     if (!vm->execution_depth) {
         vm->fault = {};
         vm->pending_fetch = {};
+        vm->pending_cxa_branch = {};
     }
     if (vm->initialization_error != UC_ERR_OK) {
         vm->record_fault(EmulatorVM::FaultReason::engine, true, vm->initialization_error);

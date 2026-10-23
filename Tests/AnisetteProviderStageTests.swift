@@ -212,6 +212,50 @@ struct AnisetteProviderStageTests {
         check(malformedTrail?.pcTrail == nil, "invalid trail rejected as a whole")
         let unrelatedFault = try parseFaultJSON("{\"error\":\"safe\",\"unicorn_code\":0,\"constructor_kind\":\"dtInit\",\"constructor_index\":0,\"constructor_library\":\"coreadi\",\"fault_reason\":\"libc\",\"fetch_address\":123,\"pc_trail\":[1]}")
         check(unrelatedFault?.fetchAddress == nil && unrelatedFault?.pcTrail == nil, "unrelated fault fields ignored")
+        let branchJSON = #"{"error":"safe","unicorn_code":8,"constructor_kind":"initArray","constructor_index":2,"constructor_library":"storeservicescore","fault_reason":"engine","diagnostic_phase":"libraryConstructors","cxa_atexit_branch":{"target":2,"got_address":3,"got_value":null,"registered_stub":true,"resolution_source":"functionStub"}}"#
+        let validBranch = try parseFaultJSON(branchJSON)?.cxaAtexitBranch
+        check(validBranch?.gotValue == nil && validBranch?.registeredStub == true && validBranch?.resolutionSource.rawValue == "functionStub", "strict branch object or optional got value")
+        let malformedBranch = try parseFaultJSON(branchJSON.replacingOccurrences(of: "\"target\":2", with: "\"target\":true"))?.cxaAtexitBranch
+        check(malformedBranch == nil, "boolean accepted as branch UInt64")
+        let unknownBranch = try parseFaultJSON(branchJSON.replacingOccurrences(of: "\"got_address\":3", with: "\"got_address\":3,\"register_dump\":\"sensitive\""))?.cxaAtexitBranch
+        check(unknownBranch == nil, "unknown branch field accepted")
+        let branchFields: [(String, String)] = [
+            ("target", "-1"), ("target", "1.5"), ("target", "\"1\""), ("target", "true"),
+            ("target", "18446744073709551616"),
+            ("got_address", "-1"), ("got_address", "1.5"), ("got_address", "\"1\""),
+            ("got_address", "false"), ("got_address", "18446744073709551616"),
+            ("got_value", "-1"), ("got_value", "1.5"), ("got_value", "\"1\""),
+            ("got_value", "true"), ("got_value", "18446744073709551616"),
+        ]
+        for (key, invalidValue) in branchFields {
+            let needle = "\"\(key)\":\(key == "got_value" ? "null" : key == "target" ? "2" : "3")"
+            let invalid = branchJSON.replacingOccurrences(of: needle, with: "\"\(key)\":\(invalidValue)")
+            let decodedInvalid = try parseFaultJSON(invalid)?.cxaAtexitBranch
+            check(decodedInvalid == nil, "invalid UInt64 branch field accepted: \(key)=\(invalidValue)")
+        }
+        for invalidRegistered in ["0", "1", "\"true\""] {
+            let invalid = branchJSON.replacingOccurrences(of: "\"registered_stub\":true", with: "\"registered_stub\":\(invalidRegistered)")
+            let decodedInvalid = try parseFaultJSON(invalid)?.cxaAtexitBranch
+            check(decodedInvalid == nil, "invalid registered_stub accepted: \(invalidRegistered)")
+        }
+        for invalidEnum in ["unknownSource", "FunctionStub"] {
+            let invalid = branchJSON.replacingOccurrences(of: "functionStub", with: invalidEnum)
+            let decodedInvalid = try parseFaultJSON(invalid)?.cxaAtexitBranch
+            check(decodedInvalid == nil, "unknown branch enum accepted")
+        }
+        let maxBranchJSON = #"{"error":"safe","unicorn_code":8,"constructor_kind":"initArray","constructor_index":2,"constructor_library":"storeservicescore","fault_reason":"engine","diagnostic_phase":"libraryConstructors","cxa_atexit_branch":{"target":18446744073709551615,"got_address":18446744073709551615,"got_value":18446744073709551615,"registered_stub":true,"resolution_source":"unresolved"}}"#
+        let maxBranch = try parseFaultJSON(maxBranchJSON)?.cxaAtexitBranch
+        check(maxBranch?.target == UInt64.max && maxBranch?.gotAddress == UInt64.max && maxBranch?.gotValue == UInt64.max, "UInt64.max branch fields failed to parse")
+        let disallowedBranchContexts = [
+            branchJSON.replacingOccurrences(of: "\"fault_reason\":\"engine\"", with: "\"fault_reason\":\"libc\""),
+            branchJSON.replacingOccurrences(of: "\"unicorn_code\":8", with: "\"unicorn_code\":7"),
+            branchJSON.replacingOccurrences(of: "\"diagnostic_phase\":\"libraryConstructors\"", with: "\"diagnostic_phase\":\"loadLibrary\""),
+            branchJSON.replacingOccurrences(of: "\"constructor_library\":\"storeservicescore\"", with: "\"constructor_library\":\"coreadi\"")
+        ]
+        for json in disallowedBranchContexts {
+            let decodedInvalid = try parseFaultJSON(json)?.cxaAtexitBranch
+            check(decodedInvalid == nil, "branch accepted outside allowlisted context")
+        }
 
         let expectedFaults: [(Int32, AnisetteProviderDiagnostic.Fault)] = [
             (
