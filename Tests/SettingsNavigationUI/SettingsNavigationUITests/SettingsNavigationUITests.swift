@@ -57,24 +57,35 @@ final class SettingsNavigationUITests: XCTestCase {
         attachScreenshot(named: "customizations-from-toolbar")
     }
 
-    func testAnisetteImportOpensDocumentPickerAndCanBeCancelled() {
+    func testOnDeviceToggleAndResetConfirmation() {
         let route = app.buttons["settings-user-customizations-shortcut"]
         XCTAssertTrue(route.waitForExistence(timeout: 20))
         route.tap()
-        let importButton = app.buttons["anisette-library-import"]
         XCTAssertTrue(app.descendants(matching: .any)["user-customizations-page"].waitForExistence(timeout: 30))
+        let toggle = app.switches["anisette-ondevice-toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertEqual(toggle.value as? String, "0")
+        // SwiftUI exposes a row-sized Switch containing a native Switch.
+        // Tapping the row midpoint hits its non-interactive text label.
+        let nativeSwitch = toggle.switches.firstMatch
+        XCTAssertTrue(nativeSwitch.exists)
+        nativeSwitch.tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+        attachScreenshot(named: "anisette-ondevice-enabled")
+        nativeSwitch.tap()
+        XCTAssertEqual(toggle.value as? String, "0")
+        let reset = app.buttons["anisette-local-reset"]
         let list = settingsList
-        for _ in 0..<10 { if importButton.isHittable { break }; list.swipeUp() }
-        XCTAssertTrue(importButton.isHittable)
-        importButton.tap()
-        let picker = app.otherElements["Document Browser"]
-        let visiblePicker = picker.waitForExistence(timeout: 8) || app.navigationBars["Browse"].exists || app.buttons["Browse"].exists || app.buttons["Cancel"].exists
-        XCTAssertTrue(visiblePicker, "The system document picker should open without supplying any Apple files")
-        attachScreenshot(named: "anisette-document-picker")
-        let cancel = app.buttons["Cancel"]
-        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        for _ in 0..<8 { if reset.isHittable { break }; list.swipeUp() }
+        XCTAssertTrue(reset.isHittable)
+        reset.tap()
+        let confirm = app.buttons["重設本機資料"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["取消", "Cancel"])).firstMatch
+        XCTAssertTrue(cancel.exists)
         cancel.tap()
-        XCTAssertTrue(importButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(reset.waitForExistence(timeout: 5))
+        attachScreenshot(named: "anisette-reset-cancelled")
     }
 
     func testIPAImportOpensSystemDocumentPickerAndCanBeCancelled() {
@@ -111,41 +122,24 @@ final class SettingsNavigationUITests: XCTestCase {
         XCTAssertFalse(app.buttons["ipa-start-install"].isEnabled)
     }
 
-    func testODAManagementNavigationAndAutomaticAcquisitionConsent() {
+    func testClientConfigurationLinksNavigate() {
         let route = app.buttons["settings-user-customizations-shortcut"]
         XCTAssertTrue(route.waitForExistence(timeout: 20))
         route.tap()
-        let management = app.buttons["anisette-oda-management"]
-        XCTAssertTrue(management.waitForExistence(timeout: 20))
-        for _ in 0..<8 { if management.isHittable { break }; settingsList.swipeUp() }
-        XCTAssertTrue(management.isHittable)
-        management.tap()
-        XCTAssertTrue(app.textFields["oda-source-url"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.textFields["oda-fallback-url"].exists)
-        let automatic = app.switches["oda-automatic-acquisition"]
-        for _ in 0..<8 { if automatic.isHittable { break }; settingsList.swipeUp() }
-        XCTAssertTrue(automatic.isHittable)
-        XCTAssertEqual(automatic.value as? String, "0")
-        // SwiftUI on recent iOS exposes a row-sized Switch containing a native
-        // Switch. Tapping the row midpoint hits its non-interactive text label.
-        let nativeSwitch = automatic.switches.firstMatch
-        XCTAssertTrue(nativeSwitch.exists)
-        nativeSwitch.tap()
-        let consent = app.alerts.firstMatch
-        XCTAssertTrue(consent.waitForExistence(timeout: 10))
-        XCTAssertTrue(consent.buttons["確認允許自動取得"].exists)
-        let cancel = consent.buttons.matching(NSPredicate(format: "label IN %@", ["取消", "Cancel"])).firstMatch
-        XCTAssertTrue(cancel.exists)
-        cancel.tap()
-        XCTAssertEqual(automatic.value as? String, "0")
-        attachScreenshot(named: "oda-management-consent-cancelled")
-        nativeSwitch.tap()
-        let confirm = app.alerts.buttons["確認允許自動取得"]
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
-        confirm.tap()
-        XCTAssertEqual(automatic.value as? String, "1")
-        nativeSwitch.tap()
-        XCTAssertEqual(automatic.value as? String, "0")
+        XCTAssertTrue(app.descendants(matching: .any)["user-customizations-page"].waitForExistence(timeout: 30))
+        let list = settingsList
+        let anisetteLink = app.buttons["customizations-anisette-client-config"]
+        for _ in 0..<8 { if anisetteLink.isHittable { break }; list.swipeUp() }
+        XCTAssertTrue(anisetteLink.isHittable)
+        anisetteLink.tap()
+        XCTAssertTrue(app.staticTexts["Anisette Client Configuration"].waitForExistence(timeout: 10))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let sideSignLink = app.buttons["customizations-sidesign-client-config"]
+        for _ in 0..<8 { if sideSignLink.isHittable { break }; list.swipeUp() }
+        XCTAssertTrue(sideSignLink.isHittable)
+        sideSignLink.tap()
+        XCTAssertTrue(app.staticTexts["SideSign Client Configuration"].waitForExistence(timeout: 10))
+        attachScreenshot(named: "client-configuration-links")
     }
 
     private func assertCustomizationPage() {

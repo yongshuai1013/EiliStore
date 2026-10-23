@@ -76,9 +76,6 @@ jobs:
           command -v cmake >/dev/null || brew install cmake
           bash Scripts/build-idevice-ios15.sh
 
-      - name: Build and audit production Unicorn for iOS 15
-        run: bash Scripts/build-on-device-anisette.sh
-
       - name: Generate standard production project (both engines, remote default)
         run: |
           brew install xcodegen
@@ -101,7 +98,12 @@ jobs:
             'LD_MAP_FILE_PATH=$(TARGET_TEMP_DIR)/$(PRODUCT_NAME)-$(CURRENT_VARIANT)-$(CURRENT_ARCH)-LinkMap.txt' \
             2>&1 | tee build/xcodebuild.log
           grep -E -- '-D[[:space:]]*EILI_ON_DEVICE_ANISETTE([[:space:]]|$)' build/xcodebuild.log >/dev/null
-          grep -F 'Packages/AnisetteKit/Native/anisette_core_uc.cpp' build/xcodebuild.log >/dev/null
+          # The On-Device engine resolves through the fork chain pinned in
+          # project.yml (SideSign 7ce202e4 -> AnisetteKit 2b4a643f -> Unicorn
+          # 2.1.4-xcf-a10). SPM verifies the xcframework zip against the
+          # SHA-256 pinned in the fork's Package.swift during resolution.
+          grep -F '2.1.4-xcf-a10' build/DerivedData/SourcePackages/checkouts/AnisetteKit/Package.swift >/dev/null
+          grep -F 'f2bbc6094c07fcca6524bc7a901e2d00ec2a2a27e661a57ca1e7c692df96d839' build/DerivedData/SourcePackages/checkouts/AnisetteKit/Package.swift >/dev/null
           # Each target writes its own map. Inspect only the App map after linking.
           APP_LINK_MAPS=()
           while IFS= read -r map; do APP_LINK_MAPS+=("$map"); done < <(
@@ -112,10 +114,25 @@ jobs:
           cp "${APP_LINK_MAPS[0]}" build/production-link-map.txt
           # A symbol listed only as dead-stripped is not proof of engine inclusion.
           # Mach-O symbols can contain non-UTF-8 bytes; do not use locale-sensitive awk.
-          python3 Scripts/verify-anisette-link-map.py build/production-link-map.txt
-          BUILT_UNICORN=build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/EiliStore/BuildProductsPath/Release-iphoneos/libunicorn.a
-          cmp Packages/AnisetteKit/Artifacts/Unicorn.xcframework/ios-arm64/libunicorn.a "$BUILT_UNICORN"
-          python3 Scripts/audit-ios-archive.py "$BUILT_UNICORN"
+          python3 - <<'PY'
+          import pathlib, sys
+          data = pathlib.Path('build/production-link-map.txt').read_bytes()
+          active = data.split(b'# Dead Stripped Symbols:')[0]
+          fields = [line.split() for line in active.splitlines()]
+          symbols = {f[-1] for f in fields if len(f) >= 4 and f[0].startswith(b'0x')}
+          if b'_uc_open' not in symbols:
+              print('ERROR: Unicorn engine entry point is absent from active App symbols', file=sys.stderr)
+              raise SystemExit(1)
+          if not any(b'AnisetteKit' in s for s in symbols):
+              print('ERROR: AnisetteKit symbols are absent from active App symbols', file=sys.stderr)
+              raise SystemExit(1)
+          print('PASS: fork-chain On-Device engine (AnisetteKit + Unicorn) in App Link Map')
+          PY
+          # Audit the exact Unicorn slice SPM resolved from the fork release
+          # (zip SHA-256 pinned in the fork Package.swift, verified above).
+          FORK_UNICORN=$(find build/DerivedData/SourcePackages/artifacts -name 'libunicorn.a' -path '*ios-arm64*' | head -n 1)
+          [[ -n "$FORK_UNICORN" ]] || { echo 'ERROR: fork Unicorn artifact not found in SPM artifacts' >&2; exit 1; }
+          python3 Scripts/audit-ios-archive.py "$FORK_UNICORN"
           if grep -Ei 'built for newer.*than being linked' build/xcodebuild.log; then
             echo 'ERROR: deployment-version mismatch remains; refusing to publish IPA' >&2
             exit 1

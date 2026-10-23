@@ -1,8 +1,5 @@
 import Foundation
 import SideSign
-#if EILI_ON_DEVICE_ANISETTE
-import AnisetteKit
-#endif
 
 /// Remote remains the default. Local mode never silently sends data to a remote provider.
 enum EiliAnisetteMode: String, CaseIterable, Identifiable {
@@ -93,9 +90,6 @@ actor EiliAnisetteService {
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private let localDiagnostics = EiliLoginDiagnostics.Relay()
-    #if EILI_ON_DEVICE_ANISETTE
-    private var localClient: AnisetteClient?
-    #endif
 
     // Actor methods re-enter at await: explicitly serialize provisioning, imports and resets.
     private func acquire() async {
@@ -175,37 +169,17 @@ actor EiliAnisetteService {
         }
     }
 
+    /// On-device path: SideSign's AnisetteDataManager in remoteODA mode — the
+    /// exact call ODATest verified on device (SideSign fork 7ce202e4 ->
+    /// AnisetteKit fork 2b4a643f -> self-built armv8-a Unicorn 2.1.4-xcf-a10).
+    /// The manager downloads the runtime libraries itself, provisions ADI and
+    /// returns fresh headers, so the retired vendored AnisetteClient path and
+    /// its on-disk library gate are gone. Identity, ADI blob and routing info
+    /// stay in the same Keychain entries as before, and configuration overrides
+    /// are applied exactly like the remote path.
     private func fetchLocal(configuration: EiliAnisetteClientConfiguration, diagnosticAttempt: UUID?) async throws -> SideSign.AnisetteData {
         #if EILI_ON_DEVICE_ANISETTE
         EiliLoginDiagnostics.record(.localPreflightStarted, for: diagnosticAttempt)
-        switch localLibraryStatus() {
-        case .engineUnavailable: throw EiliAnisetteError.localBuildRequired
-        case .missing:
-            guard EiliODASourceConfiguration.selected.automaticAcquisition else { throw EiliAnisetteError.missingLibraries }
-            EiliLoginDiagnostics.record(.localAcquisitionStarted, for: diagnosticAttempt)
-            _ = try await performDownload(using: selectedDownloaderStage())
-            // Download/import may preserve an incompatible diagnostic library set.
-            // Revalidate before creating identity, provisioning state, or a provider.
-            switch localLibraryStatus() {
-            case .present: break
-            case .engineUnavailable: throw EiliAnisetteError.localBuildRequired
-            case .missing: throw EiliAnisetteError.missingLibraries
-            case .invalid: throw EiliAnisetteError.invalidLibraries
-            case .incompatible(let reason): throw EiliAnisetteError.incompatibleLibraries(reason)
-            }
-        case .invalid: throw EiliAnisetteError.invalidLibraries
-        case .incompatible(let reason): throw EiliAnisetteError.incompatibleLibraries(reason)
-        case .present: break
-        }
-        guard let profile = ADILibraryProfile.detected(in: libraries) else { throw EiliAnisetteError.invalidLibraries }
-        if localClient == nil && profile == .legacy {
-            let entry = libraries.appendingPathComponent("libstoreservicescore.so")
-            if let data = try? ADILibraryCompatibility.readLibrary(entry),
-               let metadata = try? ADIELFMetadata.parse(data), metadata.soname == "libstoreapi.so" {
-                throw EiliAnisetteError.incompatibleLibraries("新版 libstoreapi.so 不可改名冒充舊版函式庫；請匯入原名五庫並查看相容性提示。")
-            }
-        }
-        EiliLoginDiagnostics.record(.localPreflightPassed, for: diagnosticAttempt)
         let identifier: UUID
         if let stored = KeychainHelper.loadString(forKey: Self.localIdentifierKey), let uuid = UUID(uuidString: stored) {
             identifier = uuid
@@ -215,84 +189,30 @@ actor EiliAnisetteService {
                 throw EiliAnisetteError.storageFailed
             }
         }
-        if localClient == nil {
-            EiliLoginDiagnostics.record(.localClientCreating, for: diagnosticAttempt)
-            let directory = libraries
-            let provisioning = root.appendingPathComponent("Provisioning", isDirectory: true)
-            try FileManager.default.createDirectory(at: provisioning, withIntermediateDirectories: true)
-            AnisetteKitLogging.setLogging(false)
-            localClient = try AnisetteClient(provisioningDir: provisioning,
-                requiredLibraries: profile.filenames,
-                provider: UnicornAnisetteDataProvider(onStage: { [diagnostics = localDiagnostics] stage in
-                    switch stage {
-                    case .headersStarted: diagnostics.record(.nativeHeadersStarted)
-                    case .headersReturned: diagnostics.record(.nativeHeadersReturned)
-                    case .provisionStartStarted: diagnostics.record(.nativeProvisionStartStarted)
-                    case .provisionStartReturned: diagnostics.record(.nativeProvisionStartReturned)
-                    case .provisionEndStarted: diagnostics.record(.nativeProvisionEndStarted)
-                    case .provisionEndReturned: diagnostics.record(.nativeProvisionEndReturned)
-                    }
-                }, onDiagnostic: { [diagnostics = localDiagnostics] event in
-                    // Re-allowlist at the persistence boundary. Never bridge free-form
-                    // provider errors, paths, JSON, or identity/provisioning data.
-                    guard let operation = EiliLoginDiagnostics.NativeDetail.Operation(rawValue: event.operation.rawValue),
-                          let result = EiliLoginDiagnostics.NativeDetail.Result(rawValue: event.result.rawValue) else { return }
-                    let fault = event.fault.map { value in
-                        let eligibleFetch = event.phase == .libraryConstructors && value.unicornCode == 8 && value.reason == .engine
-                            && value.constructorKind != nil && value.constructorIndex != nil
-                            && value.constructorLibrary != nil
-                        let eligibleRead = event.phase == .libraryConstructors && value.unicornCode == 13 && value.reason == .engine
-                            && value.constructorKind == .initArray && value.constructorIndex == 47
-                            && value.constructorLibrary == .storeservicescore
-                        let read = eligibleRead ? value.readProtection.map { read in
-                            EiliLoginDiagnostics.NativeDetail.Fault.ReadProtection(address: read.address, size: read.size,
-                                pc: read.pc, x1: read.x1, lr: read.lr, regionID: read.regionID, permissions: read.permissions)
-                        } : nil
-                        return EiliLoginDiagnostics.NativeDetail.Fault(
-                            unicornCode: value.unicornCode, guestPC: value.guestPC,
-                            constructorKind: value.constructorKind.flatMap { .init(rawValue: $0.rawValue) },
-                            constructorIndex: value.constructorIndex,
-                            constructorLibrary: value.constructorLibrary.flatMap { .init(rawValue: $0.rawValue) },
-                            reason: value.reason.flatMap { .init(rawValue: $0.rawValue) },
-                            fetchAddress: eligibleFetch ? value.fetchAddress : nil,
-                            pcTrail: eligibleFetch ? value.pcTrail.map { Array($0.suffix(16)) } : nil,
-                            cxaAtexitBranch: eligibleFetch && value.constructorLibrary == .storeservicescore ? value.cxaAtexitBranch.map { branch in
-                                .init(target: branch.target, gotAddress: branch.gotAddress,
-                                      gotValue: branch.gotValue, registeredStub: branch.registeredStub,
-                                      resolutionSource: .init(rawValue: branch.resolutionSource.rawValue)!)
-                            } : nil, readProtection: read)
-                    }
-                    diagnostics.record(native: .init(operation: operation, result: result,
-                        phase: event.phase.flatMap { EiliLoginDiagnostics.NativeDetail.Phase(rawValue: $0.rawValue) },
-                        code: event.code, nativeCode: event.nativeCode, fault: fault))
-                }), libraryDirectoryResolver: { directory })
-        }
-        guard let client = localClient else { throw EiliAnisetteError.missingLibraries }
-        EiliLoginDiagnostics.record(.localClientReady, for: diagnosticAttempt)
         var requestHeaders = configuration.requestHeaderOverrides
         let explicitRoutingOverride = requestHeaders.keys.contains { $0.caseInsensitiveCompare("X-Apple-I-MD-RINFO") == .orderedSame }
         if !explicitRoutingOverride, let routingInfo = KeychainHelper.loadString(forKey: Self.localRoutingInfoKey) {
             requestHeaders["X-Apple-I-MD-RINFO"] = routingInfo
         }
+        EiliLoginDiagnostics.record(.localPreflightPassed, for: diagnosticAttempt)
         EiliLoginDiagnostics.record(.localRequestStarted, for: diagnosticAttempt)
-        let (headers, blob) = try await client.getAnisetteData(identifier: identifier,
-            storage: .memory(existingBlob: KeychainHelper.load(forKey: Self.localBlobKey).flatMap { $0.isEmpty ? nil : $0 }),
+        let odaSourceURL = URL(string: "https://zzz.haus/oda.json")!
+        let (data, blob) = try await SideSign.AnisetteDataManager.shared.fetchAnisetteData(
+            mode: .remoteODA(sourceURL: odaSourceURL, fallbackURL: odaSourceURL),
+            identifier: identifier,
+            existingAdiBlob: KeychainHelper.load(forKey: Self.localBlobKey).flatMap { $0.isEmpty ? nil : $0 },
             headers: .init(rawHeaders: requestHeaders))
         EiliLoginDiagnostics.record(.localRequestReturned, for: diagnosticAttempt)
         // Save a provisioned identity before honouring cancellation, never log its payload.
         if let blob, !KeychainHelper.save(blob, forKey: Self.localBlobKey) {
             throw EiliAnisetteError.storageFailed
         }
-        let returnedRoutingInfo = headers.first { $0.key.caseInsensitiveCompare("X-Apple-I-MD-RINFO") == .orderedSame }?.value
-        if (blob != nil || !explicitRoutingOverride), let returnedRoutingInfo,
-           !KeychainHelper.saveString(returnedRoutingInfo, forKey: Self.localRoutingInfoKey) {
+        if (blob != nil || !explicitRoutingOverride), !data.routingInfo.isEmpty,
+           !KeychainHelper.saveString(data.routingInfo, forKey: Self.localRoutingInfoKey) {
             throw EiliAnisetteError.storageFailed
         }
         try Task.checkCancellation()
-        // The native provider's persisted routing info can take precedence over
-        // request headers internally. The Apple-bound metadata still honors the
-        // explicit override without modifying stored provisioning state.
-        return configuration.applying(to: try Self.convertHeaders(headers))
+        return configuration.applying(to: data)
         #else
         throw EiliAnisetteError.localBuildRequired
         #endif
@@ -429,10 +349,6 @@ actor EiliAnisetteService {
             throw error
         }
         if hadLibraries { try? fm.removeItem(at: backup) }
-        #if EILI_ON_DEVICE_ANISETTE
-        localClient = nil
-        resetLocalAnisetteEngine()
-        #endif
         return status
     }
 
@@ -448,10 +364,6 @@ actor EiliAnisetteService {
         KeychainHelper.delete(forKey: Self.localIdentifierKey)
         KeychainHelper.delete(forKey: Self.localBlobKey)
         KeychainHelper.delete(forKey: Self.localRoutingInfoKey)
-        #if EILI_ON_DEVICE_ANISETTE
-        localClient = nil
-        resetLocalAnisetteEngine()
-        #endif
     }
 
     private var hasActiveLocalSession: Bool {

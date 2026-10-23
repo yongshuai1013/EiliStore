@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 private enum SideSignConfigMode: String, CaseIterable, Identifiable {
-    case interactive = "互動編輯"
+    case interactive = "Interactive"
     case rawJSON = "Raw JSON"
     var id: String { rawValue }
 }
@@ -40,6 +40,10 @@ struct SideSignClientConfigurationView: View {
     @State private var notice: String?
     @State private var isError = false
     @State private var working = false
+
+    private let headerKeys = ["svct", "Header: Version", "X-Apple-App-Info", "User-Agent",
+                              "appIdKey", "User-Agent",
+                              "clientId", "protocolVersion", "servicesProtocolVersion", "User-Agent"]
 
     private let fields: [(String, WritableKeyPath<EiliSideSignClientConfiguration, String>)] = [
         ("Service", \.grandSlam.service),
@@ -88,11 +92,11 @@ struct SideSignClientConfigurationView: View {
             }
 
             if mode == .interactive {
-                group("GrandSlam", keys: 0..<4)
-                group("AppleAuth", keys: 4..<6)
-                group("DeveloperServices", keys: 6..<10)
+                group("GRANDSLAM AUTH (GSA)", keys: 0..<4)
+                group("APPLE AUTH (IDMSA)", keys: 4..<6)
+                group("DEVELOPER SERVICES", keys: 6..<10)
             } else {
-                Section("Raw JSON") {
+                Section("RAW JSON") {
                     TextEditor(text: rawBinding)
                         .font(.system(.footnote, design: .monospaced))
                         .frame(minHeight: 280)
@@ -146,11 +150,18 @@ struct SideSignClientConfigurationView: View {
     private func group(_ title: String, keys: Range<Int>) -> some View {
         Section(title) {
             ForEach(Array(keys), id: \.self) { index in
-                TextField(fields[index].0, text: fieldBinding(index))
-                    .textInputAutocapitalization(.never)
-                    .disableAutocorrection(true)
-                    .accessibilityIdentifier("sidesign-client-config-field-\(index)")
-                    .disabled(!loaded || loadFailed || working)
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(fields[index].0).font(.subheadline)
+                        Spacer()
+                        Text(headerKeys[index]).font(.caption2).foregroundColor(.secondary)
+                    }
+                    TextField(fields[index].0, text: fieldBinding(index))
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                        .accessibilityIdentifier("sidesign-client-config-field-\(index)")
+                        .disabled(!loaded || loadFailed || working)
+                }
             }
         }
     }

@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 private enum AnisetteConfigEditorMode: String, CaseIterable, Identifiable {
-    case interactive = "互動編輯"
+    case interactive = "Interactive"
     case rawJSON = "Raw JSON"
     var id: String { rawValue }
 }
@@ -74,21 +74,30 @@ struct AnisetteClientConfigurationView: View {
             }
 
             if mode == .interactive {
-                Section("用戶自定義") {
-                    configField("Client Info", key: \.clientInfo, id: "client-config-client-info")
-                    configField("User Agent", key: \.userAgent, id: "client-config-user-agent")
-                    configField("Custom Device ID", key: \.customDeviceID, id: "client-config-device-id")
-                    configField("Custom Local User ID", key: \.customLocalUserID, id: "client-config-local-user-id")
-                    configField("Custom Serial Number", key: \.customSerialNumber, id: "client-config-serial-number")
-                    configField("Custom Routing Info", key: \.customRoutingInfo, id: "client-config-routing-info")
-                    configField("Custom Locale", key: \.customLocale, id: "client-config-locale")
-                    configField("Custom Time Zone", key: \.customTimeZone, id: "client-config-time-zone")
-                    configField("Custom Xcode Version", key: \.customXcodeVersion, id: "client-config-xcode-version")
+                Section("PRIMARY CLIENT HEADERS") {
+                    configField("Client Info", headerKey: "X-Mme-Client-Info", key: \.clientInfo, id: "client-config-client-info")
+                    configField("User Agent", headerKey: "User-Agent", key: \.userAgent, id: "client-config-user-agent")
+                }
+                Section("DEVICE & IDENTITY") {
+                    configField("Custom Device ID", headerKey: "X-Mme-Device-Id", key: \.customDeviceID, id: "client-config-device-id", placeholder: "System Generated Device UUID")
+                    configField("Custom Local User ID", headerKey: "X-Apple-I-MD-LU", key: \.customLocalUserID, id: "client-config-local-user-id", placeholder: "0")
+                    configField("Custom Serial Number", headerKey: "X-Apple-I-SRL-NO", key: \.customSerialNumber, id: "client-config-serial-number")
+                    configField("Custom Routing Info", headerKey: "X-Apple-I-MD-RINFO", key: \.customRoutingInfo, id: "client-config-routing-info")
+                }
+                Section("ENVIRONMENT & LOCALIZATION") {
+                    configField("Custom Locale", headerKey: "X-Apple-Locale", key: \.customLocale, id: "client-config-locale")
+                    configField("Custom Time Zone", headerKey: "X-Apple-I-TimeZone", key: \.customTimeZone, id: "client-config-time-zone")
+                    configField("Custom Xcode Version", headerKey: "X-Xcode-Version", key: \.customXcodeVersion, id: "client-config-xcode-version")
                     Text("Xcode 版本留白時，新登入使用 27.0 (27A242)，既有會話沿用其保存版本。其他空白欄位沿用 provider/default。")
                         .font(.caption).foregroundColor(.secondary)
                 }
+                Section("DYNAMIC CRYPTOGRAPHIC TOKENS") {
+                    tokenInfoRow("One-Time Password (OTP)", headerKey: "X-Apple-I-MD", note: "由 Anisette 於每次請求時產生，不儲存於 Client Configuration。")
+                    tokenInfoRow("Machine ID", headerKey: "X-Apple-I-MD-M", note: "由 Anisette 於每次請求時產生，不儲存於 Client Configuration。")
+                    tokenInfoRow("Client Time", headerKey: "X-Apple-I-Client-Time", note: "每次請求時取自裝置目前時間，不儲存於 Client Configuration。")
+                }
             } else {
-                Section("JSON") {
+                Section("RAW JSON") {
                     TextEditor(text: rawBinding)
                         .font(.system(.body, design: .monospaced))
                         .frame(minHeight: 300)
@@ -139,10 +148,14 @@ struct AnisetteClientConfigurationView: View {
         }
     }
 
-    private func configField(_ title: String, key: WritableKeyPath<EiliAnisetteClientConfiguration, String>, id: String) -> some View {
+    private func configField(_ title: String, headerKey: String, key: WritableKeyPath<EiliAnisetteClientConfiguration, String>, id: String, placeholder: String = "空白＝沿用預設") -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.subheadline)
-            TextField("空白＝沿用預設", text: Binding(
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.subheadline)
+                Spacer()
+                Text(headerKey).font(.caption2).foregroundColor(.secondary)
+            }
+            TextField(placeholder, text: Binding(
                 get: { draft[keyPath: key] },
                 set: { value in
                     draft[keyPath: key] = value
@@ -154,6 +167,17 @@ struct AnisetteClientConfigurationView: View {
             .disableAutocorrection(true)
             .accessibilityIdentifier(id)
             .disabled(!isLoaded || isBusy)
+        }
+    }
+
+    private func tokenInfoRow(_ title: String, headerKey: String, note: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.subheadline)
+                Spacer()
+                Text(headerKey).font(.caption2).foregroundColor(.secondary)
+            }
+            Text(note).font(.caption).foregroundColor(.secondary)
         }
     }
 

@@ -5,6 +5,12 @@ public struct AnisetteRequestHeaders: Sendable {
     public init(rawHeaders: [String: String]) { self.rawHeaders = rawHeaders }
 }
 
+public enum AnisetteMode: Sendable, Equatable {
+    case remote(server: URL)
+    case localODA(libsDir: URL, provisioningDir: URL? = nil)
+    case remoteODA(sourceURL: URL, fallbackURL: URL? = nil)
+}
+
 public struct AnisetteData: Sendable, Equatable {
     public var machineID, oneTimePassword, localUserID, routingInfo, deviceID, serialNumber, clientInfo, userAgent, clientTime, locale, timeZone: String
     public init(machineID: String, oneTimePassword: String, localUserID: String, routingInfo: String, deviceID: String, serialNumber: String, clientInfo: String, userAgent: String, clientTime: String, locale: String, timeZone: String) {
@@ -23,8 +29,29 @@ public actor AnisetteDataManager {
     public var delay: UInt64 = 0
     public var active = 0
     public var maxConcurrentForTests = 0
+    public var odaCalls = 0
+    public var lastMode: AnisetteMode?
+    public var lastODAIdentifier: UUID?
+    public var lastODABlob: Data?
+    public var lastODAHeaders: [String: String] = [:]
+    public var odaResponse: (AnisetteData, Data?)?
+    public var odaError: Error?
+    public var odaDelay: UInt64 = 0
     public init() {}
-    public func reset() { calls = 0; lastServers = []; lastIdentifier = nil; lastBlob = nil; lastHeaders = [:]; response = nil; delay = 0; active = 0; maxConcurrentForTests = 0 }
+    public func reset() { calls = 0; lastServers = []; lastIdentifier = nil; lastBlob = nil; lastHeaders = [:]; response = nil; delay = 0; active = 0; maxConcurrentForTests = 0; odaCalls = 0; lastMode = nil; lastODAIdentifier = nil; lastODABlob = nil; lastODAHeaders = [:]; odaResponse = nil; odaError = nil; odaDelay = 0 }
+    public func setODAResponseForTests(data: AnisetteData?, blob: Data?) { if let data { odaResponse = (data, blob) } else { odaResponse = (AnisetteData(machineID: "m", oneTimePassword: "otp", localUserID: "lu", routingInfo: "r", deviceID: "dev", serialNumber: "s", clientInfo: "ci", userAgent: "ua", clientTime: "t", locale: "en", timeZone: "UTC"), blob) } }
+    public func setODAErrorForTests(_ error: Error?) { odaError = error }
+    public func setODADelayForTests(_ value: UInt64) { odaDelay = value }
+    public func fetchAnisetteData(mode: AnisetteMode? = nil, identifier: UUID, existingAdiBlob: Data? = nil, headers: AnisetteRequestHeaders? = nil, onError: (@Sendable (Error) -> Void)? = nil) async throws -> (AnisetteData, Data?) {
+        odaCalls += 1; lastMode = mode; lastODAIdentifier = identifier; lastODABlob = existingAdiBlob
+        lastODAHeaders = headers?.rawHeaders ?? [:]
+        // Mirror the legacy fake provider: a delay interrupted by cancellation
+        // still returns, so the service's save-before-cancellation path runs.
+        if odaDelay > 0 { try? await Task.sleep(nanoseconds: odaDelay) }
+        if let odaError { throw odaError }
+        if let odaResponse { return odaResponse }
+        return (AnisetteData(machineID: "m", oneTimePassword: "otp", localUserID: "lu", routingInfo: "r", deviceID: "dev", serialNumber: "s", clientInfo: "ci", userAgent: "ua", clientTime: "t", locale: "en", timeZone: "UTC"), nil)
+    }
     public func setDelayForTests(_ value: UInt64) { delay = value }
     public func setResponseForTests(data: AnisetteData?, blob: Data?) { if let data { response = (data, blob) } else { response = (AnisetteData(machineID: "m", oneTimePassword: "otp", localUserID: "lu", routingInfo: "r", deviceID: "dev", serialNumber: "s", clientInfo: "ci", userAgent: "ua", clientTime: "t", locale: "en", timeZone: "UTC"), blob) } }
     public func fetchAnisetteDataWithFailover(servers: [URL], identifier: UUID, existingAdiBlob: Data?, headers: AnisetteRequestHeaders? = nil) async throws -> (AnisetteData, Data?) {

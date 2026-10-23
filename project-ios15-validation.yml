@@ -1,4 +1,4 @@
-# Compatibility entry point: production now uses the audited local AnisetteKit
-# dependency directly, while runtime selection still defaults to remote.
+# Compatibility entry point: production resolves AnisetteKit through the
+# SideSign fork chain, while runtime selection still defaults to remote.
 include:
   - project.yml

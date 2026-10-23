@@ -36,92 +36,80 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         self.assertIn('PROJECT="$TEST_DIR/SettingsNavigationUI.xcodeproj"', runner)
         self.assertIn('xcodegen generate --spec "$TEST_DIR/project.yml" --project "$TEST_DIR"', runner)
         spec = (ROOT / "Tests/SettingsNavigationUI/project.yml").read_text()
-        for name in ["HarnessApp.swift", "NavigationStubs.swift", "../../Sources/EiliStore/UserCustomizationsView.swift", "../../Sources/EiliStore/AnisetteModeSection.swift", "../../Sources/EiliStore/AnisettePresentationModel.swift"]:
+        for name in ["HarnessApp.swift", "NavigationStubs.swift", "../../Sources/EiliStore/UserCustomizationsView.swift"]:
             self.assertIn(f"- path: {name}", spec)
             self.assertTrue((ROOT / "Tests/SettingsNavigationUI" / name).is_file())
+        self.assertNotIn("AnisetteModeSection.swift", spec)
+        self.assertNotIn("AnisettePresentationModel.swift", spec)
 
     def test_page_hosts_controls_directly_and_uses_parent_navigation(self):
         page = (SOURCES / "UserCustomizationsView.swift").read_text()
         self.assertIn("struct UserCustomizationsView: View", page)
-        self.assertRegex(page, r"Form\s*\{\s*AnisetteModeSection\(model: anisette\)")
+        self.assertRegex(page, r"Form\s*\{\s*Section\(header: Text\(\"ANISETTE\"\)")
         self.assertIn('.navigationTitle("用戶自定義")', page)
         self.assertIn('.navigationBarTitleDisplayMode(.inline)', page)
         self.assertNotIn("NavigationView {", page)
         self.assertNotIn("NavigationStack {", page)  # iOS 15 remains supported.
         self.assertIn("NavigationLink(destination: AnisetteClientConfigurationView())", page)
         self.assertIn("NavigationLink(destination: SideSignClientConfigurationView())", page)
-        self.assertIn(".fileImporter(isPresented: $anisette.importing", page)
+        self.assertNotIn(".fileImporter(", page)
+        self.assertNotIn("AnisetteModeSection", page)
+        self.assertNotIn("AnisettePresentationModel", page)
 
     def test_only_customizations_owns_mode_controls(self):
         owners = [p.name for p in SOURCES.glob("*.swift")
-                  if re.search(r"\bAnisetteModeSection\s*\(\s*model:\s*anisette\s*\)", p.read_text())]
+                  if "anisette-ondevice-toggle" in p.read_text()]
         self.assertEqual(owners, ["UserCustomizationsView.swift"])
         server = (SOURCES / "AnisetteServerView.swift").read_text()
         self.assertIn('Text("AVAILABLE SERVERS")', server)
         self.assertIn('Text("Enable Auto Rotation")', server)
 
-    def test_complete_controls_and_existing_service_actions_are_preserved(self):
-        mode = (SOURCES / "AnisetteModeSection.swift").read_text()
-        model = (SOURCES / "AnisettePresentationModel.swift").read_text()
+    def test_customizations_page_structure_and_reset_action(self):
         page = (SOURCES / "UserCustomizationsView.swift").read_text()
-        for identifier in ["anisette-mode-picker", "anisette-library-status",
-                           "anisette-library-recheck", "anisette-library-download",
-                           "anisette-library-import", "anisette-local-reset"]:
-            self.assertIn(f'accessibilityIdentifier("{identifier}")', mode)
-        for action in [".downloadLibraries()", ".importLibraries(urls)",
-                       ".localStorageStatus()", ".resetLocal()"]:
-            self.assertIn(action, model)
-        self.assertIn(".fileImporter(isPresented: $anisette.importing", page)
+        for identifier in ["anisette-ondevice-toggle", "customizations-anisette-client-config",
+                           "customizations-sidesign-client-config", "anisette-local-reset",
+                           "user-customizations-page"]:
+            self.assertIn(f'accessibilityIdentifier("{identifier}")', page)
+        self.assertIn('@AppStorage(EiliAnisetteMode.preferenceKey)', page)
+        self.assertIn('EiliAnisetteMode.remote.rawValue', page)
+        self.assertIn('Text("ANISETTE")', page)
+        self.assertIn('Text("SIDESIGN")', page)
+        self.assertIn('Text("On-Device Anisette")', page)
+        self.assertIn('Text("Reset adi.pb")', page)
+        self.assertIn("EiliAnisetteService.shared.resetLocal()", page)
         self.assertIn(".confirmationDialog(", page)
         self.assertIn('.alert("本機 Anisette"', page)
-        self.assertNotIn(".fileImporter(", mode)
-        self.assertIn('@AppStorage(EiliAnisetteMode.preferenceKey)', mode)
-        self.assertIn('EiliAnisetteMode.remote.rawValue', mode)
-        self.assertIn('case .incompatible(let reason)', mode)
+        for gone in ["AnisetteModeSection", "AnisettePresentationModel", "下載 ADI",
+                     "匯入 ADI", "ODA 來源", "anisette-library-import", "anisette-oda-management"]:
+            self.assertNotIn(gone, page)
+        self.assertFalse((SOURCES / "AnisetteModeSection.swift").exists())
+        self.assertFalse((SOURCES / "AnisettePresentationModel.swift").exists())
 
-    def test_library_picker_does_not_depend_on_provider_data_uti(self):
-        page = (SOURCES / "UserCustomizationsView.swift").read_text()
-        self.assertIn("allowedContentTypes: [.item], allowsMultipleSelection: true", page)
-        self.assertNotIn("allowedContentTypes: [.data]", page)
-        self.assertIn("anisette.handleImport($0)", page)
+    def test_library_import_guards_remain_in_service(self):
+        # The picker UI is gone with the ODA management page, but the manual
+        # import path it fed remains available at the service layer.
         service = (SOURCES / "EiliAnisetteService.swift").read_text()
         for guard in ["startAccessingSecurityScopedResource()", "isSymbolicLink", "isRegularFile", "installLibraries(urls)"]:
             self.assertIn(guard, service)
 
-    def test_opening_page_does_not_enable_or_download_anything(self):
+    def test_opening_page_does_not_download_or_fetch(self):
         page = (SOURCES / "UserCustomizationsView.swift").read_text()
-        for forbidden in ["@AppStorage", "UserDefaults", ".onAppear", ".task",
-                          "downloadLibraries", "fetch(", "PaxAuthService"]:
+        for forbidden in [".onAppear", ".task", "downloadLibraries",
+                          "localStorageStatus", "PaxAuthService", "fetch("]:
             self.assertNotIn(forbidden, page)
-        mode = (SOURCES / "AnisetteModeSection.swift").read_text()
-        self.assertIn('.task { await model.refreshLibraryStatus() }', mode)
-        self.assertIn('Text("遠端（預設）")', mode)
-        self.assertIn("新版五庫仍只供離線診斷，不能用於本機登入", mode)
-        self.assertIn("256 位元組零填充資料占位供診斷", mode)
-        self.assertIn("不能滿足必要強符號", mode)
-        self.assertIn("在任何函式庫建構子執行前", mode)
-        self.assertIn("即使尚未呼叫", mode)
-        self.assertIn("未解析的弱符號不因此阻擋，但不保證可呼叫", mode)
-        self.assertIn("WorkQueue 工廠、物件生命週期與佇列／執行緒排程尚未實作", mode)
-        self.assertNotIn("未知函式回傳 0，未解析的一般資料符號使用", mode)
-        self.assertIn("結構損毀或無法讀取仍會阻擋", mode)
-        self.assertIn("檢查通過不代表來源可信、安全、已授權或登入成功", mode)
+        # The only persisted state the page owns is the mode preference itself.
+        self.assertIn('@AppStorage(EiliAnisetteMode.preferenceKey)', page)
 
-    def test_oda_management_has_explicit_consent_and_read_only_status(self):
-        mode = (SOURCES / "AnisetteModeSection.swift").read_text()
-        model = (SOURCES / "AnisettePresentationModel.swift").read_text()
+    def test_oda_management_surface_is_removed(self):
         page = (SOURCES / "UserCustomizationsView.swift").read_text()
-        for identifier in ["anisette-oda-management", "anisette-provisioning-status", "oda-source-url", "oda-fallback-url", "oda-save-sources", "oda-automatic-acquisition", "oda-ensure-cache"]:
-            self.assertIn(f'accessibilityIdentifier("{identifier}")', mode)
-        self.assertIn("confirmingAutomatic = true", mode)
-        self.assertIn('Button("確認允許自動取得")', mode)
-        self.assertIn("automaticAcquisition = false", mode)
-        self.assertIn(".validated()", mode)
-        self.assertIn(".ensureLibraries()", model)
-        self.assertIn(".localStorageStatus()", model)
-        self.assertIn("status.provisioningPresent", model)
-        self.assertIn("anisette.sourceSummary", page)
+        for gone in ["anisette-oda-management", "anisette-provisioning-status", "oda-source-url",
+                     "oda-fallback-url", "oda-save-sources", "oda-automatic-acquisition",
+                     "oda-ensure-cache", "自動取得"]:
+            self.assertNotIn(gone, page)
+        # Reset keeps the old honest wording: libraries and remote data stay,
+        # and the user must sign out themselves first.
         self.assertIn("本操作不會自動登出", page)
+        self.assertIn("函式庫、Client Configuration、遠端資料與憑證保留", page)
 
     def test_session_check_errors_are_not_reported_as_invalid_or_logged_out(self):
         login = (SOURCES / "LoginView.swift").read_text()
@@ -169,8 +157,14 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         self.assertIn("if !explicitRoutingOverride, let routingInfo", service)
         self.assertIn('requestHeaders["X-Apple-I-MD-RINFO"] = routingInfo', service)
         self.assertIn("configuration = try configuration.validated()", service)
-        self.assertIn("configuration.applying(to: data)", service)
-        self.assertIn("configuration.applying(to: try Self.convertHeaders(headers))", service)
+        self.assertEqual(service.count("configuration.applying(to: data)"), 2)
+        # The on-device path is the ODATest-verified SideSign manager call;
+        # the retired vendored AnisetteClient path must not reappear.
+        self.assertIn("mode: .remoteODA(sourceURL: odaSourceURL, fallbackURL: odaSourceURL)", service)
+        self.assertIn('URL(string: "https://zzz.haus/oda.json")!', service)
+        self.assertNotIn("AnisetteClient(", service)
+        self.assertNotIn("configuration.applying(to: try Self.convertHeaders(headers))", service)
+        self.assertNotIn("resetLocalAnisetteEngine", service)
 
     def test_sidesign_headers_are_snapshotted_for_all_production_operations(self):
         for name in ["PaxAuthService.swift", "PaxSigningService.swift",

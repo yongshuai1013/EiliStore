@@ -221,7 +221,9 @@ enum KeychainHelper {
         check(await svc.localLibraryStatus() == .present, "status did not recover after valid files restored")
         check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.resetCount == 0, "read-only status initialized or reset provider")
         print("PASS: read-only ADI status (missing/invalid/present, file metadata and bounded ELF headers, no provider/reset calls)")
-        // Auto-acquisition is opt-in and must re-check installed status before provider use.
+        // ensureLibraries still serves the manual/download paths only; local
+        // fetch no longer consults the on-disk library set or the
+        // automatic-acquisition opt-in at all.
         let autoKey = EiliODASourceConfiguration.automaticAcquisitionKey
         UserDefaults.standard.set(false, forKey: autoKey)
         let cacheService = EiliAnisetteService(staging: { _ in fatalError("cache hit staged libraries") })
@@ -229,25 +231,28 @@ enum KeychainHelper {
         check(try await cacheService.ensureLibraries() == .present, "ensure cache hit status")
         check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == cacheResetCount, "cache-hit ensure touched provider/reset")
         try FileManager.default.removeItem(at: libraryDirectory)
-        let offService = EiliAnisetteService(staging: { _ in fatalError("auto-off missing staged libraries") })
-        do { _ = try await offService.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("auto-off missing libraries fetched") }
-        catch EiliAnisetteError.missingLibraries {}
-        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == cacheResetCount, "auto-off missing touched provider")
+        // Missing legacy libraries no longer gate a local fetch: SideSign's
+        // manager downloads and validates its own runtime libraries. A staging
+        // closure that would explode proves fetch never enters the legacy path.
+        await manager.reset()
+        let offService = EiliAnisetteService(staging: { _ in fatalError("local fetch staged libraries") })
+        _ = try await offService.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
+        let offODACalls = await manager.odaCalls
+        let offMode = await manager.lastMode
+        let offFailoverCalls = await manager.calls
+        check(offODACalls == 1, "local fetch did not reach the ODA manager")
+        check(offMode == .remoteODA(sourceURL: URL(string: "https://zzz.haus/oda.json")!, fallbackURL: URL(string: "https://zzz.haus/oda.json")!), "local fetch did not use the verified remoteODA source")
+        check(offFailoverCalls == 0, "local fetch fell back to remote failover")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "local fetch touched the retired vendored provider")
+        check(await svc.localLibraryStatus() == .missing, "local fetch installed or required legacy libraries")
         UserDefaults.standard.set(true, forKey: autoKey)
         let autoService = EiliAnisetteService(staging: { directory in try ELFLibraryFixtures.write(to: directory) })
-        FakeAnisetteKitControl.reset()
+        await manager.reset()
         _ = try await autoService.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
-        check(FakeAnisetteKitControl.calls == 1 && FakeAnisetteKitControl.initializations == 1, "auto-on compatible staged set did not reach provider")
-        check(await autoService.localLibraryStatus() == .present, "auto-on compatible libraries not installed")
-        FakeAnisetteKitControl.reset()
-        try FileManager.default.removeItem(at: libraryDirectory)
+        let autoODACalls = await manager.odaCalls
+        check(autoODACalls == 1, "second local fetch did not reach the ODA manager")
+        check(await autoService.localLibraryStatus() == .missing, "local fetch consumed the legacy staged set")
         UserDefaults.standard.set(false, forKey: autoKey)
-        let remoteCallsBeforeMissing = await manager.calls
-        do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("expected missing local libraries") }
-        catch EiliAnisetteError.missingLibraries {}
-        check(FakeAnisetteKitControl.calls == 0, "missing libraries reached local provider")
-        let remoteCallsAfterMissing = await manager.calls
-        check(remoteCallsBeforeMissing == remoteCallsAfterMissing, "missing local libraries fell back to remote")
         try await svc.importLibraries(elfFiles)
         // Runtime retrieval reuses the atomic importer, never starts provisioning,
         // and leaves remote defaults/identity untouched. All payloads are synthetic.
@@ -287,98 +292,113 @@ enum KeychainHelper {
         print("PASS: runtime download transaction, synthetic install, failure/cancellation cleanup and mode/identity isolation")
         UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.preferenceKey)
         let localResponseBlob = Data([0x10, 0x20, 0x30])
-        FakeAnisetteKitControl.reset()
-        FakeAnisetteKitControl.configure(blob: localResponseBlob)
+        func stubLocalData(routingInfo: String) -> SideSign.AnisetteData {
+            SideSign.AnisetteData(machineID: "v0", oneTimePassword: "v1", localUserID: "v2", routingInfo: routingInfo, deviceID: "v4", serialNumber: "v5", clientInfo: "v6", userAgent: "v7", clientTime: "v8", locale: "v9", timeZone: "v10")
+        }
+        await manager.reset()
+        await manager.setODAResponseForTests(data: stubLocalData(routingInfo: ""), blob: localResponseBlob)
         let remoteBlobBeforeLocal = Data([0xBA, 0xAD])
         KeychainHelper.save(remoteBlobBeforeLocal, forKey: "paxstore.anisette.adiblob")
+        let failoverCallsBeforeLocal = await manager.calls
         let firstLocalAttempt = EiliLoginDiagnostics.shared.begin(onDevice: true)
         let localData = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, diagnosticAttempt: firstLocalAttempt)
-        check(FakeAnisetteKitControl.calls == 1 && FakeAnisetteKitControl.identifier != nil, "local provider not called")
+        let firstODACalls = await manager.odaCalls
+        let firstODAIdentifier = await manager.lastODAIdentifier
+        let firstODAMode = await manager.lastMode
+        check(firstODACalls == 1 && firstODAIdentifier != nil, "local manager not called")
+        check(firstODAMode == .remoteODA(sourceURL: URL(string: "https://zzz.haus/oda.json")!, fallbackURL: URL(string: "https://zzz.haus/oda.json")!), "local fetch did not use the verified remoteODA source")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "local fetch touched the retired vendored provider")
         let remoteCallsAfterImplicitLocal = await manager.calls
-        check(remoteCallsAfterImplicitLocal == remoteCallsBeforeMissing, "saved on-device preference called remote")
-        check(localData.machineID == "v0" && localData.oneTimePassword == "v1", "local header conversion")
+        check(remoteCallsAfterImplicitLocal == failoverCallsBeforeLocal, "saved on-device preference called remote")
+        check(localData.machineID == "v0" && localData.oneTimePassword == "v1", "local manager data not returned")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == localResponseBlob, "local blob persistence")
         let secondLocalAttempt = EiliLoginDiagnostics.shared.begin(onDevice: true)
         _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice, diagnosticAttempt: secondLocalAttempt)
-        let nativeStages = ["nativeHeadersStarted", "nativeHeadersReturned", "nativeProvisionStartStarted", "nativeProvisionStartReturned", "nativeProvisionEndStarted", "nativeProvisionEndReturned"]
+        let localStages = ["localPreflightStarted", "localPreflightPassed", "localRequestStarted", "localRequestReturned"]
         let diagnosticReport = EiliLoginDiagnostics.shared.report()
         let reportSections = diagnosticReport.components(separatedBy: "前一次：")
         check(reportSections.count == 2, "expected two retained diagnostic attempts")
         let latestStages = reportSections[0]
         let previousStages = reportSections[1]
-        check(nativeStages.allSatisfy { latestStages.contains($0) }, "cached provider native stages missing from second attempt")
-        check(nativeStages.allSatisfy { previousStages.contains($0) }, "cached provider native stages missing from first attempt")
-        check(latestStages.contains("nativeBoundaryReturned op=provisionStart result=boundaryReturned bridge=0"), "native boundary return missing")
-        check(latestStages.contains("nativeResponseParsed op=provisionStart result=parsed bridge=0"), "parsed result missing")
+        check(localStages.allSatisfy { latestStages.contains($0) }, "manager local stages missing from second attempt")
+        check(localStages.allSatisfy { previousStages.contains($0) }, "manager local stages missing from first attempt")
         let nilAttemptBefore = diagnosticReport
         _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .remote, diagnosticAttempt: nil)
         check(EiliLoginDiagnostics.shared.report() == nilAttemptBefore, "nil fetch polluted existing diagnostics")
-        let failedNativeAttempt = EiliLoginDiagnostics.shared.begin(onDevice: true)
-        FakeAnisetteKitControl.configure(blob: nil, throwsError: true)
+        let failedLocalAttempt = EiliLoginDiagnostics.shared.begin(onDevice: true)
+        await manager.setODAErrorForTests(FakeAnisetteError.expected)
         do {
-            _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .onDevice, diagnosticAttempt: failedNativeAttempt)
-            fatalError("synthetic native error was swallowed")
+            _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .onDevice, diagnosticAttempt: failedLocalAttempt)
+            fatalError("synthetic manager error was swallowed")
         } catch FakeAnisetteError.expected {}
-        let failedNativeReport = EiliLoginDiagnostics.shared.report().components(separatedBy: "前一次：")[0]
-        check(failedNativeReport.contains("nativeResponseFailed op=provisionStart result=providerError bridge=-2 phase=libraryConstructors fault=engine unicorn=8 guestPC=0x51000000 fetchAddress=0x52000000 pcTrail=[0x50000000,0x50000004] ctorLibrary=storeservicescore ctorKind=initArray ctorIndex=3 cxaAtexit x17=0x2 gotAddress=0x3 registeredStub=true resolutionSource=functionStub"), "safe constructor fetch fault detail lost")
-        check(!failedNativeReport.contains("nativeProvisionStartReturned"), "failed parse falsely reported successful return")
+        await manager.setODAErrorForTests(nil)
+        let failedLocalReport = EiliLoginDiagnostics.shared.report().components(separatedBy: "前一次：")[0]
+        check(failedLocalReport.contains("localRequestStarted"), "failed local attempt lost request stage")
+        check(!failedLocalReport.contains("localRequestReturned"), "failed local attempt falsely reported return")
         KeychainHelper.save(Data(), forKey: "eilistore.anisette.local.adiblob")
-        FakeAnisetteKitControl.reset(); FakeAnisetteKitControl.configure(blob: Data(), routingInfo: "v3")
+        await manager.setODAResponseForTests(data: stubLocalData(routingInfo: "v3"), blob: Data())
         _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
-        check(FakeAnisetteKitControl.blob == nil, "empty persisted local blob was reused instead of reprovisioned")
+        let blobSentForEmpty = await manager.lastODABlob
+        check(blobSentForEmpty == nil, "empty persisted local blob was reused instead of reprovisioned")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")?.isEmpty == true, "empty current response was not persisted")
         let routingKey = "eilistore.anisette.local.routinginfo"
         check(KeychainHelper.loadString(forKey: routingKey) == "v3", "local routing-info not persisted")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteBlobBeforeLocal, "local branch modified remote blob")
-        let localProvisioningID = FakeAnisetteKitControl.identifier
-        FakeAnisetteKitControl.reset()
-        FakeAnisetteKitControl.configure(blob: nil, routingInfo: "returned-no-blob")
+        let localProvisioningID = await manager.lastODAIdentifier
+        await manager.setODAResponseForTests(data: stubLocalData(routingInfo: "returned-no-blob"), blob: nil)
         let restartedService = EiliAnisetteService()
         _ = try await restartedService.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
-        check(FakeAnisetteKitControl.headers["X-Apple-I-MD-RINFO"] == "v3", "saved routing-info not reused by new service instance")
+        let restartedHeaders = await manager.lastODAHeaders
+        check(restartedHeaders["X-Apple-I-MD-RINFO"] == "v3", "saved routing-info not reused by new service instance")
         check(KeychainHelper.loadString(forKey: routingKey) == "returned-no-blob", "routing-info not refreshed without new blob")
-        FakeAnisetteKitControl.reset()
-        FakeAnisetteKitControl.configure(blob: nil, routingInfo: "must-not-overwrite")
+        await manager.setODAResponseForTests(data: stubLocalData(routingInfo: "must-not-overwrite"), blob: nil)
         let overriddenLocal = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob,
             servers: urls, mode: .onDevice, configuration: overrideConfiguration)
         checkOverrides(overriddenLocal, configuration: overrideConfiguration)
         check(overriddenLocal.machineID == "v0" && overriddenLocal.oneTimePassword == "v1" && overriddenLocal.clientTime == "v8", "local overrides changed generated values")
-        check(FakeAnisetteKitControl.headers == overrideConfiguration.requestHeaderOverrides, "local provider did not receive configured metadata")
+        let overriddenHeaders = await manager.lastODAHeaders
+        check(overriddenHeaders == overrideConfiguration.requestHeaderOverrides, "local manager did not receive configured metadata")
         check(KeychainHelper.loadString(forKey: routingKey) == "returned-no-blob", "explicit routing override polluted persisted provisioning info")
-        check(FakeAnisetteKitControl.identifier == localProvisioningID, "custom device header changed local provisioning identity")
+        let overriddenIdentifier = await manager.lastODAIdentifier
+        check(overriddenIdentifier == localProvisioningID, "custom device header changed local provisioning identity")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteBlobBeforeLocal, "local override changed remote identity")
+        await manager.setODAResponseForTests(data: stubLocalData(routingInfo: ""), blob: nil)
         let revertedLocal = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .onDevice)
-        check(revertedLocal.clientInfo == "v6" && revertedLocal.userAgent == "v7" && FakeAnisetteKitControl.headers["X-Apple-I-MD-RINFO"] == "returned-no-blob", "local overrides survived reset or cached routing-info absent")
+        let revertedHeaders = await manager.lastODAHeaders
+        check(revertedLocal.clientInfo == "v6" && revertedLocal.userAgent == "v7" && revertedHeaders["X-Apple-I-MD-RINFO"] == "returned-no-blob", "local overrides survived reset or cached routing-info absent")
         KeychainHelper.failSaveForTests(routingKey, true)
-        FakeAnisetteKitControl.reset(); FakeAnisetteKitControl.configure(blob: nil, routingInfo: "save-fails")
+        await manager.setODAResponseForTests(data: stubLocalData(routingInfo: "save-fails"), blob: nil)
         do {
             _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
             fatalError("routing-info save failure was ignored")
         } catch EiliAnisetteError.storageFailed {}
         KeychainHelper.failSaveForTests(routingKey, false)
-        print("PASS: local client overrides, provider headers, reset/defaults and provisioning identity isolation")
+        print("PASS: local client overrides, manager headers, reset/defaults and provisioning identity isolation")
+
         UserDefaults.standard.set("remote", forKey: EiliAnisetteMode.preferenceKey)
-        FakeAnisetteKitControl.reset()
         await manager.reset()
         _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls)
         let remoteAfterSwitch = await manager.calls
-        check(remoteAfterSwitch == 1 && FakeAnisetteKitControl.calls == 0, "switching saved preference to remote did not route remote exclusively")
+        let odaAfterSwitch = await manager.odaCalls
+        check(remoteAfterSwitch == 1 && odaAfterSwitch == 0 && FakeAnisetteKitControl.calls == 0, "switching saved preference to remote did not route remote exclusively")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteBlobBeforeLocal, "remote switch unexpectedly replaced response blob")
         UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.preferenceKey)
-        FakeAnisetteKitControl.reset()
-        FakeAnisetteKitControl.configure(blob: Data([0x44]), delay: 100_000_000)
+        await manager.reset()
+        await manager.setODADelayForTests(100_000_000)
+        await manager.setODAResponseForTests(data: nil, blob: Data([0x44]))
         let cancelledLocal = Task { try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice) }
         try await Task.sleep(nanoseconds: 20_000_000); cancelledLocal.cancel()
         do { _ = try await cancelledLocal.value; fatalError("expected local cancellation") } catch is CancellationError {}
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == Data([0x44]), "local blob not saved before cancellation")
-        FakeAnisetteKitControl.reset(); FakeAnisetteKitControl.configure(blob: nil, throwsError: true)
+        await manager.reset()
+        await manager.setODAErrorForTests(FakeAnisetteError.expected)
         let remoteCallsBeforeError = await manager.calls
         do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("expected local error") }
         catch FakeAnisetteError.expected {}
-        check(FakeAnisetteKitControl.calls == 1, "local error did not reach provider")
+        let odaCallsAfterError = await manager.odaCalls
+        check(odaCallsAfterError == 1, "local error did not reach the manager")
         let remoteCallsAfterError = await manager.calls
         check(remoteCallsBeforeError == remoteCallsAfterError, "local error fell back to remote")
-        FakeAnisetteKitControl.reset()
         let remoteKeep = Data([0x77, 0x88]); KeychainHelper.save(remoteKeep, forKey: "paxstore.anisette.adiblob")
         let protectedLoginValues = [
             "paxstore.auth.session": Data("synthetic-session".utf8),
@@ -394,6 +414,7 @@ enum KeychainHelper {
         let provisioning = supportRoot.appendingPathComponent("Provisioning", isDirectory: true)
         try FileManager.default.createDirectory(at: provisioning, withIntermediateDirectories: true)
         try Data("synthetic-local-provisioning".utf8).write(to: provisioning.appendingPathComponent("sentinel"))
+        let identifierBeforeReset = KeychainHelper.loadString(forKey: "eilistore.anisette.local.identifier")
         try await svc.resetLocal()
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == nil, "reset retained local blob")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == nil, "reset retained local identifier")
@@ -406,7 +427,10 @@ enum KeychainHelper {
         check(UserDefaults.standard.string(forKey: EiliAnisetteMode.preferenceKey) == preferenceBeforeReset, "local reset changed next-login preference")
         check(try Data(contentsOf: coreFile) == coreBeforeReset, "local reset changed installed libraries")
         check(!FileManager.default.fileExists(atPath: provisioning.path), "local provisioning was not removed")
-        check(FakeAnisetteKitControl.resetCount >= 2, "local engine not reset after import and reset")
+        await manager.reset()
+        _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
+        let identifierAfterReset = KeychainHelper.loadString(forKey: "eilistore.anisette.local.identifier")
+        check(identifierAfterReset != nil && identifierAfterReset != identifierBeforeReset, "reset did not retire the local provisioning identity")
         print("PASS: local reset preserves session, Apple ID, remote identity/blob, certificate, mode and libraries")
 
         let unsafeDir = fixtureDir.appendingPathComponent("legacy-missing-required-entry")
@@ -425,21 +449,24 @@ enum KeychainHelper {
         let unsafeImported = try await svc.importLibraries(unsafeFiles)
         check(unsafeImported == .present, "missing-entry legacy diagnostic blocked import")
         check(await svc.localLibraryStatus() == .present, "missing-entry legacy diagnostic blocked status")
+        let odaCallsBeforeUnsafeFetch = await manager.odaCalls
         _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
-        check(FakeAnisetteKitControl.calls == 1, "missing-entry legacy did not reach native provider")
-        check(KeychainHelper.loadString(forKey: "eilistore.anisette.local.identifier") != nil, "native provisioning attempt did not establish local identity")
-        check(await manager.calls == remoteBeforeUnsafe && FileManager.default.fileExists(atPath: provisioning.path), "legacy call fell back remotely or skipped native provisioning")
+        let odaCallsAfterUnsafeFetch = await manager.odaCalls
+        check(odaCallsAfterUnsafeFetch == odaCallsBeforeUnsafeFetch + 1, "missing-entry legacy set blocked the manager local fetch")
+        check(FakeAnisetteKitControl.calls == 0, "missing-entry legacy reached the retired vendored provider")
+        check(KeychainHelper.loadString(forKey: "eilistore.anisette.local.identifier") != nil, "manager provisioning attempt did not establish local identity")
+        check(await manager.calls == remoteBeforeUnsafe && !FileManager.default.fileExists(atPath: provisioning.path), "legacy call fell back remotely or created the retired provisioning directory")
         check(EiliAnisetteMode.selected == legacyMode && EiliAnisetteMode.savedSessionMode == legacySessionMode, "missing-entry preflight changed modes")
         for (key, value) in protectedLoginValues { check(KeychainHelper.load(forKey: key) == value, "missing-entry preflight changed protected login data") }
         try await svc.importLibraries(elfFiles)
         check(await svc.localLibraryStatus() == .present, "compatible legacy restore blocked")
         // A malformed file, unlike missing symbol metadata, must not replace cache.
-        let resetBeforeMalformedReplacement = FakeAnisetteKitControl.resetCount
+        let odaCallsBeforeMalformed = await manager.odaCalls
         // Header-correct but structurally incomplete metadata must not replace it.
         for url in unsafeFiles { try Data(validCore.prefix(128)).write(to: url) }
         do { _ = try await svc.importLibraries(unsafeFiles); fatalError("header-only legacy accepted") }
         catch EiliAnisetteError.invalidLibraries {}
-        check(FakeAnisetteKitControl.resetCount == resetBeforeMalformedReplacement, "malformed replacement reset engine")
+        check(await manager.odaCalls == odaCallsBeforeMalformed, "malformed replacement reached the local manager")
         check(await svc.localLibraryStatus() == .present, "malformed import damaged cache")
         print("PASS: missing required legacy entry is diagnostic; malformed replacement preserves usable cache")
 
@@ -463,9 +490,11 @@ enum KeychainHelper {
         check(tlsImported == .present, "TLS metadata alone blocked legacy import")
         let tlsReport = try ADILibraryCompatibility.read(directory: libraryDirectory, profile: .legacy)
         check(!tlsReport.hasStaticBlockers, "TLS metadata alone was classified as a static blocker")
-        let resetsBeforeTLSStatus = FakeAnisetteKitControl.resetCount
-        check(await svc.localLibraryStatus() == .present, "TLS metadata alone blocked status")
-        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == resetsBeforeTLSStatus, "TLS metadata inspection touched VM/provider")
+        let odaCallsBeforeTLSStatus = await manager.odaCalls
+        let tlsStatus = await svc.localLibraryStatus()
+        check(tlsStatus == .present, "TLS metadata alone blocked status")
+        let odaCallsAfterTLSStatus = await manager.odaCalls
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && odaCallsAfterTLSStatus == odaCallsBeforeTLSStatus, "TLS metadata inspection touched VM/provider")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == identityBeforeTLS && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == blobBeforeTLS, "TLS metadata import/status mutated provisioning identity")
         try await svc.importLibraries(elfFiles)
 
@@ -490,9 +519,10 @@ enum KeychainHelper {
         let fallbackReport = try ADILibraryCompatibility.read(directory: libraryDirectory, profile: .legacy)
         check(fallbackReport.fallbackFunctionImports == ["sidestore_missing_function"] && fallbackReport.fallbackDataImports == ["ordinary_missing_object"] && fallbackReport.blockedDataImports.isEmpty, "function/data fallback diagnostics lost")
         check(fallbackReport.missingDependencies == ["libCoreFoundation.so", "libc++_shared.so", "libmediaplatform.so"] && !fallbackReport.hasStaticBlockers, "missing dependencies must remain informational")
-        let resetCountBeforeFallbackStatus = FakeAnisetteKitControl.resetCount
+        let odaCallsBeforeFallbackStatus = await manager.odaCalls
         check(await svc.localLibraryStatus() == .present, "read-only fallback status blocked")
-        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == resetCountBeforeFallbackStatus, "fallback status touched engine")
+        let odaCallsAfterFallbackStatus = await manager.odaCalls
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && odaCallsAfterFallbackStatus == odaCallsBeforeFallbackStatus, "fallback status touched engine")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == identityBeforeFallback && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == blobBeforeFallback, "fallback status created identity")
         for type: UInt8 in [3, 10] {
             try ADIElfFixture.make(soname: "libCoreADI.so", imports: ["sidestore_missing_nonfunction"],
@@ -538,17 +568,24 @@ enum KeychainHelper {
         })
         if case .incompatible = importedModern {} else { fatalError("modern set incorrectly marked usable") }
         check(EiliAnisetteMode.selected == savedModeBeforeImport, "modern import silently changed user preference")
-        let resetCountBeforeStatus = FakeAnisetteKitControl.resetCount
+        let odaCallsBeforeStatus = await manager.odaCalls
         if case .incompatible = await svc.localLibraryStatus() {} else { fatalError("modern disk status lost incompatibility") }
-        check(FakeAnisetteKitControl.resetCount == resetCountBeforeStatus, "modern inspection reset VM")
-        let remoteBeforeBlocked = await manager.calls
-        do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("unsupported modern ABI executed") }
-        catch EiliAnisetteError.incompatibleLibraries {}
-        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "modern ABI initialized client or called provider")
-        let remoteAfterBlocked = await manager.calls
-        check(remoteAfterBlocked == remoteBeforeBlocked, "modern incompatibility silently fell back to remote")
-        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == nil && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == nil, "blocked modern ABI created identity")
-        check(!FileManager.default.fileExists(atPath: supportRoot.appendingPathComponent("Provisioning").path), "blocked modern ABI created provisioning directory")
+        let odaCallsAfterStatus = await manager.odaCalls
+        check(odaCallsAfterStatus == odaCallsBeforeStatus, "modern inspection reached the local manager")
+        // The incompatible on-disk set is diagnostic-only now: a local fetch
+        // delegates to SideSign's manager, which downloads and validates its
+        // own runtime libraries, so the set neither blocks nor is consumed.
+        await manager.reset()
+        let remoteBeforeManagerFetch = await manager.calls
+        _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
+        let odaCallsAfterManagerFetch = await manager.odaCalls
+        check(odaCallsAfterManagerFetch == 1, "manager local fetch did not run with an incompatible on-disk set")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "modern set reached the retired vendored provider")
+        let remoteAfterManagerFetch = await manager.calls
+        check(remoteAfterManagerFetch == remoteBeforeManagerFetch, "local fetch silently fell back to remote")
+        if case .incompatible = await svc.localLibraryStatus() {} else { fatalError("manager fetch consumed or repaired the incompatible on-disk set") }
+        check(KeychainHelper.loadString(forKey: "eilistore.anisette.local.identifier") != nil, "manager fetch did not establish local identity")
+        check(!FileManager.default.fileExists(atPath: supportRoot.appendingPathComponent("Provisioning").path), "manager fetch created the retired provisioning directory")
         do { _ = try await svc.importLibraries(modernURLs + [elfFiles.first { $0.lastPathComponent == "libstoreservicescore.so" }!]); fatalError("mixed set accepted") }
         catch EiliAnisetteError.invalidLibraries {}
         let renamed = modernDir.appendingPathComponent("libstoreservicescore.so")
@@ -563,11 +600,12 @@ enum KeychainHelper {
         await manager.reset()
         _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls)
         let remoteWithModernFiles = await manager.calls
-        check(remoteWithModernFiles == 1 && FakeAnisetteKitControl.calls == 0, "saved modern set broke remote routing")
+        let odaWithModernFiles = await manager.odaCalls
+        check(remoteWithModernFiles == 1 && odaWithModernFiles == 0 && FakeAnisetteKitControl.calls == 0, "saved modern set broke remote routing")
         try await svc.importLibraries(elfFiles)
         check(await svc.localLibraryStatus() == .present, "legacy set could not be restored")
         check(!FileManager.default.fileExists(atPath: supportRoot.appendingPathComponent("Libraries/libstoreapi.so").path), "legacy restore left stale modern entry")
-        print("PASS: modern five-library import/diagnostics, no VM/provider/identity or silent fallback, rename/mix rejection and legacy restore")
+        print("PASS: modern five-library import/diagnostics, manager-based local fetch isolation, rename/mix rejection and legacy restore")
         try? FileManager.default.removeItem(at: supportRoot)
         #endif
 
