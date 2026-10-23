@@ -86,6 +86,24 @@ class ADILoaderContractTests(unittest.TestCase):
         self.assertIn('fallback_data_imports', placeholder)
         self.assertNotIn('register_import(', placeholder)
 
+    def test_required_import_preflight_precedes_all_constructors(self):
+        native = (ROOT / 'Packages/AnisetteKit/Native/Loader/elf_loader_emulator.cpp').read_text()
+        preflight = native.split('bool preflight_vm_libraries', 1)[1].split('bool run_library_constructors', 1)[0]
+        self.assertIn('i < lib.symbol_count', preflight)
+        self.assertIn('for (const auto &lib : vm->loaded_libraries)', preflight)
+        self.assertNotIn('jmprel', preflight)
+        ctors = native.split('bool run_library_constructors', 1)[1].split('uint64_t get_vm_symbol_address', 1)[0]
+        self.assertLess(ctors.index('preflight_vm_libraries(vm)'), ctors.index('for (const auto &lib'))
+        self.assertLess(ctors.index('preflight_vm_libraries(vm)'), ctors.index('run_vm_procedure'))
+        resolver = native.split('static uint64_t vm_resolve_symbol', 1)[1].split('static void apply_vm_relocations', 1)[0]
+        gate = resolver.split('if (preflight)', 1)[1].split('// Keep legacy relocation', 1)[0]
+        self.assertIn('supported_guest_import(sym_name)', gate)
+        self.assertIn('Unsupported required guest import before constructors', gate)
+        self.assertNotIn('imported_symbols', gate)
+        self.assertNotIn('register_import', gate)
+        core = (ROOT / 'Packages/AnisetteKit/Native/anisette_core_uc.cpp').read_text()
+        self.assertIn('refused before running any library constructors. Use remote mode.', core)
+
     def test_sidestore_empty_output_and_tls_policy(self):
         core = (ROOT / 'Packages/AnisetteKit/Native/anisette_core_uc.cpp').read_text()
         self.assertNotRegex(core, r'(?:adi_pb|spim|ptm|tk)_len\s*==\s*0')

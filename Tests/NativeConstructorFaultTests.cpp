@@ -245,8 +245,8 @@ void earlier_fault_blocks_fetch_snapshot() {
 
 // Two tiny ELF files are generated here, not copied from any vendor. The first
 // DT_INIT is a single ldr x0,[x0], guaranteeing failure before any ADI symbols.
-void write_synthetic_elf(const std::string &path, bool constructor) {
-    std::vector<uint8_t> bytes(512, 0);
+void write_synthetic_elf(const std::string &path, bool constructor, bool unsupported = false) {
+    std::vector<uint8_t> bytes(0x1000, 0);
     Elf64_Ehdr eh{};
     std::memcpy(eh.e_ident, "\x7f" "ELF\x02\x01\x01", 7);
     eh.e_type = 3; eh.e_machine = 183; eh.e_version = 1;
@@ -257,18 +257,64 @@ void write_synthetic_elf(const std::string &path, bool constructor) {
     ph[0].p_vaddr = 0x20000; ph[0].p_filesz = bytes.size();
     ph[0].p_memsz = 0x1000; ph[0].p_align = 0x1000;
     ph[1].p_type = PT_DYNAMIC; ph[1].p_offset = 0x100; ph[1].p_vaddr = 0x20100;
-    ph[1].p_filesz = ph[1].p_memsz = 2 * sizeof(Elf64_Dyn);
-    Elf64_Dyn dyn[2]{};
-    if (constructor) { dyn[0].d_tag = DT_INIT; dyn[0].d_un.d_val = 0x20180; }
+    std::vector<Elf64_Dyn> dyn;
+    auto tag = [&](int64_t kind, uint64_t value) {
+        Elf64_Dyn d{}; d.d_tag = kind; d.d_un.d_val = value; dyn.push_back(d);
+    };
+    if (constructor) tag(DT_INIT, 0x20800);
+    if (unsupported) {
+        // Strong undefined pthread_create deliberately has NO relocation.
+        const char names[] = "\0pthread_create\0";
+        Elf64_Sym syms[2]{}; syms[1].st_name = 1; syms[1].st_info = 0x12;
+        const uint32_t hash[] = {1, 2, 0, 0, 0};
+        std::memcpy(bytes.data() + 0x300, syms, sizeof syms);
+        std::memcpy(bytes.data() + 0x500, names, sizeof names);
+        std::memcpy(bytes.data() + 0x600, hash, sizeof hash);
+        tag(DT_SYMTAB, 0x20300); tag(DT_SYMENT, sizeof(Elf64_Sym));
+        tag(DT_STRTAB, 0x20500); tag(DT_STRSZ, sizeof names); tag(DT_HASH, 0x20600);
+    }
+    tag(DT_NULL, 0);
+    ph[1].p_filesz = ph[1].p_memsz = dyn.size() * sizeof(Elf64_Dyn);
     const uint32_t instruction = 0xF9400000;
     std::memcpy(bytes.data(), &eh, sizeof eh);
     std::memcpy(bytes.data() + sizeof eh, ph, sizeof ph);
-    std::memcpy(bytes.data() + 0x100, dyn, sizeof dyn);
-    std::memcpy(bytes.data() + 0x180, &instruction, sizeof instruction);
+    std::memcpy(bytes.data() + 0x100, dyn.data(), dyn.size() * sizeof(Elf64_Dyn));
+    std::memcpy(bytes.data() + 0x800, &instruction, sizeof instruction);
     std::ofstream output(path, std::ios::binary);
     output.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
     output.close();
     assert(output.good());
+}
+void actual_c_bridge_preflight_rejection() {
+    char directory[] = "/tmp/eili-generated-preflight-XXXXXX";
+    assert(mkdtemp(directory));
+    const std::string first = std::string(directory) + "/" + kADISymbols.lib_ssc;
+    const std::string second = std::string(directory) + "/" + kADISymbols.lib_core_adi;
+    write_synthetic_elf(first, true);
+    write_synthetic_elf(second, true, true);
+    const uint8_t identifier[16]{}, synthetic[] = {0};
+    for (int operation = 0; operation < 3; ++operation) {
+        reset_anisette_vm_uc();
+        char *out = nullptr;
+        const int32_t result = operation == 0
+            ? start_provision_uc(directory, directory, identifier, synthetic, 1, &out)
+            : operation == 1
+                ? get_anisette_headers_uc(directory, directory, identifier, synthetic, 1, &out)
+                : end_provision_uc(directory, directory, identifier, 0, synthetic, 1, synthetic, 1, &out);
+        assert(result == ANISETTE_ERR_LOADER_FAILED && out);
+        const std::string json(out); free_c_string(out);
+        assert(json.find("refused before running any library constructors. Use remote mode.") != std::string::npos);
+        assert(json.find("\"diagnostic_phase\":\"libraryConstructors\"") != std::string::npos);
+        assert(json.find("\"fault_reason\":\"functionImport\"") != std::string::npos);
+        assert(json.find("constructor_kind") == std::string::npos);
+        assert(json.find("guest_pc") == std::string::npos);
+        assert(json.find(directory) == std::string::npos && json.find("pthread_create") == std::string::npos);
+        assert(g_shared_vm && !g_libraries_initialized);
+        assert(g_shared_vm->observed_pc_count == 0 && g_shared_vm->fallback_import_calls.empty());
+    }
+    reset_anisette_vm_uc();
+    assert(unlink(first.c_str()) == 0 && unlink(second.c_str()) == 0);
+    assert(rmdir(directory) == 0);
 }
 void actual_c_bridge_setup_propagation() {
     char directory[] = "/tmp/eili-generated-constructor-XXXXXX";
@@ -321,5 +367,7 @@ int main() {
     earlier_fault_blocks_fetch_snapshot();
     std::cout << "constructor fault test: actual C bridge" << std::endl;
     actual_c_bridge_setup_propagation();
+    std::cout << "constructor fault test: preflight refusal across all C bridge setup paths" << std::endl;
+    actual_c_bridge_preflight_rejection();
     std::cout << "PASS: synthetic constructors, raw engine/callback faults, first-fault/reset and all C bridge setup paths\n";
 }

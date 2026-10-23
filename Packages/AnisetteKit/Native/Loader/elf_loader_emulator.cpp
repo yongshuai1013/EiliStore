@@ -1495,7 +1495,8 @@ static bool symbol_name(EmulatorVM *vm, const EmulatorVM::LibraryInfo &lib,
 }
 
 static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo &current_lib, uint32_t sym_idx,
-    EmulatorVM::ResolutionSource *source = nullptr, bool *is_cxa_atexit = nullptr) {
+    EmulatorVM::ResolutionSource *source = nullptr, bool *is_cxa_atexit = nullptr,
+    bool preflight = false) {
     using Source = EmulatorVM::ResolutionSource;
     if (source) *source = Source::unresolved;
     if (is_cxa_atexit) *is_cxa_atexit = false;
@@ -1548,9 +1549,22 @@ static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo 
         }
     }
 
-    // Upstream resolves both weak and strong imports through these fallbacks.
-    // Data must never be allocated an executable function stub.
+    // Preflight never creates a stub or data placeholder. A relocation-created
+    // zero-return stub is NOT an implementation and cannot satisfy this gate.
+    // Weak undefined symbols are optional; this does not prove they are callable.
     const uint8_t type = sym.st_info & 0xf;
+    if (preflight) {
+        if ((sym.st_info >> 4) != 2 &&
+            ((type != 0 && type != 2) || guest_data_symbol_name(sym_name) ||
+             !supported_guest_import(sym_name))) {
+            vm->record_fault(EmulatorVM::FaultReason::functionImport);
+            // Fixed vocabulary only: never export arbitrary file/symbol strings.
+            vm->execution_error = "Unsupported required guest import before constructors";
+        }
+        return 0;
+    }
+    // Keep legacy relocation diagnostics, but required fallbacks cannot pass
+    // the constructor gate below. Data must never become an executable stub.
     if (type == 1 || guest_data_symbol_name(sym_name)) return resolved(vm->register_data_import(sym_name), Source::dataFallback);
     return resolved(vm->register_import(sym_name), Source::functionStub);
 }
@@ -1908,6 +1922,24 @@ void relocate_all_vm_libraries(EmulatorVM *vm) {
     }
 }
 
+bool preflight_vm_libraries(EmulatorVM *vm) {
+    if (!vm || !vm->uc || !vm->execution_error.empty()) return false;
+    // Check the entire validated dynsym, not just referenced PLT/GOT slots, and
+    // check EVERY image before the first image's DT_INIT or DT_INIT_ARRAY.
+    // No recursive DT_NEEDED loading or Android capability emulation is implied.
+    for (const auto &lib : vm->loaded_libraries) {
+        for (size_t i = 1; i < lib.symbol_count; ++i) {
+            if (i > UINT32_MAX) {
+                vm->execution_error = "Invalid ELF symbol count before constructors";
+                return false;
+            }
+            vm_resolve_symbol(vm, lib, static_cast<uint32_t>(i), nullptr, nullptr, true);
+            if (!vm->execution_error.empty()) return false;
+        }
+    }
+    return true;
+}
+
 bool run_library_constructors(EmulatorVM *vm) {
     if (!vm) return false;
     if (!vm->execution_error.empty()) {
@@ -1916,6 +1948,7 @@ bool run_library_constructors(EmulatorVM *vm) {
     }
     vm->fault = {};
     vm->constructor_context = {};
+    if (!preflight_vm_libraries(vm)) return false;
     for (const auto &lib : vm->loaded_libraries) {
         const auto library = lib.name == kADISymbols.lib_ssc
             ? EmulatorVM::ConstructorLibrary::storeservicescore

@@ -204,6 +204,9 @@ static bool setup_vm_and_adi(
         }
         if (!run_library_constructors(vm)) {
             *out_phase = "libraryConstructors"; out_err = "Library constructors failed in VM";
+            if (vm->execution_error == "Unsupported required guest import before constructors") {
+                out_err = "Required guest imports are not implemented; refused before running any library constructors. Use remote mode.";
+            }
             return false;
         }
 

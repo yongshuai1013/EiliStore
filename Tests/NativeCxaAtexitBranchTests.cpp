@@ -76,20 +76,36 @@ void relocate(VM &vm, VM::LibraryInfo &lib, int64_t addend = 0) {
     put(vm, lib.jmprel, &rela, sizeof rela);
     apply_vm_relocations(&vm, lib);
 }
+// Exercise legacy PLT fault observation directly, NOT production constructor
+// admission. The real constructor API now rejects required fallback imports.
+bool run_diagnostic_constructor(VM &vm) {
+    vm.execution_depth = 0;
+    vm.constructor_context = {true, VM::ConstructorKind::dtInit,
+        VM::ConstructorLibrary::storeservicescore, 0};
+    run_vm_procedure(&vm, kPc - 12, {}, 1000000, 32);
+    vm.constructor_context = {};
+    return vm.execution_error.empty();
+}
 void actual_valid_relocation_and_constructor() {
     VM vm; setup(vm); auto &lib = library(vm); relocate(vm, lib);
     assert(vm.cxa_atexit_slots.size() == 1);
     assert(vm.cxa_atexit_slots[0].address == kGot && vm.cxa_atexit_slots[0].source == VM::ResolutionSource::functionStub);
     const auto stub = vm.imported_symbols.at("__cxa_atexit");
     uint64_t got = 0; assert(uc_mem_read(vm.uc, kGot, &got, sizeof got) == UC_ERR_OK && got == stub);
-    assert(run_library_constructors(&vm));
+    // A registered zero-return stub must not satisfy a required import.
+    vm.execution_depth = 0;
+    assert(!run_library_constructors(&vm));
+    assert(vm.execution_error == "Unsupported required guest import before constructors");
+    assert(vm.fallback_import_calls.at("__cxa_atexit") == 0 && vm.observed_pc_count == 0);
+    vm.execution_error.clear(); vm.fault = {};
+    assert(run_diagnostic_constructor(vm));
     assert(vm.fallback_import_calls.at("__cxa_atexit") == 1);
     assert(!vm.fault.present && !vm.fault.fetch.cxa_branch.present);
 }
 void actual_bad_got_target() {
     VM vm; setup(vm); auto &lib = library(vm); relocate(vm, lib);
     put(vm, kGot, &kTarget, sizeof kTarget);
-    assert(!run_library_constructors(&vm));
+    assert(!run_diagnostic_constructor(vm));
     assert(vm.fault.present && vm.fault.fetch.present && vm.fault.fetch.address == kTarget);
     const auto &b = vm.fault.fetch.cxa_branch;
     assert(b.present && b.target == kTarget && b.got_address == kGot && b.got_value == kTarget);
@@ -103,7 +119,7 @@ void malformed_addend_and_unknown_import() {
     VM vm; setup(vm); auto &lib = library(vm); relocate(vm, lib, 0x10000000);
     uint64_t bad = 0; assert(uc_mem_read(vm.uc, kGot, &bad, sizeof bad) == UC_ERR_OK);
     assert(bad == vm.imported_symbols.at("__cxa_atexit") + 0x10000000);
-    assert(!run_library_constructors(&vm));
+    assert(!run_diagnostic_constructor(vm));
     assert(vm.fault.fetch.cxa_branch.present && !vm.fault.fetch.cxa_branch.registered_stub);
     VM unknown; const auto ordinary = unknown.register_import("ordinary_unknown");
     assert(ordinary && unknown.import_stubs.at(ordinary) == "ordinary_unknown");

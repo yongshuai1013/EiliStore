@@ -236,6 +236,8 @@ struct EmulatorVM {
 void clear_active_vm();
 bool load_library_to_vm(EmulatorVM *vm, const std::string &file_path, const std::string &so_name);
 void relocate_all_vm_libraries(EmulatorVM *vm);
+// Reject required unresolved capabilities before ANY library constructor runs.
+bool preflight_vm_libraries(EmulatorVM *vm);
 bool run_library_constructors(EmulatorVM *vm);
 uint64_t get_vm_symbol_address(EmulatorVM *vm, const std::string &name);
 

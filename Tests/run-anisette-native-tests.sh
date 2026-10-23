@@ -56,10 +56,12 @@ LINK=(-pthread)
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeCxaAtexitBranchTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/cxa-atexit-branches"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeOperatorNewTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/operator-new"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeReadProtectionTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/read-protection"
-python3 - "$OUT/constructor-faults" "$OUT/guest-tls" "$OUT/cxa-atexit-branches" "$OUT/operator-new" "$OUT/read-protection" <<'PY'
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeSyntheticIntegrationTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/synthetic-dependencies"
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeAggregateReturnTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/aggregate-return"
+python3 - "$OUT/constructor-faults" "$OUT/guest-tls" "$OUT/cxa-atexit-branches" "$OUT/operator-new" "$OUT/read-protection" "$OUT/synthetic-dependencies" "$OUT/aggregate-return" <<'PY'
 import subprocess
 import sys
 for executable in sys.argv[1:]:
     subprocess.run([executable], check=True, timeout=90)
 PY
-echo 'PASS: native TCI synthetic ABI, linker, VM startup, guest stack-guard TLS, scalar operator new, constructor-fault and provisioning-output tests (not Apple login verification)'
+echo 'PASS: native TCI synthetic ABI, test-only dependency ordering, x8 aggregate return, fail-closed preflight, linker, VM startup, stack-guard TLS, operator new and provisioning-output tests (not Apple login verification)'
