@@ -30,6 +30,11 @@ public struct AnisetteProviderDiagnostic: Sendable {
             public let resolutionSource: ResolutionSource
         }
         public var cxaAtexitBranch: CxaAtexitBranch? = nil
+        public struct ReadProtection: Sendable {
+            public let address: UInt64; public let size: UInt32; public let pc: UInt64
+            public let x1: UInt64; public let lr: UInt64; public let regionID: UInt32?; public let permissions: UInt32?
+        }
+        public var readProtection: ReadProtection? = nil
     }
     public let operation: Operation
     public let result: Result

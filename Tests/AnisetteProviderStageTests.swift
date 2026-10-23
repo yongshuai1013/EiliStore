@@ -257,6 +257,43 @@ struct AnisetteProviderStageTests {
             check(decodedInvalid == nil, "branch accepted outside allowlisted context")
         }
 
+        let readBase = #"{"error":"safe","unicorn_code":13,"constructor_kind":"initArray","constructor_index":47,"constructor_library":"storeservicescore","fault_reason":"engine","diagnostic_phase":"libraryConstructors","read_protection":{"address":18446744073709551615,"size":4,"pc":18446744073709551615,"x1":9,"lr":10,"region_id":2,"permissions":7}}"#
+        let readFault = try parseFaultJSON(readBase)
+        check(readFault?.readProtection?.address == UInt64.max && readFault?.readProtection?.pc == UInt64.max
+            && readFault?.readProtection?.permissions == 7, "valid read-protection object including UInt64.max")
+        let invalidReadFields = [
+            ("\"size\":4", "\"size\":-1"), ("\"size\":4", "\"size\":1.5"),
+            ("\"size\":4", "\"size\":true"), ("\"size\":4", "\"size\":4294967296"),
+            ("\"address\":18446744073709551615", "\"address\":18446744073709551616"),
+            ("\"pc\":18446744073709551615", "\"pc\":null"),
+            ("\"x1\":9", "\"x1\":\"9\""), ("\"lr\":10", "\"lr\":false"),
+            ("\"region_id\":2", "\"region_id\":4294967296"),
+            (",\"region_id\":2", ""), (",\"permissions\":7", ""),
+            ("\"permissions\":7", "\"permissions\":8")
+        ]
+        for (original, bad) in invalidReadFields {
+            let changed = readBase.replacingOccurrences(of: original, with: bad)
+            let decoded = try parseFaultJSON(changed)
+            check(decoded?.readProtection == nil, "malformed read-protection accepted: \(bad)")
+        }
+        let noRegion = readBase.replacingOccurrences(of: ",\"region_id\":2,\"permissions\":7", with: "")
+        let decodedNoRegion = try parseFaultJSON(noRegion)?.readProtection
+        check(decodedNoRegion != nil && decodedNoRegion?.regionID == nil && decodedNoRegion?.permissions == nil,
+              "unavailable mapping metadata must stay optional")
+        for (original, replacement) in [
+            ("\"constructor_index\":47", "\"constructor_index\":46"),
+            ("\"constructor_kind\":\"initArray\"", "\"constructor_kind\":\"dtInit\""),
+            ("\"constructor_library\":\"storeservicescore\"", "\"constructor_library\":\"coreadi\""),
+            ("\"fault_reason\":\"engine\"", "\"fault_reason\":\"libc\""),
+            ("\"unicorn_code\":13", "\"unicorn_code\":8"),
+            ("\"diagnostic_phase\":\"libraryConstructors\"", "\"diagnostic_phase\":\"loadLibrary\"")
+        ] {
+            let decodedWrongScope = try parseFaultJSON(readBase.replacingOccurrences(of: original, with: replacement))
+            check(decodedWrongScope?.readProtection == nil, "read protection accepted outside exact scope: \(replacement)")
+        }
+        let unknownRead = readBase.replacingOccurrences(of: "\"lr\":10", with: "\"lr\":10,\"stack\":123")
+        let decodedUnknownRead = try parseFaultJSON(unknownRead)
+        check(decodedUnknownRead?.readProtection == nil, "unallowlisted read-protection field accepted")
         let expectedFaults: [(Int32, AnisetteProviderDiagnostic.Fault)] = [
             (
                 10,

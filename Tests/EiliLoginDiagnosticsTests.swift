@@ -165,6 +165,22 @@ import Glibc
         precondition(branchReloaded.contains("cxaAtexit x17=0x30 gotAddress=0x40"))
         precondition(branchReloaded.contains("registeredStub=true resolutionSource=functionStub"))
         precondition(!branchReloaded.contains("gotValue="), "missing gotValue should remain optional")
+        let readFile = file.deletingLastPathComponent().appendingPathComponent("read-protection.json")
+        let readStore = EiliLoginDiagnostics(file: readFile)
+        let readID = readStore.begin(onDevice: true)
+        let safeRead = EiliLoginDiagnostics.NativeDetail.Fault.ReadProtection(address: UInt64.max, size: 4, pc: 0x123, x1: 0x456, lr: 0x789, regionID: 2, permissions: 7)
+        let readFault = EiliLoginDiagnostics.NativeDetail.Fault(unicornCode: 13, guestPC: 0x123, constructorKind: .initArray, constructorIndex: 47, constructorLibrary: .storeservicescore, reason: .engine, readProtection: safeRead)
+        readStore.record(native: .init(operation: .headers, result: .providerError, phase: .libraryConstructors, code: -2, nativeCode: nil, fault: readFault), for: readID)
+        let readReport = readStore.report()
+        precondition(readReport.contains("readAddress=0xffffffffffffffff readSize=4 readPC=0x123 x1=0x456 lr=0x789 regionID=2 permissions=7"))
+        let wrongReadContext = EiliLoginDiagnostics.NativeDetail.Fault(unicornCode: 13, guestPC: 1, constructorKind: .initArray, constructorIndex: 46, constructorLibrary: .storeservicescore, reason: .engine, readProtection: safeRead)
+        readStore.record(native: .init(operation: .headers, result: .providerError, phase: .libraryConstructors, code: -2, nativeCode: nil, fault: wrongReadContext), for: readID)
+        let readJournal = try JSONSerialization.jsonObject(with: Data(contentsOf: readFile)) as! [String: Any]
+        let readEntries = ((readJournal["current"] as! [String: Any])["entries"] as! [[String: Any]])
+        let wrongReadEntry = readEntries.last!
+        let wrongNative = wrongReadEntry["native"] as! [String: Any]
+        let wrongFault = wrongNative["fault"] as! [String: Any]
+        precondition(wrongFault["readProtection"] == nil, "read-protection fields persisted outside exact scope")
         let otherContext = EiliLoginDiagnostics.NativeDetail.Fault(
             unicornCode: 8, guestPC: 1, constructorKind: .initArray, constructorIndex: 1,
             constructorLibrary: .coreadi, reason: .engine, fetchAddress: 0xabc, pcTrail: [0x11],

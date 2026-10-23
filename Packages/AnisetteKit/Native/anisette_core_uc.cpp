@@ -113,6 +113,19 @@ static std::string diagnostic_error_json(const std::string &error, const char *p
                    << ",\"resolution_source\":\"" << EmulatorVM::resolution_source_name(branch.source) << "\"}";
             }
         }
+        const auto &read = fault->read_protection;
+        if (strcmp(phase, "libraryConstructors") == 0 && fault->has_constructor &&
+            fault->constructor_kind == EmulatorVM::ConstructorKind::initArray &&
+            fault->constructor_library == EmulatorVM::ConstructorLibrary::storeservicescore &&
+            fault->constructor_index == 47 && fault->reason == EmulatorVM::FaultReason::engine &&
+            fault->has_unicorn_code && fault->unicorn_code == UC_ERR_READ_PROT && read.present) {
+            ss << ",\"read_protection\":{\"address\":" << read.address
+               << ",\"size\":" << read.size << ",\"pc\":" << read.pc
+               << ",\"x1\":" << read.x1 << ",\"lr\":" << read.lr;
+            if (read.has_region) ss << ",\"region_id\":" << read.region_id
+                                    << ",\"permissions\":" << read.permissions;
+            ss << '}';
+        }
     }
     ss << "}";
     return ss.str();

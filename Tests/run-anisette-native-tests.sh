@@ -55,7 +55,8 @@ LINK=(-pthread)
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeGuestTLSTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/guest-tls"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeCxaAtexitBranchTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/cxa-atexit-branches"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeOperatorNewTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/operator-new"
-python3 - "$OUT/constructor-faults" "$OUT/guest-tls" "$OUT/cxa-atexit-branches" "$OUT/operator-new" <<'PY'
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeReadProtectionTests.cpp" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/read-protection"
+python3 - "$OUT/constructor-faults" "$OUT/guest-tls" "$OUT/cxa-atexit-branches" "$OUT/operator-new" "$OUT/read-protection" <<'PY'
 import subprocess
 import sys
 for executable in sys.argv[1:]:

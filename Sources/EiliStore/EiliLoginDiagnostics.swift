@@ -55,6 +55,11 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
                 let resolutionSource: ResolutionSource
             }
             var cxaAtexitBranch: CxaAtexitBranch? = nil
+            struct ReadProtection: Codable, Sendable {
+                let address: UInt64; let size: UInt32; let pc: UInt64; let x1: UInt64; let lr: UInt64
+                let regionID: UInt32?; let permissions: UInt32?
+            }
+            var readProtection: ReadProtection? = nil
             func sanitizedFetchFields(phase: Phase?) -> Fault {
                 var copy = self
                 let eligible = phase == .libraryConstructors && unicornCode == 8 && reason == .engine
@@ -62,6 +67,9 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
                 if !eligible { copy.fetchAddress = nil; copy.pcTrail = nil }
                 else if let trail = copy.pcTrail, trail.count > 16 { copy.pcTrail = Array(trail.suffix(16)) }
                 if !eligible || constructorLibrary != .storeservicescore { copy.cxaAtexitBranch = nil }
+                let eligibleRead = phase == .libraryConstructors && unicornCode == 13 && reason == .engine
+                    && constructorKind == .initArray && constructorIndex == 47 && constructorLibrary == .storeservicescore
+                if !eligibleRead { copy.readProtection = nil }
                 return copy
             }
         }
@@ -221,6 +229,10 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
                         if let library = fault.constructorLibrary { line += " ctorLibrary=\(library.rawValue)" }
                         if let kind = fault.constructorKind { line += " ctorKind=\(kind.rawValue)" }
                         if let index = fault.constructorIndex { line += " ctorIndex=\(index)" }
+                        if let read = fault.readProtection {
+                            line += " readAddress=0x\(String(read.address, radix: 16)) readSize=\(read.size) readPC=0x\(String(read.pc, radix: 16)) x1=0x\(String(read.x1, radix: 16)) lr=0x\(String(read.lr, radix: 16))"
+                            if let region = read.regionID, let permissions = read.permissions { line += " regionID=\(region) permissions=\(permissions)" }
+                        }
                         if let branch = fault.cxaAtexitBranch {
                             line += " cxaAtexit x17=0x\(String(branch.target, radix: 16)) gotAddress=0x\(String(branch.gotAddress, radix: 16))"
                             if let value = branch.gotValue { line += " gotValue=0x\(String(value, radix: 16))" }

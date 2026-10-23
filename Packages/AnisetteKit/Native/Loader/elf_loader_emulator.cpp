@@ -188,6 +188,9 @@ void EmulatorVM::record_fault(FaultReason reason, bool has_code, int32_t code,
         if (reason == FaultReason::engine && has_code && code == UC_ERR_FETCH_UNMAPPED) {
             fault.fetch = pending_fetch;
         }
+        if (reason == FaultReason::engine && has_code && code == UC_ERR_READ_PROT) {
+            fault.read_protection = pending_read_protection;
+        }
     }
 }
 
@@ -337,6 +340,44 @@ static void trace_pc_hook(uc_engine *uc, uint64_t address, uint32_t size, void *
     static_cast<EmulatorVM *>(user_data)->observe_cxa_atexit_branch(address);
 }
 
+static bool hook_mem_read_protection(uc_engine *uc, uc_mem_type type,
+                                     uint64_t address, int size, int64_t value,
+                                     void *user_data) {
+    (void)value;
+    auto *vm = static_cast<EmulatorVM *>(user_data);
+    if (type == UC_MEM_READ_PROT && vm && !vm->fault.present &&
+        !vm->pending_read_protection.present &&
+        vm->execution_depth && vm->constructor_context.active &&
+        vm->constructor_context.kind == EmulatorVM::ConstructorKind::initArray &&
+        vm->constructor_context.library == EmulatorVM::ConstructorLibrary::storeservicescore &&
+        vm->constructor_context.index == 47 && size >= 0 &&
+        static_cast<uint64_t>(size) <= UINT32_MAX) {
+        EmulatorVM::ReadProtectionSnapshot snapshot{};
+        snapshot.address = address;
+        snapshot.size = static_cast<uint32_t>(size);
+        if (uc_reg_read(uc, UC_ARM64_REG_PC, &snapshot.pc) == UC_ERR_OK &&
+            uc_reg_read(uc, UC_ARM64_REG_X1, &snapshot.x1) == UC_ERR_OK &&
+            uc_reg_read(uc, UC_ARM64_REG_X30, &snapshot.lr) == UC_ERR_OK) {
+            uc_mem_region *regions = nullptr;
+            uint32_t count = 0;
+            if (uc_mem_regions(uc, &regions, &count) == UC_ERR_OK) {
+                for (uint32_t i = 0; i < count; ++i) {
+                    if (address >= regions[i].begin && address <= regions[i].end) {
+                        snapshot.has_region = true;
+                        snapshot.region_id = i;
+                        snapshot.permissions = regions[i].perms;
+                        break;
+                    }
+                }
+                uc_free(regions);
+            }
+            snapshot.present = true;
+            vm->pending_read_protection = snapshot;
+        }
+    }
+    return false;
+}
+
 static bool hook_mem_invalid(uc_engine *uc, uc_mem_type type,
                              uint64_t address, int size, int64_t value,
                              void *user_data) {
@@ -454,6 +495,8 @@ EmulatorVM::EmulatorVM()
                                    &stack_guard, sizeof(stack_guard)))) return;
     if (!initialized(uc_reg_write(uc, UC_ARM64_REG_TPIDR_EL0, &kGuestTLSAddress))) return;
     if (!initialized(uc_hook_add(uc, &invalid_hook, UC_HOOK_MEM_UNMAPPED, (void *)hook_mem_invalid, this, 1, 0))) return;
+    if (!initialized(uc_hook_add(uc, &read_protection_hook, UC_HOOK_MEM_READ_PROT,
+                                 (void *)hook_mem_read_protection, this, 1, 0))) return;
     uc_hook intr_hook = 0;
     if (!initialized(uc_hook_add(uc, &intr_hook, UC_HOOK_INTR, (void *)hook_intr, this, 1, 0))) return;
     if (!initialized(uc_hook_add(uc, &import_hook, UC_HOOK_CODE, (void *)import_callback_router, this,
@@ -1934,6 +1977,7 @@ int32_t run_vm_procedure(EmulatorVM *vm, uint64_t proc_addr, const std::vector<u
     if (!vm->execution_depth) {
         vm->fault = {};
         vm->pending_fetch = {};
+        vm->pending_read_protection = {};
         vm->pending_cxa_branch = {};
     }
     if (vm->initialization_error != UC_ERR_OK) {

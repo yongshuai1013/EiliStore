@@ -142,6 +142,17 @@ struct EmulatorVM {
         uint64_t pcs[kPCTraceCapacity] = {};
         CxaAtexitBranch cxa_branch;
     } pending_fetch;
+    struct ReadProtectionSnapshot {
+        bool present = false;
+        uint64_t address = 0;
+        uint32_t size = 0;
+        uint64_t pc = 0;
+        uint64_t x1 = 0;
+        uint64_t lr = 0;
+        bool has_region = false;
+        uint32_t region_id = 0;
+        uint32_t permissions = 0;
+    } pending_read_protection;
     struct FaultSnapshot {
         bool present = false;
         bool has_unicorn_code = false;
@@ -154,6 +165,7 @@ struct EmulatorVM {
         ConstructorKind constructor_kind = ConstructorKind::none;
         ConstructorLibrary constructor_library = ConstructorLibrary::other;
         FetchSnapshot fetch;
+        ReadProtectionSnapshot read_protection;
     } fault;
     struct ConstructorContext {
         bool active = false;
@@ -200,6 +212,7 @@ struct EmulatorVM {
 
     uint64_t errno_addr;
     uc_hook invalid_hook = 0;
+    uc_hook read_protection_hook = 0;
     uc_hook import_hook = 0;
     uc_hook pc_trace_hook = 0;
 

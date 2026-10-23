@@ -241,6 +241,13 @@ actor EiliAnisetteService {
                         let eligibleFetch = event.phase == .libraryConstructors && value.unicornCode == 8 && value.reason == .engine
                             && value.constructorKind != nil && value.constructorIndex != nil
                             && value.constructorLibrary != nil
+                        let eligibleRead = event.phase == .libraryConstructors && value.unicornCode == 13 && value.reason == .engine
+                            && value.constructorKind == .initArray && value.constructorIndex == 47
+                            && value.constructorLibrary == .storeservicescore
+                        let read = eligibleRead ? value.readProtection.map { read in
+                            EiliLoginDiagnostics.NativeDetail.Fault.ReadProtection(address: read.address, size: read.size,
+                                pc: read.pc, x1: read.x1, lr: read.lr, regionID: read.regionID, permissions: read.permissions)
+                        } : nil
                         return EiliLoginDiagnostics.NativeDetail.Fault(
                             unicornCode: value.unicornCode, guestPC: value.guestPC,
                             constructorKind: value.constructorKind.flatMap { .init(rawValue: $0.rawValue) },
@@ -253,7 +260,7 @@ actor EiliAnisetteService {
                                 .init(target: branch.target, gotAddress: branch.gotAddress,
                                       gotValue: branch.gotValue, registeredStub: branch.registeredStub,
                                       resolutionSource: .init(rawValue: branch.resolutionSource.rawValue)!)
-                            } : nil)
+                            } : nil, readProtection: read)
                     }
                     diagnostics.record(native: .init(operation: operation, result: result,
                         phase: event.phase.flatMap { EiliLoginDiagnostics.NativeDetail.Phase(rawValue: $0.rawValue) },

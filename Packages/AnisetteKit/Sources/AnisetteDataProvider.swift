@@ -69,6 +69,16 @@ public struct AnisetteProviderDiagnostic: Sendable, Equatable {
         public let reason: Reason?
         public let fetchAddress: UInt64?
         public let pcTrail: [UInt64]?
+        public struct ReadProtection: Sendable, Equatable {
+            public let address: UInt64
+            public let size: UInt32
+            public let pc: UInt64
+            public let x1: UInt64
+            public let lr: UInt64
+            public let regionID: UInt32?
+            public let permissions: UInt32?
+        }
+        public let readProtection: ReadProtection?
         public struct CxaAtexitBranch: Sendable, Equatable {
             public enum ResolutionSource: String, Sendable { case definedSymbol, selfSymbol, librarySymbol, convertedSymbol, functionStub, dataFallback, unresolved }
             public let target, gotAddress: UInt64
@@ -82,7 +92,7 @@ public struct AnisetteProviderDiagnostic: Sendable, Equatable {
             constructorKind: ConstructorKind? = nil, constructorIndex: UInt64? = nil,
             constructorLibrary: ConstructorLibrary? = nil, reason: Reason? = nil,
             fetchAddress: UInt64? = nil, pcTrail: [UInt64]? = nil,
-            cxaAtexitBranch: CxaAtexitBranch? = nil
+            cxaAtexitBranch: CxaAtexitBranch? = nil, readProtection: ReadProtection? = nil
         ) {
             self.unicornCode = unicornCode
             self.guestPC = guestPC
@@ -93,6 +103,7 @@ public struct AnisetteProviderDiagnostic: Sendable, Equatable {
             self.fetchAddress = fetchAddress
             self.pcTrail = pcTrail
             self.cxaAtexitBranch = cxaAtexitBranch
+            self.readProtection = readProtection
         }
     }
     public let fault: Fault?
@@ -261,6 +272,21 @@ extension AnisetteDataProvider {
             }
             return Array(parsed.suffix(16))
         }()
+        let isReadProtectionFault = phase == .libraryConstructors && unicornCode == 13 && reason == .engine
+            && constructorKind == .initArray && constructorIndex == 47 && constructorLibrary == .storeservicescore
+        let readProtection: AnisetteProviderDiagnostic.Fault.ReadProtection? = {
+            guard isReadProtectionFault, let raw = dict["read_protection"] as? [String: Any],
+                  Set(raw.keys).isSubset(of: Set(["address", "size", "pc", "x1", "lr", "region_id", "permissions"])),
+                  let address = strictUnsigned(raw["address"]), let size = strictUInt32(raw["size"]),
+                  let pc = strictUnsigned(raw["pc"]), let x1 = strictUnsigned(raw["x1"]), let lr = strictUnsigned(raw["lr"]) else { return nil }
+            let region: UInt32?
+            let permissions: UInt32?
+            if raw["region_id"] != nil || raw["permissions"] != nil {
+                guard let r = strictUInt32(raw["region_id"]), let p = strictUInt32(raw["permissions"]), p <= 7 else { return nil }
+                region = r; permissions = p
+            } else { region = nil; permissions = nil }
+            return .init(address: address, size: size, pc: pc, x1: x1, lr: lr, regionID: region, permissions: permissions)
+        }()
         let eligibleBranch = isFetchFault && constructorLibrary == .storeservicescore
         let branch: AnisetteProviderDiagnostic.Fault.CxaAtexitBranch? = {
             guard eligibleBranch, let raw = dict["cxa_atexit_branch"] as? [String: Any],
@@ -280,17 +306,20 @@ extension AnisetteDataProvider {
             unicornCode: unicornCode, guestPC: unsigned("guest_pc"),
             constructorKind: constructorKind, constructorIndex: constructorIndex,
             constructorLibrary: constructorLibrary, reason: reason,
-            fetchAddress: fetchAddress, pcTrail: pcTrail, cxaAtexitBranch: branch)
+            fetchAddress: fetchAddress, pcTrail: pcTrail, cxaAtexitBranch: branch, readProtection: readProtection)
         let hasFault =
             fault.unicornCode != nil || fault.guestPC != nil || fault.constructorKind != nil
             || fault.constructorIndex != nil || fault.constructorLibrary != nil || fault.reason != nil
-            || fault.fetchAddress != nil || fault.pcTrail != nil
+            || fault.fetchAddress != nil || fault.pcTrail != nil || fault.readProtection != nil
         return (native, phase, hasFault || branch != nil ? fault : nil)
     }
     private func strictUnsigned(_ value: Any?) -> UInt64? {
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
               ["i", "l", "q", "s", "I", "L", "Q", "S", "C"].contains(String(cString: number.objCType)) else { return nil }
         return UInt64(number.stringValue)
+    }
+    private func strictUInt32(_ value: Any?) -> UInt32? {
+        guard let raw = strictUnsigned(value) else { return nil }; return UInt32(exactly: raw)
     }
     private func strictBool(_ value: Any?) -> Bool? {
         guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
