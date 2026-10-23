@@ -79,9 +79,12 @@ final class SettingsNavigationUITests: XCTestCase {
         for _ in 0..<8 { if reset.isHittable { break }; list.swipeUp() }
         XCTAssertTrue(reset.isHittable)
         reset.tap()
-        let confirm = app.buttons["重設本機資料"]
-        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
-        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["取消", "Cancel"])).firstMatch
+        let sheet = app.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        XCTAssertTrue(sheet.buttons["重設本機資料"].waitForExistence(timeout: 10))
+        // The sheet's cancel button is not reliably matched by its localized
+        // label; in an action sheet it is always the last button.
+        let cancel = sheet.buttons.element(boundBy: sheet.buttons.count - 1)
         XCTAssertTrue(cancel.exists)
         cancel.tap()
         XCTAssertTrue(reset.waitForExistence(timeout: 5))

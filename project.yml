@@ -17,7 +17,7 @@ packages:
     path: Packages/EMProxy
   AnisetteKit:
     url: https://github.com/yongshuai1013/AnisetteKit.git
-    revision: "2b4a643f5302826828bf36580fee61aba655b6bb"
+    branch: main
 targets:
   EiliStore:
     type: application

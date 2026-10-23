@@ -99,7 +99,7 @@ jobs:
             2>&1 | tee build/xcodebuild.log
           grep -E -- '-D[[:space:]]*EILI_ON_DEVICE_ANISETTE([[:space:]]|$)' build/xcodebuild.log >/dev/null
           # The On-Device engine resolves through the fork chain pinned in
-          # project.yml (SideSign 7ce202e4 -> AnisetteKit 2b4a643f -> Unicorn
+          # project.yml (SideSign fork -> AnisetteKit fork -> Unicorn
           # 2.1.4-xcf-a10). SPM verifies the xcframework zip against the
           # SHA-256 pinned in the fork's Package.swift during resolution.
           grep -F '2.1.4-xcf-a10' build/DerivedData/SourcePackages/checkouts/AnisetteKit/Package.swift >/dev/null
