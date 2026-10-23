@@ -10,6 +10,17 @@ import Glibc
         let arguments = CommandLine.arguments
         let file = URL(fileURLWithPath: arguments[2])
         let store = EiliLoginDiagnostics(file: file)
+        if arguments[1] == "interrupt-button" {
+            store.begin(onDevice: true)
+            _exit(86)
+        }
+        if arguments[1] == "verify-button" {
+            let report = store.report()
+            precondition(report.contains("最近一次：unfinished") && report.contains("loginTapped"))
+            precondition(!report.contains("loginStarted"))
+            print("EiliLoginDiagnosticsTests: PASS (button-only abrupt exit survives restart)")
+            return
+        }
         if arguments[1] == "interrupt" {
             let id = store.begin(onDevice: true)
             store.record(.nativeProvisionStartStarted, for: id)
@@ -53,13 +64,22 @@ import Glibc
         try Data(repeating: 0, count: 65537).write(to: file)
         precondition(EiliLoginDiagnostics(file: file).report().contains("尚無登入階段紀錄"))
 
-        // Structured Tasks retain TaskLocal context; detached tasks do not belong to a login.
-        await EiliLoginDiagnostics.$attempt.withValue(next) {
-            let inherited = await Task { EiliLoginDiagnostics.attempt }.value
-            precondition(inherited == next)
-            let detached = await Task.detached { EiliLoginDiagnostics.attempt }.value
-            precondition(detached == nil)
-        }
-        print("EiliLoginDiagnosticsTests: PASS (abrupt exit/reopen, bounded storage, stale writes, outcomes, I/O failure, corrupt data, TaskLocal)")
+        // Explicit IDs work across detached Tasks, without task-local runtime state.
+        let first = store.begin(onDevice: true)
+        let relay = EiliLoginDiagnostics.Relay(store: store)
+        relay.bind(first)
+        await Task.detached { relay.record(.nativeHeadersStarted) }.value
+        precondition(store.report().contains("nativeHeadersStarted"))
+        store.finish(.failed, for: first)
+        let second = store.begin(onDevice: true)
+        relay.bind(second)
+        relay.record(.nativeProvisionStartStarted)
+        let latest = store.report().components(separatedBy: "前一次")[0]
+        precondition(latest.contains("nativeProvisionStartStarted") && !latest.contains("nativeHeadersStarted"))
+        relay.bind(nil)
+        relay.record(.nativeProvisionEndStarted)
+        precondition(!store.report().contains("nativeProvisionEndStarted"))
+        EiliLoginDiagnostics.record(.authenticationStarted, for: nil)
+        print("EiliLoginDiagnosticsTests: PASS (abrupt exit/reopen, bounded storage, stale writes, outcomes, I/O failure, corrupt data, explicit ID/relay/detached Task)")
     }
 }

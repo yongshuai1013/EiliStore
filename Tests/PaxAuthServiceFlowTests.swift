@@ -10,7 +10,9 @@ final class AnisetteServerManager { static let shared = AnisetteServerManager();
 final class EiliAnisetteService {
     static let shared = EiliAnisetteService()
     var calls = 0; var failure = false; var onFetch: (() -> Void)?
-    func fetch(remoteIdentifier: UUID, remoteBlob: Data?, servers: [URL], mode: EiliAnisetteMode, configuration: EiliAnisetteClientConfiguration) async throws -> SideSign.AnisetteData {
+    var lastDiagnosticAttempt: UUID?
+    func fetch(remoteIdentifier: UUID, remoteBlob: Data?, servers: [URL], mode: EiliAnisetteMode, configuration: EiliAnisetteClientConfiguration, diagnosticAttempt: UUID? = nil) async throws -> SideSign.AnisetteData {
+        lastDiagnosticAttempt = diagnosticAttempt
         calls += 1; onFetch?(); if failure { throw EiliAnisetteError.unavailable }; return .init(machineID: "anisette-snapshot")
     }
 }
@@ -37,6 +39,7 @@ private final class LockedValue<Value>: @unchecked Sendable {
     func set(_ value: Value) { lock.lock(); self.value = value; lock.unlock() }
     func get() -> Value { lock.lock(); defer { lock.unlock() }; return value }
 }
+#if !LOGIN_HANDLER_TESTS
 @main struct PaxAuthServiceFlowTests {
     static let sk = "paxstore.auth.session", ik = "paxstore.auth.appleID"
     static func oldState() throws -> (Data, Data) {
@@ -63,6 +66,11 @@ private final class LockedValue<Value>: @unchecked Sendable {
         let retryLogin = try await service.login(appleID: "input@example.invalid", password: "unused", codeProvider: retry)
         assert(retryLogin)
         diagnosticOutcome("succeeded")
+        assert(EiliAnisetteService.shared.lastDiagnosticAttempt != nil)
+        let currentReport = EiliLoginDiagnostics.shared.report().components(separatedBy: "前一次")[0]
+        for stage in ["authServiceEntered", "loginStarted", "configurationReady", "sessionSaving"] {
+            assert(currentReport.contains(stage), "explicit diagnostic ID lost: \(stage)")
+        }
         assert(events.get() == ["trustedDevice:false", "trustedDevice:true"] && SideSign.DeveloperPortal.responses.count == 2)
         assert(SideSign.DeveloperPortal.authCalls == 1 && SideSign.DeveloperPortal.remainingRequests == 0)
         assert(SideSign.DeveloperPortal.observedAnisette?.machineID == "anisette-snapshot" && SideSign.DeveloperPortal.observedXcodeVersion == "test-xcode")
@@ -131,3 +139,4 @@ private final class LockedValue<Value>: @unchecked Sendable {
         print("PaxAuthServiceFlowTests: PASS (offline fake SDK; no Apple login/network)")
     }
 }
+#endif

@@ -8,6 +8,12 @@ trap 'rm -rf "$build"' EXIT
 swiftc -swift-version 6 -strict-concurrency=complete -parse-as-library \
   Sources/EiliStore/EiliLoginDiagnostics.swift Tests/EiliLoginDiagnosticsTests.swift -o "$build/diagnostics-tests"
 set +e
+"$build/diagnostics-tests" interrupt-button "$build/button.json"
+status=$?
+set -e
+[[ "$status" == 86 ]] || { echo "Expected button-only abrupt-exit status 86, got $status" >&2; exit 1; }
+"$build/diagnostics-tests" verify-button "$build/button.json"
+set +e
 "$build/diagnostics-tests" interrupt "$build/login.json"
 status=$?
 set -e

@@ -92,6 +92,7 @@ actor EiliAnisetteService {
     init(staging: (@Sendable (URL) async throws -> [URL])? = nil) { self.stagedDownloader = staging }
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    private let localDiagnostics = EiliLoginDiagnostics.Relay()
     #if EILI_ON_DEVICE_ANISETTE
     private var localClient: AnisetteClient?
     #endif
@@ -148,38 +149,40 @@ actor EiliAnisetteService {
 
     func fetch(remoteIdentifier: UUID, remoteBlob: Data?, servers: [URL],
                mode: EiliAnisetteMode = .selected,
-               configuration: EiliAnisetteClientConfiguration = .empty) async throws -> SideSign.AnisetteData {
-        EiliLoginDiagnostics.record(.anisetteWaiting)
+               configuration: EiliAnisetteClientConfiguration = .empty,
+               diagnosticAttempt: UUID? = nil) async throws -> SideSign.AnisetteData {
+        EiliLoginDiagnostics.record(.anisetteWaiting, for: diagnosticAttempt)
         await acquire()
-        defer { release() }
+        localDiagnostics.bind(diagnosticAttempt)
+        defer { localDiagnostics.bind(nil); release() }
         try Task.checkCancellation()
         let configuration = try configuration.validated()
         switch mode {
         case .remote:
             let urls = servers.isEmpty ? [URL(string: "https://ani.sidestore.zip")!] : servers
-            EiliLoginDiagnostics.record(.remoteRequestStarted)
+            EiliLoginDiagnostics.record(.remoteRequestStarted, for: diagnosticAttempt)
             let (data, blob) = try await SideSign.AnisetteDataManager.shared.fetchAnisetteDataWithFailover(
                 servers: urls, identifier: remoteIdentifier, existingAdiBlob: remoteBlob,
                 headers: .init(rawHeaders: configuration.requestHeaderOverrides))
-            EiliLoginDiagnostics.record(.remoteRequestReturned)
+            EiliLoginDiagnostics.record(.remoteRequestReturned, for: diagnosticAttempt)
             try Task.checkCancellation()
             if let blob { KeychainHelper.save(blob, forKey: "paxstore.anisette.adiblob") }
             // SideSign may reuse a provider cache; reapply metadata so a saved
             // override is honored even when a cached Anisette result is returned.
             return configuration.applying(to: data)
         case .onDevice:
-            return try await fetchLocal(configuration: configuration)
+            return try await fetchLocal(configuration: configuration, diagnosticAttempt: diagnosticAttempt)
         }
     }
 
-    private func fetchLocal(configuration: EiliAnisetteClientConfiguration) async throws -> SideSign.AnisetteData {
+    private func fetchLocal(configuration: EiliAnisetteClientConfiguration, diagnosticAttempt: UUID?) async throws -> SideSign.AnisetteData {
         #if EILI_ON_DEVICE_ANISETTE
-        EiliLoginDiagnostics.record(.localPreflightStarted)
+        EiliLoginDiagnostics.record(.localPreflightStarted, for: diagnosticAttempt)
         switch localLibraryStatus() {
         case .engineUnavailable: throw EiliAnisetteError.localBuildRequired
         case .missing:
             guard EiliODASourceConfiguration.selected.automaticAcquisition else { throw EiliAnisetteError.missingLibraries }
-            EiliLoginDiagnostics.record(.localAcquisitionStarted)
+            EiliLoginDiagnostics.record(.localAcquisitionStarted, for: diagnosticAttempt)
             _ = try await performDownload(using: selectedDownloaderStage())
             // Download/import may preserve an incompatible diagnostic library set.
             // Revalidate before creating identity, provisioning state, or a provider.
@@ -202,7 +205,7 @@ actor EiliAnisetteService {
                 throw EiliAnisetteError.incompatibleLibraries("新版 libstoreapi.so 不可改名冒充舊版函式庫；請匯入原名五庫並查看相容性提示。")
             }
         }
-        EiliLoginDiagnostics.record(.localPreflightPassed)
+        EiliLoginDiagnostics.record(.localPreflightPassed, for: diagnosticAttempt)
         let identifier: UUID
         if let stored = KeychainHelper.loadString(forKey: Self.localIdentifierKey), let uuid = UUID(uuidString: stored) {
             identifier = uuid
@@ -213,37 +216,36 @@ actor EiliAnisetteService {
             }
         }
         if localClient == nil {
-            EiliLoginDiagnostics.record(.localClientCreating)
+            EiliLoginDiagnostics.record(.localClientCreating, for: diagnosticAttempt)
             let directory = libraries
             let provisioning = root.appendingPathComponent("Provisioning", isDirectory: true)
             try FileManager.default.createDirectory(at: provisioning, withIntermediateDirectories: true)
             AnisetteKitLogging.setLogging(false)
             localClient = try AnisetteClient(provisioningDir: provisioning,
                 requiredLibraries: profile.filenames,
-                provider: UnicornAnisetteDataProvider(onStage: { stage in
-                    // Read the current TaskLocal here, not at client creation: this client is reused.
+                provider: UnicornAnisetteDataProvider(onStage: { [diagnostics = localDiagnostics] stage in
                     switch stage {
-                    case .headersStarted: EiliLoginDiagnostics.record(.nativeHeadersStarted)
-                    case .headersReturned: EiliLoginDiagnostics.record(.nativeHeadersReturned)
-                    case .provisionStartStarted: EiliLoginDiagnostics.record(.nativeProvisionStartStarted)
-                    case .provisionStartReturned: EiliLoginDiagnostics.record(.nativeProvisionStartReturned)
-                    case .provisionEndStarted: EiliLoginDiagnostics.record(.nativeProvisionEndStarted)
-                    case .provisionEndReturned: EiliLoginDiagnostics.record(.nativeProvisionEndReturned)
+                    case .headersStarted: diagnostics.record(.nativeHeadersStarted)
+                    case .headersReturned: diagnostics.record(.nativeHeadersReturned)
+                    case .provisionStartStarted: diagnostics.record(.nativeProvisionStartStarted)
+                    case .provisionStartReturned: diagnostics.record(.nativeProvisionStartReturned)
+                    case .provisionEndStarted: diagnostics.record(.nativeProvisionEndStarted)
+                    case .provisionEndReturned: diagnostics.record(.nativeProvisionEndReturned)
                     }
                 }), libraryDirectoryResolver: { directory })
         }
         guard let client = localClient else { throw EiliAnisetteError.missingLibraries }
-        EiliLoginDiagnostics.record(.localClientReady)
+        EiliLoginDiagnostics.record(.localClientReady, for: diagnosticAttempt)
         var requestHeaders = configuration.requestHeaderOverrides
         let explicitRoutingOverride = requestHeaders.keys.contains { $0.caseInsensitiveCompare("X-Apple-I-MD-RINFO") == .orderedSame }
         if !explicitRoutingOverride, let routingInfo = KeychainHelper.loadString(forKey: Self.localRoutingInfoKey) {
             requestHeaders["X-Apple-I-MD-RINFO"] = routingInfo
         }
-        EiliLoginDiagnostics.record(.localRequestStarted)
+        EiliLoginDiagnostics.record(.localRequestStarted, for: diagnosticAttempt)
         let (headers, blob) = try await client.getAnisetteData(identifier: identifier,
             storage: .memory(existingBlob: KeychainHelper.load(forKey: Self.localBlobKey).flatMap { $0.isEmpty ? nil : $0 }),
             headers: .init(rawHeaders: requestHeaders))
-        EiliLoginDiagnostics.record(.localRequestReturned)
+        EiliLoginDiagnostics.record(.localRequestReturned, for: diagnosticAttempt)
         // Save a provisioned identity before honouring cancellation, never log its payload.
         if let blob, !KeychainHelper.save(blob, forKey: Self.localBlobKey) {
             throw EiliAnisetteError.storageFailed

@@ -68,44 +68,46 @@ public final class PaxAuthService {
     /// 登入（一次 authenticate 內完成 2FA；只有選擇發送方式才會要求發碼）
     public func login(appleID: String, password: String, codeProvider: TwoFACodeProvider = TwoFACodeProvider(), diagnosticAttempt: UUID? = nil) async throws -> Bool {
         let attempt = diagnosticAttempt ?? EiliLoginDiagnostics.shared.begin(onDevice: EiliAnisetteMode.selected == .onDevice)
-        return try await EiliLoginDiagnostics.$attempt.withValue(attempt) {
-            do {
-                let result = try await performLogin(appleID: appleID, password: password, codeProvider: codeProvider)
-                EiliLoginDiagnostics.shared.finish(.succeeded, for: attempt)
-                return result
-            } catch {
-                let cancelled: Bool
-                if error is CancellationError { cancelled = true }
-                else if case DeveloperPortalError.userCancelled = error { cancelled = true }
-                else { cancelled = false }
-                EiliLoginDiagnostics.shared.finish(cancelled ? .cancelled : .failed, for: attempt)
-                throw error
-            }
+        EiliLoginDiagnostics.record(.authServiceEntered, for: attempt)
+        // Diagnostics must not wrap the login in a new async TaskLocal scope.
+        // Pass the ID explicitly so a missing runtime context cannot hide all stages.
+        do {
+            let result = try await performLogin(appleID: appleID, password: password, codeProvider: codeProvider, diagnosticAttempt: attempt)
+            EiliLoginDiagnostics.shared.finish(.succeeded, for: attempt)
+            return result
+        } catch {
+            let cancelled: Bool
+            if error is CancellationError { cancelled = true }
+            else if case DeveloperPortalError.userCancelled = error { cancelled = true }
+            else { cancelled = false }
+            EiliLoginDiagnostics.shared.finish(cancelled ? .cancelled : .failed, for: attempt)
+            throw error
         }
     }
 
-    private func performLogin(appleID: String, password: String, codeProvider: TwoFACodeProvider) async throws -> Bool {
+    private func performLogin(appleID: String, password: String, codeProvider: TwoFACodeProvider, diagnosticAttempt: UUID) async throws -> Bool {
         defer { codeProvider.cancel() }
-        EiliLoginDiagnostics.record(.loginStarted)
+        EiliLoginDiagnostics.record(.loginStarted, for: diagnosticAttempt)
         try Task.checkCancellation()
         // 1. 拿 anisette（穩定身份）
         let identifier = resolveIdentifier()
         let existingBlob: Data? = loadADIBlob()
         let anisetteMode = EiliAnisetteMode.selected
-        EiliLoginDiagnostics.record(.configurationLoading)
+        EiliLoginDiagnostics.record(.configurationLoading, for: diagnosticAttempt)
         let clientConfiguration = try await EiliAnisetteClientConfigurationStore.shared.load()
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
-        EiliLoginDiagnostics.record(.configurationReady)
+        EiliLoginDiagnostics.record(.configurationReady, for: diagnosticAttempt)
         
         let anisetteData = try await EiliAnisetteService.shared.fetch(
             remoteIdentifier: identifier,
             remoteBlob: existingBlob,
             servers: anisetteServers,
             mode: anisetteMode,
-            configuration: clientConfiguration
+            configuration: clientConfiguration,
+            diagnosticAttempt: diagnosticAttempt
         )
         
-        EiliLoginDiagnostics.record(.anisetteReady)
+        EiliLoginDiagnostics.record(.anisetteReady, for: diagnosticAttempt)
         try Task.checkCancellation()
         guard !codeProvider.isCancelled else { throw CancellationError() }
 
@@ -115,7 +117,7 @@ public final class PaxAuthService {
         let verificationHandler: SideSign.DeveloperPortal.VerificationHandler = { request in
             try Task.checkCancellation()
             guard !codeProvider.isCancelled else { throw CancellationError() }
-            EiliLoginDiagnostics.record(.verificationWaiting)
+            EiliLoginDiagnostics.record(.verificationWaiting, for: diagnosticAttempt)
             switch request {
             case .trustedDevice(let error):
                 codeProvider.log("等待受信任設備驗證碼")
@@ -142,7 +144,7 @@ public final class PaxAuthService {
             }
         }
 
-        EiliLoginDiagnostics.record(.authenticationStarted)
+        EiliLoginDiagnostics.record(.authenticationStarted, for: diagnosticAttempt)
         let session = try await portal.authenticate(
             appleID: appleID,
             password: password,
@@ -151,14 +153,14 @@ public final class PaxAuthService {
             verificationHandler: verificationHandler
         )
         
-        EiliLoginDiagnostics.record(.authenticationReturned)
+        EiliLoginDiagnostics.record(.authenticationReturned, for: diagnosticAttempt)
         // 已取消的流程不得保存 session。
         try Task.checkCancellation()
         guard !codeProvider.isCancelled else { throw CancellationError() }
 
         // SideSign 必須先回傳真正的 AuthSession；兩項保存視為同一筆交易。
         // 寫入失敗不能破壞既有登入，也不能留下新舊帳號混合的狀態。
-        EiliLoginDiagnostics.record(.sessionSaving)
+        EiliLoginDiagnostics.record(.sessionSaving, for: diagnosticAttempt)
         let previousSession = KeychainHelper.load(forKey: KeychainKey.session)
         let previousAppleID = KeychainHelper.load(forKey: KeychainKey.appleID)
         guard KeychainHelper.saveCodable(session, forKey: KeychainKey.session),

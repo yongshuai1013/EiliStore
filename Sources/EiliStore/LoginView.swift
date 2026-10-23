@@ -15,6 +15,7 @@ struct LoginView: View {
     @State private var needs2FA = false
     @State private var loginTask: Task<Void, Never>?
     @State private var codeProvider: TwoFACodeProvider?
+    @State private var activeDiagnosticAttempt: UUID?
     @State private var showMethodPicker = false
     @State private var availablePhones: [TrustedPhoneNumber] = []
     @State private var preferredMethod: TwoFactorDeliveryMode = .sms
@@ -169,7 +170,10 @@ struct LoginView: View {
     private func doLogin() {
         guard !isLoading else { return }
         let diagnosticAttempt = EiliLoginDiagnostics.shared.begin(onDevice: EiliAnisetteMode.selected == .onDevice)
+        activeDiagnosticAttempt = diagnosticAttempt
+        EiliLoginDiagnostics.record(.providerCreating, for: diagnosticAttempt)
         let provider = TwoFACodeProvider()
+        EiliLoginDiagnostics.record(.providerReady, for: diagnosticAttempt)
         codeProvider = provider
         isLoading = true
         errorMessage = nil
@@ -177,6 +181,7 @@ struct LoginView: View {
         verificationCode = ""
         codeMessage = ""
         debugLog = ""
+        EiliLoginDiagnostics.record(.loadingStateSet, for: diagnosticAttempt)
 
         provider.onCodeRequired = { [weak provider] mode, rejected in
             Task { @MainActor in
@@ -211,13 +216,20 @@ struct LoginView: View {
             }
         }
 
+        EiliLoginDiagnostics.record(.loginCallbacksReady, for: diagnosticAttempt)
+        EiliLoginDiagnostics.record(.loginTaskCreating, for: diagnosticAttempt)
         loginTask = Task { @MainActor in
+            EiliLoginDiagnostics.record(.loginTaskEntered, for: diagnosticAttempt)
             defer {
                 provider.cancel()
                 if codeProvider === provider { finishLogin() }
             }
             do {
+                // A cancelled/disappeared view must not enter the auth service.
+                try Task.checkCancellation()
+                guard codeProvider === provider else { return }
                 log("開始登入")
+                EiliLoginDiagnostics.record(.authServiceCalling, for: diagnosticAttempt)
                 let success = try await PaxAuthService.shared.login(
                     appleID: appleID,
                     password: password,
@@ -239,11 +251,13 @@ struct LoginView: View {
                 log(message)
             }
         }
+        EiliLoginDiagnostics.record(.loginTaskCreated, for: diagnosticAttempt)
     }
 
     private func finishLogin() {
         codeProvider = nil
         loginTask = nil
+        activeDiagnosticAttempt = nil
         isLoading = false
         needs2FA = false
         showMethodPicker = false
@@ -257,6 +271,9 @@ struct LoginView: View {
         guard isLoading else { return }
         loginTask?.cancel()
         codeProvider?.cancel()
+        if let attempt = activeDiagnosticAttempt {
+            EiliLoginDiagnostics.shared.finish(.cancelled, for: attempt)
+        }
         finishLogin()
         errorMessage = showMessage ? "登入已取消" : nil
     }

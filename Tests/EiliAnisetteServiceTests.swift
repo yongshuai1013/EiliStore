@@ -291,12 +291,26 @@ enum KeychainHelper {
         FakeAnisetteKitControl.configure(blob: localResponseBlob)
         let remoteBlobBeforeLocal = Data([0xBA, 0xAD])
         KeychainHelper.save(remoteBlobBeforeLocal, forKey: "paxstore.anisette.adiblob")
-        let localData = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls)
+        let firstLocalAttempt = EiliLoginDiagnostics.shared.begin(onDevice: true)
+        let localData = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, diagnosticAttempt: firstLocalAttempt)
         check(FakeAnisetteKitControl.calls == 1 && FakeAnisetteKitControl.identifier != nil, "local provider not called")
         let remoteCallsAfterImplicitLocal = await manager.calls
         check(remoteCallsAfterImplicitLocal == remoteCallsBeforeMissing, "saved on-device preference called remote")
         check(localData.machineID == "v0" && localData.oneTimePassword == "v1", "local header conversion")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == localResponseBlob, "local blob persistence")
+        let secondLocalAttempt = EiliLoginDiagnostics.shared.begin(onDevice: true)
+        _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice, diagnosticAttempt: secondLocalAttempt)
+        let nativeStages = ["nativeHeadersStarted", "nativeHeadersReturned", "nativeProvisionStartStarted", "nativeProvisionStartReturned", "nativeProvisionEndStarted", "nativeProvisionEndReturned"]
+        let diagnosticReport = EiliLoginDiagnostics.shared.report()
+        let reportSections = diagnosticReport.components(separatedBy: "前一次：")
+        check(reportSections.count == 2, "expected two retained diagnostic attempts")
+        let latestStages = reportSections[0]
+        let previousStages = reportSections[1]
+        check(nativeStages.allSatisfy { latestStages.contains($0) }, "cached provider native stages missing from second attempt")
+        check(nativeStages.allSatisfy { previousStages.contains($0) }, "cached provider native stages missing from first attempt")
+        let nilAttemptBefore = diagnosticReport
+        _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .remote, diagnosticAttempt: nil)
+        check(EiliLoginDiagnostics.shared.report() == nilAttemptBefore, "nil fetch polluted existing diagnostics")
         KeychainHelper.save(Data(), forKey: "eilistore.anisette.local.adiblob")
         FakeAnisetteKitControl.reset(); FakeAnisetteKitControl.configure(blob: Data(), routingInfo: "v3")
         _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)

@@ -4,9 +4,10 @@ import Foundation
 /// This is a last-known-stage journal, NOT a crash handler or proof of an OS termination reason.
 final class EiliLoginDiagnostics: @unchecked Sendable {
     static let shared = EiliLoginDiagnostics()
-    @TaskLocal static var attempt: UUID?
 
     enum Stage: String, Codable, Sendable {
+        case providerCreating, providerReady, loadingStateSet, loginCallbacksReady
+        case loginTaskCreating, loginTaskCreated, loginTaskEntered, authServiceCalling, authServiceEntered
         case loginTapped, loginStarted, configurationLoading, configurationReady
         case anisetteWaiting, remoteRequestStarted, remoteRequestReturned
         case localPreflightStarted, localPreflightPassed, localAcquisitionStarted
@@ -57,9 +58,31 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
         return id
     }
 
-    static func record(_ stage: Stage) {
-        guard let id = attempt else { return }
+    static func record(_ stage: Stage, for id: UUID?) {
+        guard let id else { return }
         shared.record(stage, for: id)
+    }
+
+    /// The serialized Anisette service rebinds this for each request, including nil.
+    /// A cached native provider must not retain the first login's ID or depend on
+    /// task-local propagation through Swift async / synchronous native boundaries.
+    final class Relay: @unchecked Sendable {
+        private let lock = NSLock()
+        private var id: UUID?
+        private let store: EiliLoginDiagnostics
+
+        init(store: EiliLoginDiagnostics = .shared) { self.store = store }
+
+        func bind(_ id: UUID?) {
+            lock.lock(); defer { lock.unlock() }
+            self.id = id
+        }
+
+        func record(_ stage: Stage) {
+            lock.lock(); defer { lock.unlock() }
+            guard let id else { return }
+            store.record(stage, for: id)
+        }
     }
 
     func record(_ stage: Stage, for id: UUID) {
@@ -87,7 +110,7 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
 
     func report() -> String {
         lock.lock(); defer { lock.unlock() }
-        var lines = ["EiliStore 登入階段診斷 v1", "僅記錄階段、時間、模式及版本；不含帳號、密碼、驗證碼、Session 或 Anisette 內容。", "未完成不等於已確認閃退；也可能是強制關閉或系統終止。"]
+        var lines = ["EiliStore 登入階段診斷 v2", "僅記錄階段、時間、模式及版本；不含帳號、密碼、驗證碼、Session 或 Anisette 內容。", "未完成不等於已確認閃退；也可能是強制關閉或系統終止。"]
         if writeFailed { lines.append("注意：診斷寫入失敗，重開後的紀錄可能不完整。") }
         let formatter = ISO8601DateFormatter()
         for (label, attempt) in [("最近一次", journal.current), ("前一次", journal.previous)] {

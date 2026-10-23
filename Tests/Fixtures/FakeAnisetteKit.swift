@@ -53,12 +53,20 @@ public enum FakeAnisetteKitControl {
 public enum FakeAnisetteError: Error { case expected }
 public enum AnisetteKitLogging { public static func setLogging(_ enabled: Bool) {} }
 public struct UnicornAnisetteDataProvider: Sendable {
-    public init(onStage: (@Sendable (AnisetteProviderStage) -> Void)? = nil) {}
+    let onStage: (@Sendable (AnisetteProviderStage) -> Void)?
+    public init(onStage: (@Sendable (AnisetteProviderStage) -> Void)? = nil) { self.onStage = onStage }
 }
 public final class AnisetteClient: @unchecked Sendable {
-    public init(provisioningDir: URL, requiredLibraries: [String] = [], provider: UnicornAnisetteDataProvider, libraryDirectoryResolver: @escaping @Sendable () throws -> URL) throws { FakeAnisetteKitControl.didInitialize() }
+    private let provider: UnicornAnisetteDataProvider
+    public init(provisioningDir: URL, requiredLibraries: [String] = [], provider: UnicornAnisetteDataProvider, libraryDirectoryResolver: @escaping @Sendable () throws -> URL) throws { self.provider = provider; FakeAnisetteKitControl.didInitialize() }
     public func getAnisetteData(identifier: UUID, storage: ProvisioningStorage, headers: AnisetteRequestHeaders? = nil) async throws -> (headers: [String: String], newBlob: Data?) {
         let existing: Data?; if case .memory(let value) = storage { existing = value } else { existing = nil }
+        provider.onStage?(.headersStarted)
+        provider.onStage?(.headersReturned)
+        provider.onStage?(.provisionStartStarted)
+        provider.onStage?(.provisionStartReturned)
+        provider.onStage?(.provisionEndStarted)
+        provider.onStage?(.provisionEndReturned)
         return try await FakeAnisetteKitControl.run(identifier: identifier, blob: existing, headers: headers?.rawHeaders ?? [:])
     }
 }

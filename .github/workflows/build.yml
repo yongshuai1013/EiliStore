@@ -55,6 +55,7 @@ jobs:
           bash Tests/run-anisette-tests.sh
           bash Tests/run-login-flow-tests.sh
           bash Tests/run-login-diagnostics-tests.sh
+          bash Tests/run-login-handler-tests.sh
           bash Tests/run-anisette-provider-stage-tests.sh
           bash Tests/run-twofa-tests.sh
           bash Tests/run-adi-download-tests.sh
