@@ -42,6 +42,7 @@ struct SideSignClientConfigurationView: View {
     @State private var working = false
 
     private let headerKeys = ["svct", "Header: Version", "X-Apple-App-Info", "User-Agent",
+                              "X-MMe-Client-Info", "X-Xcode-Version", "X-MMe-Client-Info",
                               "appIdKey", "User-Agent",
                               "clientId", "protocolVersion", "servicesProtocolVersion", "User-Agent"]
 
@@ -50,6 +51,9 @@ struct SideSignClientConfigurationView: View {
         ("Header Version", \.grandSlam.headerVersion),
         ("Auth App", \.grandSlam.authApp),
         ("User Agent", \.grandSlam.userAgent),
+        ("Client Info", \.grandSlam.clientInfo),
+        ("Xcode Version", \.grandSlam.xcodeVersion),
+        ("Phone Client Info", \.grandSlam.phoneClientInfo),
         ("App ID Key", \.appleAuth.appIDKey),
         ("User Agent", \.appleAuth.userAgent),
         ("Client ID", \.developerServices.clientID),
@@ -92,9 +96,9 @@ struct SideSignClientConfigurationView: View {
             }
 
             if mode == .interactive {
-                group("GRANDSLAM AUTH (GSA)", keys: 0..<4)
-                group("APPLE AUTH (IDMSA)", keys: 4..<6)
-                group("DEVELOPER SERVICES", keys: 6..<10)
+                group("GRANDSLAM AUTH (GSA)", keys: 0..<7)
+                group("APPLE AUTH (IDMSA)", keys: 7..<9)
+                group("DEVELOPER SERVICES", keys: 9..<13)
             } else {
                 Section("RAW JSON") {
                     TextEditor(text: rawBinding)

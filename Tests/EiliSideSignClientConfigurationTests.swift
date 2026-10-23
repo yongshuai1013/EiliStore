@@ -14,12 +14,13 @@ import SideSign
         check(roundTrip == config, "round trip")
         let headers = try config.resolvedHeaders()
         check(headers.grandSlam.service == "service-v2" && headers.grandSlam.authApp == "default-app" && headers.developerServices.protocolVersion == "default-pv", "default/header mapping")
+        check(headers.grandSlam.clientInfo == "default-client-info" && headers.grandSlam.xcodeVersion == "default-xcode-version" && headers.grandSlam.phoneClientInfo == "default-phone-client-info", "identity header defaults")
         let all = EiliSideSignClientConfiguration(
-            grandSlam: .init(service: "svc", headerVersion: "2", authApp: "auth", userAgent: "gs agent"),
+            grandSlam: .init(service: "svc", headerVersion: "2", authApp: "auth", userAgent: "gs agent", clientInfo: "gs client info", xcodeVersion: "14.2 (14C18)", phoneClientInfo: "gs phone info"),
             appleAuth: .init(appIDKey: "appid", userAgent: "aa agent"),
             developerServices: .init(clientID: "client-id", protocolVersion: "v1", servicesProtocolVersion: "v2", userAgent: "ds agent"))
         let allHeaders = try all.resolvedHeaders()
-        check(allHeaders.grandSlam == .init(service: "svc", headerVersion: "2", authApp: "auth", userAgent: "gs agent"), "all GrandSlam fields")
+        check(allHeaders.grandSlam == .init(service: "svc", headerVersion: "2", authApp: "auth", userAgent: "gs agent", clientInfo: "gs client info", xcodeVersion: "14.2 (14C18)", phoneClientInfo: "gs phone info"), "all GrandSlam fields")
         check(allHeaders.appleAuth == .init(appIDKey: "appid", userAgent: "aa agent"), "all AppleAuth fields")
         check(allHeaders.developerServices == .init(clientID: "client-id", protocolVersion: "v1", servicesProtocolVersion: "v2", userAgent: "ds agent"), "all DeveloperServices fields")
         check(try EiliSideSignClientConfiguration.decodeJSON(all.encodedJSON()) == all, "all-field JSON round trip")
@@ -41,6 +42,11 @@ import SideSign
             rejects { _ = try item.validated() }
         }
         _ = try EiliSideSignClientConfiguration(grandSlam: .init(service: "hello world", userAgent: "hello world")).validated()
+        _ = try EiliSideSignClientConfiguration(grandSlam: .init(xcodeVersion: "14.2 (14C18)", clientInfo: "<Windows> <Windows;10.0.19045>", phoneClientInfo: "<Mac15,7> <macOS;27.0>")).validated()
+        for item in [EiliSideSignClientConfiguration(grandSlam: .init(clientInfo: "é")),
+                     EiliSideSignClientConfiguration(grandSlam: .init(phoneClientInfo: "é"))] {
+            rejects { _ = try item.validated() }
+        }
 
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -73,6 +79,6 @@ import SideSign
         try config.encodedJSON().write(to: target)
         try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
         do { _ = try await store.load(); fatalError("symlink loaded") } catch {}
-        print("EiliSideSignClientConfigurationTests: PASS (ten-field mapping, schema, round-trip, defaults, validation, bounded storage, preservation, portal snapshots and reset isolation)")
+        print("EiliSideSignClientConfigurationTests: PASS (thirteen-field mapping, schema, round-trip, defaults, validation, bounded storage, preservation, portal snapshots and reset isolation)")
     }
 }
