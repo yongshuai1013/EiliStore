@@ -90,13 +90,41 @@ import Glibc
         relay.record(native: .init(operation: .provisionStart, result: .boundaryReturned,
             phase: nil, code: -2, nativeCode: nil))
         relay.record(native: native)
+        let fault = EiliLoginDiagnostics.NativeDetail.Fault(unicornCode: 8, guestPC: UInt64.max,
+            constructorKind: .initArray, constructorIndex: 3, constructorLibrary: .coreadi, reason: .engine)
+        relay.record(native: .init(operation: .provisionStart, result: .providerError,
+            phase: .libraryConstructors, code: -2, nativeCode: nil, fault: fault))
+        relay.record(native: .init(operation: .provisionStart, result: .providerError,
+            phase: .libraryConstructors, code: -2, nativeCode: nil,
+            fault: .init(unicornCode: 0, guestPC: 0x51000000, constructorKind: .dtInit,
+                constructorIndex: 0, constructorLibrary: .storeservicescore, reason: .libc)))
         store.finish(.failed, for: second)
         let nativeReport = EiliLoginDiagnostics(file: file).report()
-        precondition(nativeReport.contains("診斷 v3"))
+        precondition(nativeReport.contains("診斷 v4"))
         precondition(nativeReport.contains("nativeBoundaryReturned op=provisionStart result=boundaryReturned bridge=-2"))
         precondition(nativeReport.contains("nativeResponseFailed op=provisionStart result=providerError bridge=-2 phase=loadLibrary native=-42 (0xffffffd6)"))
+        precondition(nativeReport.contains("fault=engine unicorn=8 guestPC=0xffffffffffffffff ctorLibrary=coreadi ctorKind=initArray ctorIndex=3"))
+        precondition(nativeReport.contains("fault=libc unicorn=0 guestPC=0x51000000 ctorLibrary=storeservicescore ctorKind=dtInit ctorIndex=0"))
         relay.record(native: .init(operation: .headers, result: .invalidJSON, phase: nil, code: -5, nativeCode: nil))
         precondition(!store.report().contains("result=invalidJSON"))
+        var v3Journal = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+        for key in ["current", "previous"] {
+            if var attempt = v3Journal[key] as? [String: Any], let entries = attempt["entries"] as? [[String: Any]] {
+                attempt["entries"] = entries.map { entry in
+                    var entry = entry
+                    if var native = entry["native"] as? [String: Any] {
+                        native.removeValue(forKey: "fault")
+                        entry["native"] = native
+                    }
+                    return entry
+                }
+                v3Journal[key] = attempt
+            }
+        }
+        try JSONSerialization.data(withJSONObject: v3Journal).write(to: file)
+        let v3Report = EiliLoginDiagnostics(file: file).report()
+        precondition(v3Report.contains("native=-42") && v3Report.contains("最近一次：failed"))
+        precondition(!v3Report.contains("guestPC=0x"))
         // An actual v2 shape has no optional native key, and must remain readable.
         var v2Journal = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
         for key in ["current", "previous"] {

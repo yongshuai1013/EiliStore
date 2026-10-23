@@ -237,9 +237,17 @@ actor EiliAnisetteService {
                     // provider errors, paths, JSON, or identity/provisioning data.
                     guard let operation = EiliLoginDiagnostics.NativeDetail.Operation(rawValue: event.operation.rawValue),
                           let result = EiliLoginDiagnostics.NativeDetail.Result(rawValue: event.result.rawValue) else { return }
+                    let fault = event.fault.map { value in
+                        EiliLoginDiagnostics.NativeDetail.Fault(
+                            unicornCode: value.unicornCode, guestPC: value.guestPC,
+                            constructorKind: value.constructorKind.flatMap { .init(rawValue: $0.rawValue) },
+                            constructorIndex: value.constructorIndex,
+                            constructorLibrary: value.constructorLibrary.flatMap { .init(rawValue: $0.rawValue) },
+                            reason: value.reason.flatMap { .init(rawValue: $0.rawValue) })
+                    }
                     diagnostics.record(native: .init(operation: operation, result: result,
                         phase: event.phase.flatMap { EiliLoginDiagnostics.NativeDetail.Phase(rawValue: $0.rawValue) },
-                        code: event.code, nativeCode: event.nativeCode))
+                        code: event.code, nativeCode: event.nativeCode, fault: fault))
                 }), libraryDirectoryResolver: { directory })
         }
         guard let client = localClient else { throw EiliAnisetteError.missingLibraries }

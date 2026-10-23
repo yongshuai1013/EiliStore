@@ -17,20 +17,25 @@ static constexpr size_t kAndroidModuleIterationPageSize = 0x1000;
 
 static inline bool android_module_iteration_fail(EmulatorVM *vm, const char *why) {
     if (vm) {
+        vm->record_fault(EmulatorVM::FaultReason::moduleIteration);
         vm->execution_error = std::string("dl_iterate_phdr: ") + why;
         if (vm->uc) uc_emu_stop(vm->uc);
     }
     return false;
 }
+static inline bool android_module_iteration_checked(EmulatorVM *vm, uc_err code) {
+    if (code != UC_ERR_OK) vm->record_fault(EmulatorVM::FaultReason::moduleIteration, true, code);
+    return code == UC_ERR_OK;
+}
 static inline bool android_module_iteration_reg(EmulatorVM *vm, int reg, uint64_t &v) {
-    if (!vm || !vm->uc || uc_reg_read(vm->uc, reg, &v) != UC_ERR_OK)
+    if (!vm || !vm->uc || !android_module_iteration_checked(vm, uc_reg_read(vm->uc, reg, &v)))
         return android_module_iteration_fail(vm, "register read failed");
     return true;
 }
 static inline bool android_module_iteration_write_guest(EmulatorVM *vm, uint64_t addr,
                                                          const void *src, size_t n) {
     if (!addr || !n || addr > UINT64_MAX - n ||
-        uc_mem_write(vm->uc, addr, src, n) != UC_ERR_OK)
+        !android_module_iteration_checked(vm, uc_mem_write(vm->uc, addr, src, n)))
         return android_module_iteration_fail(vm, "guest metadata write failed");
     return true;
 }
@@ -39,7 +44,7 @@ static inline bool android_module_iteration_readable(EmulatorVM *vm, uint64_t ad
     if (!address || !bytes || address > UINT64_MAX - bytes) return false;
     uc_mem_region *regions = nullptr;
     uint32_t count = 0;
-    if (uc_mem_regions(vm->uc, &regions, &count) != UC_ERR_OK) return false;
+    if (!android_module_iteration_checked(vm, uc_mem_regions(vm->uc, &regions, &count))) return false;
     const uint64_t end = address + bytes;
     uint64_t cursor = address;
     while (cursor < end) {
@@ -77,7 +82,7 @@ static void hook_dl_iterate_phdr(EmulatorVM *vm) {
         !android_module_iteration_reg(vm,UC_ARM64_REG_X1,userdata)) return;
     if (!callback) { android_module_iteration_fail(vm,"null callback"); return; }
     uc_mem_region *regions=nullptr; uint32_t region_count=0;
-    if (uc_mem_regions(vm->uc,&regions,&region_count)!=UC_ERR_OK) {
+    if (!android_module_iteration_checked(vm, uc_mem_regions(vm->uc,&regions,&region_count))) {
         android_module_iteration_fail(vm,"cannot validate callback mapping"); return;
     }
     bool executable=false;
@@ -94,7 +99,7 @@ static void hook_dl_iterate_phdr(EmulatorVM *vm) {
     }
     if (vm->loaded_libraries.empty()) {
         uint64_t zero=0;
-        if (uc_reg_write(vm->uc,UC_ARM64_REG_X0,&zero)!=UC_ERR_OK)
+        if (!android_module_iteration_checked(vm, uc_reg_write(vm->uc,UC_ARM64_REG_X0,&zero)))
             android_module_iteration_fail(vm,"return register write failed");
         return;
     }
@@ -117,7 +122,7 @@ static void hook_dl_iterate_phdr(EmulatorVM *vm) {
         } else {
             std::vector<uint8_t> guest_headers(lib.program_headers.size());
             if (!android_module_iteration_readable(vm, phdr, guest_headers.size()) ||
-                uc_mem_read(vm->uc,phdr,guest_headers.data(),guest_headers.size())!=UC_ERR_OK ||
+                !android_module_iteration_checked(vm, uc_mem_read(vm->uc,phdr,guest_headers.data(),guest_headers.size())) ||
                 guest_headers!=lib.program_headers) {
                 android_module_iteration_fail(vm,"invalid guest program-header metadata"); return;
             }
@@ -129,24 +134,24 @@ static void hook_dl_iterate_phdr(EmulatorVM *vm) {
         if (!android_module_iteration_write_guest(vm,list+i*sizeof(entry),&entry,sizeof(entry))) return;
     }
     if (!vm->module_iteration_trampoline) {
-        if (uc_mem_map(vm->uc,kAndroidModuleIterationTrampolineAddress,kAndroidModuleIterationPageSize,
-                       UC_PROT_READ|UC_PROT_WRITE|UC_PROT_EXEC)!=UC_ERR_OK) {
+        if (!android_module_iteration_checked(vm, uc_mem_map(vm->uc,kAndroidModuleIterationTrampolineAddress,kAndroidModuleIterationPageSize,
+                       UC_PROT_READ|UC_PROT_WRITE|UC_PROT_EXEC))) {
             android_module_iteration_fail(vm,"trampoline mapping failed"); return;
         }
-        if (uc_mem_write(vm->uc,kAndroidModuleIterationTrampolineAddress,
-                         kAndroidModuleIterationTrampolineWords,sizeof(kAndroidModuleIterationTrampolineWords))!=UC_ERR_OK) {
+        if (!android_module_iteration_checked(vm, uc_mem_write(vm->uc,kAndroidModuleIterationTrampolineAddress,
+                         kAndroidModuleIterationTrampolineWords,sizeof(kAndroidModuleIterationTrampolineWords)))) {
             android_module_iteration_fail(vm,"trampoline write failed"); return;
         }
-        if (uc_mem_protect(vm->uc,kAndroidModuleIterationTrampolineAddress,kAndroidModuleIterationPageSize,
-                           UC_PROT_READ|UC_PROT_EXEC)!=UC_ERR_OK) {
+        if (!android_module_iteration_checked(vm, uc_mem_protect(vm->uc,kAndroidModuleIterationTrampolineAddress,kAndroidModuleIterationPageSize,
+                           UC_PROT_READ|UC_PROT_EXEC))) {
             android_module_iteration_fail(vm,"trampoline protection failed"); return;
         }
         vm->module_iteration_trampoline=kAndroidModuleIterationTrampolineAddress;
     }
     uint64_t list_arg=list, count_arg=count, trampoline=vm->module_iteration_trampoline;
-    if (uc_reg_write(vm->uc,UC_ARM64_REG_X2,&list_arg)!=UC_ERR_OK ||
-        uc_reg_write(vm->uc,UC_ARM64_REG_X3,&count_arg)!=UC_ERR_OK ||
-        uc_reg_write(vm->uc,UC_ARM64_REG_PC,&trampoline)!=UC_ERR_OK)
+    if (!android_module_iteration_checked(vm, uc_reg_write(vm->uc,UC_ARM64_REG_X2,&list_arg)) ||
+        !android_module_iteration_checked(vm, uc_reg_write(vm->uc,UC_ARM64_REG_X3,&count_arg)) ||
+        !android_module_iteration_checked(vm, uc_reg_write(vm->uc,UC_ARM64_REG_PC,&trampoline)))
         android_module_iteration_fail(vm,"register write failed");
 }
 #endif

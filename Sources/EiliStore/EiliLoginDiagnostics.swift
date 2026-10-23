@@ -32,11 +32,27 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
             case setProvisioningPathSymbol, setProvisioningPath, setAndroidIDSymbol, setAndroidID
             case provisionStartSymbol, provisionStart, provisionStartOutput, exception
         }
+        struct Fault: Codable, Sendable {
+            enum ConstructorKind: String, Codable, Sendable { case dtInit, initArray }
+            enum ConstructorLibrary: String, Codable, Sendable { case storeservicescore, coreadi, other }
+            enum Reason: String, Codable, Sendable {
+                case engine, unexpectedReturn, functionImport, dataImport, fallbackReturn
+                case libc, pthread, moduleIteration, constructorRead, invalidProcedure, preexistingError
+            }
+            let unicornCode: Int32?
+            let guestPC: UInt64?
+            let constructorKind: ConstructorKind?
+            let constructorIndex: UInt64?
+            let constructorLibrary: ConstructorLibrary?
+            let reason: Reason?
+        }
         let operation: Operation
         let result: Result
         let phase: Phase?
         let code: Int32
         let nativeCode: Int32?
+        // Optional lets v2/v3 journals survive an update without losing previous attempts.
+        var fault: Fault? = nil
     }
     struct Entry: Codable {
         let stage: Stage
@@ -156,7 +172,7 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
 
     func report() -> String {
         lock.lock(); defer { lock.unlock() }
-        var lines = ["EiliStore 登入階段診斷 v3", "僅記錄固定階段、數字狀態碼、時間、模式及版本；不含帳號、密碼、驗證碼、Session 或 Anisette 內容。", "未完成不等於已確認閃退；也可能是強制關閉或系統終止。", "bridge 為 C 邊界回傳碼；native 為 VM 呼叫回傳碼，不一定是 Apple 錯誤碼。"]
+        var lines = ["EiliStore 登入階段診斷 v4", "僅記錄固定階段、數字狀態碼、guest PC、constructor 位置、時間及版本；不含帳號、密碼、驗證碼、Session、檔案路徑或 Anisette 內容。", "未完成不等於已確認閃退；也可能是強制關閉或系統終止。", "bridge 為 C 邊界回傳碼；native 為 VM 呼叫回傳碼，不一定是 Apple 錯誤碼。", "unicorn 為原始引擎狀態；0 不表示 constructor 成功，仍須看 fault。ctor index 為零起算；DT_INIT 固定為 0。PC 是 guest 位址，不是裝置記憶體位址。"]
         if writeFailed { lines.append("注意：診斷寫入失敗，重開後的紀錄可能不完整。") }
         let formatter = ISO8601DateFormatter()
         for (label, attempt) in [("最近一次", journal.current), ("前一次", journal.previous)] {
@@ -169,6 +185,14 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
                     if let phase = native.phase { line += " phase=\(phase.rawValue)" }
                     if let code = native.nativeCode {
                         line += " native=\(code) (0x\(String(UInt32(bitPattern: code), radix: 16)))"
+                    }
+                    if let fault = native.fault {
+                        if let reason = fault.reason { line += " fault=\(reason.rawValue)" }
+                        if let code = fault.unicornCode { line += " unicorn=\(code)" }
+                        if let pc = fault.guestPC { line += " guestPC=0x\(String(pc, radix: 16))" }
+                        if let library = fault.constructorLibrary { line += " ctorLibrary=\(library.rawValue)" }
+                        if let kind = fault.constructorKind { line += " ctorKind=\(kind.rawValue)" }
+                        if let index = fault.constructorIndex { line += " ctorIndex=\(index)" }
                     }
                 }
                 return line

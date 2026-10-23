@@ -97,6 +97,39 @@ struct EmulatorVM {
 
     uc_engine *uc;
     uc_err initialization_error;
+    enum class FaultReason {
+        none, engine, unexpectedReturn, functionImport, dataImport, fallbackReturn,
+        libc, pthread, moduleIteration, constructorRead, invalidProcedure, preexistingError
+    };
+    enum class ConstructorKind { none, dtInit, initArray };
+    enum class ConstructorLibrary { other, storeservicescore, coreadi };
+    struct FaultSnapshot {
+        bool present = false;
+        bool has_unicorn_code = false;
+        bool has_guest_pc = false;
+        bool has_constructor = false;
+        int32_t unicorn_code = 0;
+        uint64_t guest_pc = 0;
+        uint64_t constructor_index = 0;
+        FaultReason reason = FaultReason::none;
+        ConstructorKind constructor_kind = ConstructorKind::none;
+        ConstructorLibrary constructor_library = ConstructorLibrary::other;
+    } fault;
+    struct ConstructorContext {
+        bool active = false;
+        ConstructorKind kind = ConstructorKind::none;
+        ConstructorLibrary library = ConstructorLibrary::other;
+        uint64_t index = 0;
+    } constructor_context;
+    uint32_t execution_depth = 0;
+
+    // Allocation-free fixed vocabulary. First fault wins across nested execution.
+    void record_fault(FaultReason reason, bool has_code = false, int32_t code = 0,
+                      bool has_pc = false, uint64_t pc = 0);
+    void complete_fault(uc_err code, bool has_pc, uint64_t pc);
+    static const char *fault_reason_name(FaultReason reason);
+    static const char *constructor_kind_name(ConstructorKind kind);
+    static const char *constructor_library_name(ConstructorLibrary library);
     // A guest ABI failure must not be mistaken for a successful X0 == 0.
     std::string execution_error;
     std::string dynamic_link_error;

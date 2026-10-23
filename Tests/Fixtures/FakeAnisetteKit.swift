@@ -9,12 +9,24 @@ public enum AnisetteProviderStage: String, Sendable {
 public struct AnisetteProviderDiagnostic: Sendable {
     public enum Operation: String, Sendable { case headers, provisionStart, provisionEnd }
     public enum Result: String, Sendable { case boundaryReturned, parsed, nilResponse, invalidJSON, invalidResponse, providerError }
-    public enum Phase: String, Sendable { case loadLibrary }
+    public enum Phase: String, Sendable { case loadLibrary, libraryConstructors }
+    public struct Fault: Sendable {
+        public enum ConstructorKind: String, Sendable { case dtInit, initArray }
+        public enum ConstructorLibrary: String, Sendable { case storeservicescore, coreadi, other }
+        public enum Reason: String, Sendable { case engine, libc }
+        public let unicornCode: Int32?
+        public let guestPC: UInt64?
+        public let constructorKind: ConstructorKind?
+        public let constructorIndex: UInt64?
+        public let constructorLibrary: ConstructorLibrary?
+        public let reason: Reason?
+    }
     public let operation: Operation
     public let result: Result
     public let phase: Phase?
     public let code: Int32
     public let nativeCode: Int32?
+    public var fault: Fault? = nil
 }
 
 public struct AnisetteRequestHeaders: Sendable {
@@ -83,7 +95,10 @@ public final class AnisetteClient: @unchecked Sendable {
         provider.onStage?(.provisionStartStarted)
         if FakeAnisetteKitControl.throwsError {
             provider.onDiagnostic?(.init(operation: .provisionStart, result: .boundaryReturned, phase: nil, code: -2, nativeCode: nil))
-            provider.onDiagnostic?(.init(operation: .provisionStart, result: .providerError, phase: .loadLibrary, code: -2, nativeCode: -42))
+            provider.onDiagnostic?(.init(operation: .provisionStart, result: .providerError,
+                phase: .libraryConstructors, code: -2, nativeCode: nil,
+                fault: .init(unicornCode: 8, guestPC: 0x51000000, constructorKind: .initArray,
+                    constructorIndex: 3, constructorLibrary: .coreadi, reason: .engine)))
             return try await FakeAnisetteKitControl.run(identifier: identifier, blob: existing, headers: headers?.rawHeaders ?? [:])
         }
         provider.onDiagnostic?(.init(operation: .provisionStart, result: .boundaryReturned, phase: nil, code: 0, nativeCode: nil))

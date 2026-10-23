@@ -59,21 +59,27 @@ struct AnisetteProviderStageTests {
                 result.oneTimePassword == "synthetic-otp" && result.machineID == "synthetic-machine",
                 "synthetic headers")
         }
-        check(headers == [AnisetteProviderStage.headersStarted, .headersReturned], "headers stage order")
+        check(
+            headers == [AnisetteProviderStage.headersStarted, .headersReturned], "headers stage order")
         let started = capture { callback in
             let provider = UnicornAnisetteDataProvider(onStage: callback)
             let result = try! provider.startProvision(
                 libDir: lib, provisioningDir: provisioning, identifier: [1], spim: [2])
             check(result.cpim == Data([1, 2, 3]) && result.session == 1234, "synthetic start result")
         }
-        check(started == [AnisetteProviderStage.provisionStartStarted, .provisionStartReturned], "start stage order")
+        check(
+            started == [AnisetteProviderStage.provisionStartStarted, .provisionStartReturned],
+            "start stage order")
         let ended = capture { callback in
             let provider = UnicornAnisetteDataProvider(onStage: callback)
             let result = try! provider.endProvision(
-                libDir: lib, provisioningDir: provisioning, identifier: [1], session: 1234, ptm: [2], tk: [3])
+                libDir: lib, provisioningDir: provisioning, identifier: [1], session: 1234, ptm: [2],
+                tk: [3])
             check(result == Data([4, 5, 6]), "synthetic end result")
         }
-        check(ended == [AnisetteProviderStage.provisionEndStarted, .provisionEndReturned], "end stage order")
+        check(
+            ended == [AnisetteProviderStage.provisionEndStarted, .provisionEndReturned], "end stage order"
+        )
 
         for (mode, invoke, onlyStarted) in [
             (Int32(1), 0, AnisetteProviderStage.headersStarted),
@@ -92,10 +98,12 @@ struct AnisetteProviderStageTests {
                         _ = try p.getAnisetteHeaders(
                             libDir: lib, provisioningDir: provisioning, identifier: [1], adiPb: [2])
                     case 1:
-                        _ = try p.startProvision(libDir: lib, provisioningDir: provisioning, identifier: [1], spim: [2])
+                        _ = try p.startProvision(
+                            libDir: lib, provisioningDir: provisioning, identifier: [1], spim: [2])
                     default:
                         _ = try p.endProvision(
-                            libDir: lib, provisioningDir: provisioning, identifier: [1], session: 1, ptm: [2], tk: [3])
+                            libDir: lib, provisioningDir: provisioning, identifier: [1], session: 1, ptm: [2],
+                            tk: [3])
                     }
                     fatalError("expected C/JSON failure")
                 } catch {}
@@ -116,10 +124,12 @@ struct AnisetteProviderStageTests {
                     _ = try p.getAnisetteHeaders(
                         libDir: lib, provisioningDir: provisioning, identifier: [1], adiPb: [2])
                 case .provisionStart:
-                    _ = try p.startProvision(libDir: lib, provisioningDir: provisioning, identifier: [1], spim: [2])
+                    _ = try p.startProvision(
+                        libDir: lib, provisioningDir: provisioning, identifier: [1], spim: [2])
                 case .provisionEnd:
                     _ = try p.endProvision(
-                        libDir: lib, provisioningDir: provisioning, identifier: [1], session: 1, ptm: [2], tk: [3])
+                        libDir: lib, provisioningDir: provisioning, identifier: [1], session: 1, ptm: [2],
+                        tk: [3])
                 }
             } catch {}
             return box.snapshot()
@@ -134,23 +144,30 @@ struct AnisetteProviderStageTests {
             "malformed diagnostics")
         let adi = diagnose(3)
         check(
-            adi.map(\.result) == [.boundaryReturned, .providerError] && adi[1].code == -12345, "ADI code diagnostics")
+            adi.map(\.result) == [.boundaryReturned, .providerError] && adi[1].code == -12345,
+            "ADI code diagnostics")
         let loader = diagnose(4)
         check(
             loader[1].nativeCode == -42 && loader[1].phase == .loadLibrary && loader[1].code == -2,
             "loader metadata allowlist")
         let nonzeroSuccess = diagnose(5)
-        check(nonzeroSuccess.map(\.result) == [.boundaryReturned, .providerError], "nonzero code cannot succeed")
+        check(
+            nonzeroSuccess.map(\.result) == [.boundaryReturned, .providerError],
+            "nonzero code cannot succeed")
         let zeroError = diagnose(6)
         check(zeroError.map(\.result) == [.boundaryReturned, .providerError], "zero code error JSON")
         let unsafe = diagnose(7)
         check(
-            unsafe[1].nativeCode == nil && unsafe[1].phase == nil && !String(describing: unsafe).contains("SECRET")
+            unsafe[1].nativeCode == nil && unsafe[1].phase == nil
+                && !String(describing: unsafe).contains("SECRET")
                 && !String(describing: unsafe).contains("private"), "diagnostics exclude payload/path")
         let fractional = diagnose(8)
-        check(fractional[1].nativeCode == nil && fractional[1].phase == .loadLibrary, "invalid native number ignored")
+        check(
+            fractional[1].nativeCode == nil && fractional[1].phase == .loadLibrary,
+            "invalid native number ignored")
         let missing = diagnose(9)
-        check(missing.map(\.result) == [.boundaryReturned, .invalidResponse], "missing fields diagnosed")
+        check(
+            missing.map(\.result) == [.boundaryReturned, .invalidResponse], "missing fields diagnosed")
         for operation in [AnisetteProviderDiagnostic.Operation.provisionStart, .provisionEnd] {
             for mode in Int32(1)...9 {
                 let expected = diagnose(mode)
@@ -158,7 +175,8 @@ struct AnisetteProviderStageTests {
                 check(
                     actual.count == 2 && actual.allSatisfy { $0.operation == operation },
                     "operation metadata or event count incorrect")
-                check(actual.map(\.result) == expected.map(\.result), "operation error classification mismatch")
+                check(
+                    actual.map(\.result) == expected.map(\.result), "operation error classification mismatch")
                 check(actual.map(\.code) == expected.map(\.code), "operation bridge code mismatch")
                 check(actual.map(\.nativeCode) == expected.map(\.nativeCode), "operation native code lost")
                 check(actual.map(\.phase) == expected.map(\.phase), "operation native phase lost")
@@ -169,24 +187,82 @@ struct AnisetteProviderStageTests {
         let successProvider = UnicornAnisetteDataProvider(onDiagnostic: { successBox.append($0) })
         _ = try successProvider.getAnisetteHeaders(
             libDir: lib, provisioningDir: provisioning, identifier: [1], adiPb: [2])
-        check(successBox.snapshot().map(\.result) == [.boundaryReturned, .parsed], "success diagnostics")
+        check(
+            successBox.snapshot().map(\.result) == [.boundaryReturned, .parsed], "success diagnostics")
+        setMode(0)
+
+        let expectedFaults: [(Int32, AnisetteProviderDiagnostic.Fault)] = [
+            (
+                10,
+                .init(
+                    unicornCode: 8, guestPC: 1_234_605_616_436_508_552,
+                    constructorKind: .dtInit, constructorIndex: 0,
+                    constructorLibrary: .storeservicescore, reason: .constructorRead)
+            ),
+            (
+                11,
+                .init(
+                    unicornCode: 8, guestPC: UInt64.max,
+                    constructorKind: .initArray, constructorIndex: 3,
+                    constructorLibrary: .coreadi, reason: .constructorRead)
+            ),
+            (
+                12,
+                .init(
+                    unicornCode: 8, constructorKind: .initArray, constructorIndex: 4,
+                    constructorLibrary: .coreadi, reason: .constructorRead)
+            ),
+            (15, .init(reason: .libc)),
+            (20, .init(unicornCode: 0, reason: .libc)),
+        ]
+        for operation in AnisetteProviderDiagnostic.Operation.allCases {
+            for (mode, expectedFault) in expectedFaults {
+                let events = diagnose(mode, operation: operation)
+                check(
+                    events.count == 2 && events[0].fault == nil && events[1].fault == expectedFault,
+                    "fault metadata lost for \(operation): \(events)")
+            }
+            for mode in [Int32(13), 14, 16, 17, 18, 19] {
+                let events = diagnose(mode, operation: operation)
+                check(events[1].fault == nil, "invalid fault values accepted: \(events[1].fault as Any)")
+            }
+        }
         setMode(0)
 
         // The protocol declares async requirements; verify dispatch via that surface too.
         let asyncBox = StageBox()
-        let provider: any AnisetteDataProvider = UnicornAnisetteDataProvider(onStage: { asyncBox.append($0) })
+        let provider: any AnisetteDataProvider = UnicornAnisetteDataProvider(onStage: {
+            asyncBox.append($0)
+        })
         _ = try await provider.getAnisetteHeaders(
             libDir: lib, provisioningDir: provisioning, identifier: [1], adiPb: [2])
         let asyncStages = asyncBox.snapshot()
         check(
-            asyncStages == [AnisetteProviderStage.headersStarted, .headersReturned], "async protocol dispatch stages")
+            asyncStages == [AnisetteProviderStage.headersStarted, .headersReturned],
+            "async protocol dispatch stages")
         let asyncDiagnostics = DiagnosticBox()
-        let asyncDiagnosticProvider: any AnisetteDataProvider = UnicornAnisetteDataProvider(onDiagnostic: {
-            asyncDiagnostics.append($0)
-        })
+        let asyncDiagnosticProvider: any AnisetteDataProvider = UnicornAnisetteDataProvider(
+            onDiagnostic: {
+                asyncDiagnostics.append($0)
+            })
         _ = try await asyncDiagnosticProvider.getAnisetteHeaders(
             libDir: lib, provisioningDir: provisioning, identifier: [1], adiPb: [2])
-        check(asyncDiagnostics.snapshot().map(\.result) == [.boundaryReturned, .parsed], "async diagnostic dispatch")
+        check(
+            asyncDiagnostics.snapshot().map(\.result) == [.boundaryReturned, .parsed],
+            "async diagnostic dispatch")
+        setMode(10)
+        let asyncFaultDiagnostics = DiagnosticBox()
+        let asyncFaultProvider: any AnisetteDataProvider = UnicornAnisetteDataProvider(onDiagnostic: {
+            asyncFaultDiagnostics.append($0)
+        })
+        do {
+            _ = try await asyncFaultProvider.getAnisetteHeaders(
+                libDir: lib, provisioningDir: provisioning, identifier: [1], adiPb: [2]
+            )
+        } catch {}
+        check(
+            asyncFaultDiagnostics.snapshot()[1].fault?.constructorKind == .dtInit,
+            "async diagnostic fault dispatch")
         print("Anisette provider stage synthetic tests passed")
     }
 }

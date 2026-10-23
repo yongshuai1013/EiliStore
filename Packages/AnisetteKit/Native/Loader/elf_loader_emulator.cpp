@@ -92,6 +92,78 @@ static inline int gettimeofday(struct timeval *tv, void *tz) {
 #include "android_pthread_sync.h"
 #include "android_module_iteration.h"
 
+void EmulatorVM::record_fault(FaultReason reason, bool has_code, int32_t code,
+                              bool has_pc, uint64_t pc) {
+    if (fault.present) return;
+    fault.present = true;
+    fault.reason = reason;
+    fault.has_unicorn_code = has_code && code >= 0;
+    fault.unicorn_code = code;
+    // A callback failure captures its actual instruction PC before outer emulation
+    // can advance it. Array metadata reads outside execution have no guest PC.
+    if (!has_pc && execution_depth && uc) {
+        has_pc = uc_reg_read(uc, UC_ARM64_REG_PC, &pc) == UC_ERR_OK;
+    }
+    fault.has_guest_pc = has_pc;
+    fault.guest_pc = pc;
+    if (constructor_context.active) {
+        fault.has_constructor = true;
+        fault.constructor_kind = constructor_context.kind;
+        fault.constructor_library = constructor_context.library;
+        fault.constructor_index = constructor_context.index;
+    }
+}
+
+void EmulatorVM::complete_fault(uc_err code, bool has_pc, uint64_t pc) {
+    // Supplement a bounds/ABI stop with emulation's actual result, never replace
+    // an earlier uc_mem_* error or a nested procedure's more specific snapshot.
+    if (!fault.present) return;
+    if (!fault.has_unicorn_code) {
+        fault.has_unicorn_code = true;
+        fault.unicorn_code = static_cast<int32_t>(code);
+    }
+    if (!fault.has_guest_pc && has_pc) {
+        fault.has_guest_pc = true;
+        fault.guest_pc = pc;
+    }
+}
+
+const char *EmulatorVM::fault_reason_name(FaultReason reason) {
+    switch (reason) {
+    case FaultReason::engine: return "engine";
+    case FaultReason::unexpectedReturn: return "unexpectedReturn";
+    case FaultReason::functionImport: return "functionImport";
+    case FaultReason::dataImport: return "dataImport";
+    case FaultReason::fallbackReturn: return "fallbackReturn";
+    case FaultReason::libc: return "libc";
+    case FaultReason::pthread: return "pthread";
+    case FaultReason::moduleIteration: return "moduleIteration";
+    case FaultReason::constructorRead: return "constructorRead";
+    case FaultReason::invalidProcedure: return "invalidProcedure";
+    case FaultReason::preexistingError: return "preexistingError";
+    case FaultReason::none: return nullptr;
+    }
+    return nullptr;
+}
+
+const char *EmulatorVM::constructor_kind_name(ConstructorKind kind) {
+    switch (kind) {
+    case ConstructorKind::dtInit: return "dtInit";
+    case ConstructorKind::initArray: return "initArray";
+    case ConstructorKind::none: return "dtInit"; // Not emitted without context.
+    }
+    return "dtInit";
+}
+
+const char *EmulatorVM::constructor_library_name(ConstructorLibrary library) {
+    switch (library) {
+    case ConstructorLibrary::storeservicescore: return "storeservicescore";
+    case ConstructorLibrary::coreadi: return "coreadi";
+    case ConstructorLibrary::other: return "other";
+    }
+    return "other";
+}
+
 static bool supported_guest_import(const std::string &name) {
     static const std::unordered_set<std::string> names = {
         "__android_log_print",
@@ -310,12 +382,15 @@ uint64_t EmulatorVM::register_import(const std::string &name) {
 
     if (name.empty() || name.size() >= 4096 ||
         next_import_address > kImportAddress + kImportSize - 8) {
+        record_fault(FaultReason::functionImport);
         execution_error = "Invalid guest function import or exhausted import area: " + name;
         return 0;
     }
     uint64_t stub_addr = next_import_address;
     uint32_t ret_insn = 0xD65F03C0;
-    if (!uc || uc_mem_write(uc, stub_addr, &ret_insn, sizeof(ret_insn)) != UC_ERR_OK) {
+    const uc_err stub_error = uc ? uc_mem_write(uc, stub_addr, &ret_insn, sizeof(ret_insn)) : UC_ERR_HANDLE;
+    if (!uc || stub_error != UC_ERR_OK) {
+        record_fault(FaultReason::functionImport, uc != nullptr, stub_error);
         execution_error = "Cannot write guest import stub: " + name;
         return 0;
     }
@@ -337,6 +412,7 @@ uint64_t EmulatorVM::register_data_import(const std::string &name) {
     auto cached = imported_symbols.find(name);
     if (cached != imported_symbols.end()) return cached->second;
     if (name.empty() || name.size() >= 4096) {
+        record_fault(FaultReason::dataImport);
         execution_error = "Invalid guest data import: " + name;
         return 0;
     }
@@ -344,7 +420,10 @@ uint64_t EmulatorVM::register_data_import(const std::string &name) {
     // a real vtable, CF object or Android runtime, and must not imply login success.
     const uint8_t zeros[256] = {};
     const uint64_t address = heap.alloc(sizeof zeros);
-    if (!uc || !address || uc_mem_write(uc, address, zeros, sizeof zeros) != UC_ERR_OK) {
+    const bool tried_write = uc && address;
+    const uc_err data_error = tried_write ? uc_mem_write(uc, address, zeros, sizeof zeros) : UC_ERR_OK;
+    if (!tried_write || data_error != UC_ERR_OK) {
+        record_fault(FaultReason::dataImport, tried_write, data_error);
         execution_error = "Cannot allocate guest data placeholder: " + name;
         return 0;
     }
@@ -1187,7 +1266,9 @@ static void import_callback_router(uc_engine *uc, uint64_t address, uint32_t siz
         if (calls++ == 0)
             LOG_UC("[SideStore compatibility] Unimplemented function returned zero: %s\n", name.c_str());
         uint64_t ret = 0;
-        if (uc_reg_write(uc, UC_ARM64_REG_X0, &ret) != UC_ERR_OK) {
+        const uc_err write_error = uc_reg_write(uc, UC_ARM64_REG_X0, &ret);
+        if (write_error != UC_ERR_OK) {
+            vm->record_fault(EmulatorVM::FaultReason::fallbackReturn, true, write_error);
             vm->execution_error = "Cannot return from guest fallback: " + name;
             uc_emu_stop(uc);
         }
@@ -1470,27 +1551,46 @@ void relocate_all_vm_libraries(EmulatorVM *vm) {
 }
 
 bool run_library_constructors(EmulatorVM *vm) {
+    if (!vm) return false;
+    if (!vm->execution_error.empty()) {
+        vm->record_fault(EmulatorVM::FaultReason::preexistingError);
+        return false;
+    }
+    vm->fault = {};
+    vm->constructor_context = {};
     for (const auto &lib : vm->loaded_libraries) {
+        const auto library = lib.name == kADISymbols.lib_ssc
+            ? EmulatorVM::ConstructorLibrary::storeservicescore
+            : (lib.name == kADISymbols.lib_core_adi
+                ? EmulatorVM::ConstructorLibrary::coreadi : EmulatorVM::ConstructorLibrary::other);
         if (lib.init_func) {
+            vm->constructor_context = {true, EmulatorVM::ConstructorKind::dtInit, library, 0};
             LOG_UC("[Emulator] Calling DT_INIT at 0x%llx for '%s'...\n",
                    (unsigned long long)lib.init_func, lib.name.c_str());
             run_vm_procedure(vm, lib.init_func, {});
+            vm->constructor_context = {};
             if (!vm->execution_error.empty()) return false;
         }
         if (lib.init_array && lib.init_arraysz) {
             size_t count = lib.init_arraysz / 8;
             for (size_t i = 0; i < count; i++) {
+                vm->constructor_context = {true, EmulatorVM::ConstructorKind::initArray, library, i};
                 uint64_t ctor_ptr = 0;
-                if (uc_mem_read(vm->uc, lib.init_array + i * 8, &ctor_ptr, 8) != UC_ERR_OK) {
+                const uc_err read_error = uc_mem_read(vm->uc, lib.init_array + i * 8, &ctor_ptr, 8);
+                if (read_error != UC_ERR_OK) {
+                    vm->record_fault(EmulatorVM::FaultReason::constructorRead, true, read_error);
                     vm->execution_error = "Unreadable guest constructor array";
+                    vm->constructor_context = {};
                     return false;
                 }
                 if (ctor_ptr != 0 && ctor_ptr != UINT64_MAX) {
                     LOG_UC("[Emulator] Calling DT_INIT_ARRAY[%zu] at 0x%llx for '%s'...\n",
                            i, (unsigned long long)ctor_ptr, lib.name.c_str());
                     run_vm_procedure(vm, ctor_ptr, {});
+                    vm->constructor_context = {};
                     if (!vm->execution_error.empty()) return false;
                 }
+                vm->constructor_context = {};
             }
         }
     }
@@ -1506,8 +1606,22 @@ uint64_t get_vm_symbol_address(EmulatorVM *vm, const std::string &name) {
 }
 
 int32_t run_vm_procedure(EmulatorVM *vm, uint64_t proc_addr, const std::vector<uint64_t> &args, uint64_t timeout_us, size_t max_count) {
-    if (!vm || !vm->uc || !proc_addr) return -1;
-    if (!vm->execution_error.empty()) return -1000;
+    if (!vm) return -1;
+    if (!vm->execution_error.empty()) {
+        vm->record_fault(EmulatorVM::FaultReason::preexistingError);
+        return -1000;
+    }
+    if (!vm->execution_depth) vm->fault = {};
+    if (!vm->uc || !proc_addr) {
+        vm->record_fault(EmulatorVM::FaultReason::invalidProcedure);
+        vm->execution_error = "Invalid guest procedure";
+        return -1;
+    }
+    struct ExecutionDepth {
+        EmulatorVM *vm;
+        explicit ExecutionDepth(EmulatorVM *value) : vm(value) { ++vm->execution_depth; }
+        ~ExecutionDepth() { --vm->execution_depth; }
+    } depth(vm);
     g_active_vm = vm;
 
     if (timeout_us == 0) timeout_us = 0;
@@ -1553,8 +1667,13 @@ int32_t run_vm_procedure(EmulatorVM *vm, uint64_t proc_addr, const std::vector<u
     uc_err err = uc_emu_start(vm->uc, proc_addr, kReturnAddress, timeout_us, max_count);
 
     uint64_t pc = 0;
-    uc_reg_read(vm->uc, UC_ARM64_REG_PC, &pc);
+    bool has_pc = uc_reg_read(vm->uc, UC_ARM64_REG_PC, &pc) == UC_ERR_OK;
     if (err != UC_ERR_OK || pc != kReturnAddress || !vm->execution_error.empty()) {
+        vm->record_fault(err != UC_ERR_OK ? EmulatorVM::FaultReason::engine
+            : (!vm->execution_error.empty() ? EmulatorVM::FaultReason::preexistingError
+                                            : EmulatorVM::FaultReason::unexpectedReturn),
+            true, err, has_pc, pc);
+        vm->complete_fault(err, has_pc, pc);
         if (vm->execution_error.empty()) vm->execution_error = "Guest execution did not return normally";
         LOG_UC("[Emulator] Execution stopped with status %d: %s at PC=0x%llx (expected 0x%llx)\n",
                (int)err, uc_strerror(err), (unsigned long long)pc, (unsigned long long)kReturnAddress);

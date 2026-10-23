@@ -14,33 +14,45 @@
 
 static constexpr uint64_t kAndroidStringBufferLimit = 64ULL * 1024 * 1024;
 
-static inline bool android_string_fail(EmulatorVM *vm, const std::string &why) {
+static inline bool android_string_fail(EmulatorVM *vm, const std::string &why,
+                                       bool has_code = false, uc_err code = UC_ERR_OK) {
     if (vm && vm->uc) {
+        vm->record_fault(EmulatorVM::FaultReason::libc, has_code, code);
         vm->execution_error = why;
         uc_emu_stop(vm->uc);
     }
     return false;
 }
 static inline bool android_string_reg(EmulatorVM *vm, int reg, uint64_t &v) {
-    if (!vm || !vm->uc || uc_reg_read(vm->uc, reg, &v) != UC_ERR_OK)
+    if (!vm || !vm->uc)
         return android_string_fail(vm, "android libc string: register read failed");
+    const uc_err code = uc_reg_read(vm->uc, reg, &v);
+    if (code != UC_ERR_OK)
+        return android_string_fail(vm, "android libc string: register read failed", true, code);
     return true;
 }
 static inline bool android_string_set(EmulatorVM *vm, uint64_t v) {
-    if (uc_reg_write(vm->uc, UC_ARM64_REG_X0, &v) != UC_ERR_OK)
-        return android_string_fail(vm, "android libc string: return register write failed");
+    const uc_err code = uc_reg_write(vm->uc, UC_ARM64_REG_X0, &v);
+    if (code != UC_ERR_OK)
+        return android_string_fail(vm, "android libc string: return register write failed", true, code);
     return true;
 }
 static inline bool android_string_read(EmulatorVM *vm, uint64_t addr, uint8_t *dst, size_t n) {
     if (!n) return true;
-    if (!addr || addr > UINT64_MAX - n || uc_mem_read(vm->uc, addr, dst, n) != UC_ERR_OK)
+    if (!addr || addr > UINT64_MAX - n)
         return android_string_fail(vm, "android libc string: invalid guest memory read");
+    const uc_err code = uc_mem_read(vm->uc, addr, dst, n);
+    if (code != UC_ERR_OK)
+        return android_string_fail(vm, "android libc string: invalid guest memory read", true, code);
     return true;
 }
 static inline bool android_string_write(EmulatorVM *vm, uint64_t addr, const uint8_t *src, size_t n) {
     if (!n) return true;
-    if (!addr || addr > UINT64_MAX - n || uc_mem_write(vm->uc, addr, src, n) != UC_ERR_OK)
+    if (!addr || addr > UINT64_MAX - n)
         return android_string_fail(vm, "android libc string: invalid guest memory write");
+    const uc_err code = uc_mem_write(vm->uc, addr, src, n);
+    if (code != UC_ERR_OK)
+        return android_string_fail(vm, "android libc string: invalid guest memory write", true, code);
     return true;
 }
 static inline bool android_string_read_cstr(EmulatorVM *vm, uint64_t addr, std::string &out) {

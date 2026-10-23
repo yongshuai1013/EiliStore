@@ -10,9 +10,17 @@ inline bool dispatch_android_pthread_sync(EmulatorVM *vm, const std::string &nam
     const bool known = name == "pthread_mutex_init" || name == "pthread_mutex_destroy" || name == "pthread_mutex_lock" || name == "pthread_mutex_unlock" || name == "pthread_mutex_trylock" || name == "pthread_rwlock_init" || name == "pthread_rwlock_destroy" || name == "pthread_rwlock_rdlock" || name == "pthread_rwlock_wrlock" || name == "pthread_rwlock_unlock" || name == "pthread_rwlock_tryrdlock" || name == "pthread_rwlock_trywrlock";
     if (!known) return false;
     if (!vm || !vm->uc) return true;
-    auto fail = [&](const char *why) { vm->execution_error = std::string("Android pthread sync: ") + why + " (" + name + ")"; uc_emu_stop(vm->uc); };
+    auto checked = [&](uc_err code) {
+        if (code != UC_ERR_OK) vm->record_fault(EmulatorVM::FaultReason::pthread, true, code);
+        return code == UC_ERR_OK;
+    };
+    auto fail = [&](const char *why) {
+        vm->record_fault(EmulatorVM::FaultReason::pthread);
+        vm->execution_error = std::string("Android pthread sync: ") + why + " (" + name + ")";
+        uc_emu_stop(vm->uc);
+    };
     uint64_t args[2]{};
-    if (uc_reg_read(vm->uc, UC_ARM64_REG_X0, &args[0]) != UC_ERR_OK || uc_reg_read(vm->uc, UC_ARM64_REG_X1, &args[1]) != UC_ERR_OK) { fail("cannot read arguments"); return true; }
+    if (!checked(uc_reg_read(vm->uc, UC_ARM64_REG_X0, &args[0])) || !checked(uc_reg_read(vm->uc, UC_ARM64_REG_X1, &args[1]))) { fail("cannot read arguments"); return true; }
     const bool rw = name.find("rwlock") != std::string::npos;
     const bool init = name == (rw ? "pthread_rwlock_init" : "pthread_mutex_init");
     const bool destroy = name == (rw ? "pthread_rwlock_destroy" : "pthread_mutex_destroy");
@@ -21,7 +29,7 @@ inline bool dispatch_android_pthread_sync(EmulatorVM *vm, const std::string &nam
     auto validate = [&](uint64_t p, size_t n, uint32_t perms) {
         if (!p || p > UINT64_MAX - n) return false;
         uc_mem_region *regions = nullptr; uint32_t count = 0;
-        if (uc_mem_regions(vm->uc, &regions, &count) != UC_ERR_OK) return false;
+        if (!checked(uc_mem_regions(vm->uc, &regions, &count))) return false;
         uint64_t cursor = p, end = p + n; bool ok = true;
         while (cursor < end) {
             uint64_t next = cursor;
@@ -36,9 +44,9 @@ inline bool dispatch_android_pthread_sync(EmulatorVM *vm, const std::string &nam
         if (regions) uc_free(regions);
         return ok;
     };
-    auto read = [&](uint64_t p, void *out, size_t n) { return validate(p,n,UC_PROT_READ) && uc_mem_read(vm->uc,p,out,n)==UC_ERR_OK; };
-    auto write = [&](uint64_t p, const void *in, size_t n) { return validate(p,n,UC_PROT_READ|UC_PROT_WRITE) && uc_mem_write(vm->uc,p,in,n)==UC_ERR_OK; };
-    auto result_out = [&](uint64_t value) { if (uc_reg_write(vm->uc,UC_ARM64_REG_X0,&value)!=UC_ERR_OK) fail("cannot write result"); };
+    auto read = [&](uint64_t p, void *out, size_t n) { return validate(p,n,UC_PROT_READ) && checked(uc_mem_read(vm->uc,p,out,n)); };
+    auto write = [&](uint64_t p, const void *in, size_t n) { return validate(p,n,UC_PROT_READ|UC_PROT_WRITE) && checked(uc_mem_write(vm->uc,p,in,n)); };
+    auto result_out = [&](uint64_t value) { if (!checked(uc_reg_write(vm->uc,UC_ARM64_REG_X0,&value))) fail("cannot write result"); };
     if (!address || address > UINT64_MAX-bytes || (address & 3)) { fail("invalid or unaligned object address"); return true; }
     if (init && args[1] && ((args[1]&7) || args[1]>UINT64_MAX-8 || !validate(args[1],8,UC_PROT_READ))) { fail("invalid attr mapping or alignment"); return true; }
     if (!validate(address, bytes, UC_PROT_READ | UC_PROT_WRITE)) { fail("object is not readable and writable"); return true; }

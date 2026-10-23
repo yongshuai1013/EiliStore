@@ -26,6 +26,17 @@ int32_t get_anisette_headers_uc(const char *l, const char *p, const uint8_t *i,
     if (mode == 7) return result(out, "{\"error\":\"secret\",\"diagnostic_phase\":\"/private/path injected\",\"native_code\":true}", -3, 0);
     if (mode == 8) return result(out, "{\"error\":\"secret\",\"diagnostic_phase\":\"loadLibrary\",\"native_code\":1.5}", -3, 0);
     if (mode == 9) return result(out, "{}", 0, 0);
+    if (mode == 10) return result(out, "{\"error\":\"synthetic\",\"unicorn_code\":8,\"guest_pc\":1234605616436508552,\"constructor_kind\":\"dtInit\",\"constructor_index\":0,\"constructor_library\":\"storeservicescore\",\"fault_reason\":\"constructorRead\"}", -8, 0);
+    if (mode == 11) return result(out, "{\"error\":\"synthetic\",\"unicorn_code\":8,\"guest_pc\":18446744073709551615,\"constructor_kind\":\"initArray\",\"constructor_index\":3,\"constructor_library\":\"coreadi\",\"fault_reason\":\"constructorRead\"}", -8, 0);
+    if (mode == 12) return result(out, "{\"error\":\"synthetic\",\"unicorn_code\":8,\"constructor_kind\":\"initArray\",\"constructor_index\":4,\"constructor_library\":\"coreadi\",\"fault_reason\":\"constructorRead\"}", -8, 0);
+    if (mode == 13) return result(out, "{\"error\":\"secret\",\"unicorn_code\":true,\"guest_pc\":1.5,\"constructor_index\":-1,\"constructor_kind\":\"otherInjected\",\"constructor_library\":\"/secret\",\"fault_reason\":\"private\"}", -8, 0);
+    if (mode == 14) return result(out, "{\"error\":\"synthetic\",\"guest_pc\":18446744073709551616,\"constructor_index\":18446744073709551616}", -8, 0);
+    if (mode == 15) return result(out, "{\"error\":\"synthetic\",\"fault_reason\":\"libc\"}", -8, 0);
+    if (mode == 16) return result(out, "{\"error\":\"synthetic\",\"unicorn_code\":-1,\"guest_pc\":-1,\"constructor_index\":true}", -2, 0);
+    if (mode == 17) return result(out, "{\"error\":\"synthetic\",\"unicorn_code\":2147483648,\"guest_pc\":\"123\",\"constructor_index\":1.5}", -2, 0);
+    if (mode == 18) return result(out, "{\"error\":\"synthetic\",\"unicorn_code\":\"8\",\"guest_pc\":true,\"constructor_index\":\"3\"}", -2, 0);
+    if (mode == 19) return result(out, "{\"error\":\"synthetic\",\"unicorn_code\":1.5,\"guest_pc\":-1,\"constructor_index\":false}", -2, 0);
+    if (mode == 20) return result(out, "{\"error\":\"synthetic\",\"unicorn_code\":0,\"fault_reason\":\"libc\"}", -2, 0);
     return result(out, "{\"X-Apple-I-MD\":\"synthetic-otp\",\"X-Apple-I-MD-M\":\"synthetic-machine\"}", 0, 0);
 }
 int32_t start_provision_uc(const char *l, const char *p, const uint8_t *i,

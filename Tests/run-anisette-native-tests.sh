@@ -9,7 +9,7 @@ WORK="${EILI_NATIVE_TEST_WORK:-${TMPDIR:-/tmp}/eilistore-native-tci-a53ddc9}"
 SRC="${EILI_UNICORN_SOURCE:-$WORK/src}"
 BUILD="${EILI_NATIVE_TEST_BUILD:-$WORK/build}"
 CXX="${CXX:-c++}"
-for tool in cmake git "$CXX"; do command -v "$tool" >/dev/null || { echo "Missing $tool" >&2; exit 2; }; done
+for tool in cmake git python3 "$CXX"; do command -v "$tool" >/dev/null || { echo "Missing $tool" >&2; exit 2; }; done
 if [[ ! -d "$SRC/.git" ]]; then
   [[ -z "${EILI_UNICORN_SOURCE:-}" ]] || { echo "Provided Unicorn source is not a checkout" >&2; exit 2; }
   mkdir -p "$SRC"
@@ -49,4 +49,10 @@ LINK=(-pthread)
 "$OUT/elf-headers"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeVMStartupTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/vm-startup"
 "$OUT/vm-startup"
-echo 'PASS: native TCI synthetic ABI, linker, VM startup and provisioning-output tests (not Apple login verification)'
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeConstructorFaultTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/constructor-faults"
+python3 - "$OUT/constructor-faults" <<'PY'
+import subprocess
+import sys
+subprocess.run([sys.argv[1]], check=True, timeout=90)
+PY
+echo 'PASS: native TCI synthetic ABI, linker, VM startup, constructor-fault and provisioning-output tests (not Apple login verification)'

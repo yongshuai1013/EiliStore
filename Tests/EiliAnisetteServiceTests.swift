@@ -320,7 +320,7 @@ enum KeychainHelper {
             fatalError("synthetic native error was swallowed")
         } catch FakeAnisetteError.expected {}
         let failedNativeReport = EiliLoginDiagnostics.shared.report().components(separatedBy: "前一次：")[0]
-        check(failedNativeReport.contains("nativeResponseFailed op=provisionStart result=providerError bridge=-2 phase=loadLibrary native=-42 (0xffffffd6)"), "safe numeric native detail lost")
+        check(failedNativeReport.contains("nativeResponseFailed op=provisionStart result=providerError bridge=-2 phase=libraryConstructors fault=engine unicorn=8 guestPC=0x51000000 ctorLibrary=coreadi ctorKind=initArray ctorIndex=3"), "safe constructor fault detail lost")
         check(!failedNativeReport.contains("nativeProvisionStartReturned"), "failed parse falsely reported successful return")
         KeychainHelper.save(Data(), forKey: "eilistore.anisette.local.adiblob")
         FakeAnisetteKitControl.reset(); FakeAnisetteKitControl.configure(blob: Data(), routingInfo: "v3")

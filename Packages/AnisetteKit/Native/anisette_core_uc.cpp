@@ -71,7 +71,8 @@ static bool read_guest_bytes(EmulatorVM *vm, uint64_t pointer_slot,
 }
 
 static std::string diagnostic_error_json(const std::string &error, const char *phase,
-                                         bool has_native_code = false, int32_t native_code = 0) {
+                                         bool has_native_code = false, int32_t native_code = 0,
+                                         const EmulatorVM::FaultSnapshot *fault = nullptr) {
     std::stringstream ss;
     ss << "{\"error\":\"";
     for (char c : error) {
@@ -82,6 +83,18 @@ static std::string diagnostic_error_json(const std::string &error, const char *p
     }
     ss << "\",\"diagnostic_phase\":\"" << phase << "\"";
     if (has_native_code) ss << ",\"native_code\":" << native_code;
+    if (fault && fault->present) {
+        if (fault->has_unicorn_code) ss << ",\"unicorn_code\":" << fault->unicorn_code;
+        if (fault->has_guest_pc) ss << ",\"guest_pc\":" << fault->guest_pc;
+        if (fault->has_constructor) {
+            ss << ",\"constructor_kind\":\"" << EmulatorVM::constructor_kind_name(fault->constructor_kind)
+               << "\",\"constructor_index\":" << fault->constructor_index
+               << ",\"constructor_library\":\"" << EmulatorVM::constructor_library_name(fault->constructor_library) << "\"";
+        }
+        if (const char *reason = EmulatorVM::fault_reason_name(fault->reason)) {
+            ss << ",\"fault_reason\":\"" << reason << "\"";
+        }
+    }
     ss << "}";
     return ss.str();
 }
@@ -264,7 +277,7 @@ static int32_t get_anisette_headers_uc_impl(
     const char *diagnostic_phase = "libraryLoad";
     bool has_native_code = false; int32_t native_code = 0;
     if (!setup_vm_and_adi(vm, lib_dir, provisioning_dir, identifier, uuid_prov_dir, err, &diagnostic_phase, has_native_code, native_code)) {
-        *out_json = strdup(diagnostic_error_json(err, diagnostic_phase, has_native_code, native_code).c_str());
+        *out_json = strdup(diagnostic_error_json(err, diagnostic_phase, has_native_code, native_code, vm ? &vm->fault : nullptr).c_str());
         return ANISETTE_ERR_LOADER_FAILED;
     }
 
@@ -350,7 +363,7 @@ static int32_t start_provision_uc_impl(
     const char *diagnostic_phase = "libraryLoad";
     bool has_native_code = false; int32_t native_code = 0;
     if (!setup_vm_and_adi(vm, lib_dir, provisioning_dir, identifier, uuid_prov_dir, err, &diagnostic_phase, has_native_code, native_code)) {
-        *out_json = strdup(diagnostic_error_json(err, diagnostic_phase, has_native_code, native_code).c_str());
+        *out_json = strdup(diagnostic_error_json(err, diagnostic_phase, has_native_code, native_code, vm ? &vm->fault : nullptr).c_str());
         return ANISETTE_ERR_LOADER_FAILED;
     }
 
@@ -432,7 +445,7 @@ static int32_t end_provision_uc_impl(
     const char *diagnostic_phase = "libraryLoad";
     bool has_native_code = false; int32_t native_code = 0;
     if (!setup_vm_and_adi(vm, lib_dir, provisioning_dir, identifier, uuid_prov_dir, err, &diagnostic_phase, has_native_code, native_code)) {
-        *out_json = strdup(diagnostic_error_json(err, diagnostic_phase, has_native_code, native_code).c_str());
+        *out_json = strdup(diagnostic_error_json(err, diagnostic_phase, has_native_code, native_code, vm ? &vm->fault : nullptr).c_str());
         return ANISETTE_ERR_LOADER_FAILED;
     }
 
