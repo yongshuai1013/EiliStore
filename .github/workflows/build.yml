@@ -130,7 +130,7 @@ jobs:
           PY
           # Audit the exact Unicorn slice SPM resolved from the fork release
           # (zip SHA-256 pinned in the fork Package.swift, verified above).
-          FORK_UNICORN=$(find build/DerivedData/SourcePackages/artifacts -name 'libunicorn.a' -path '*ios-arm64*' | head -n 1)
+          FORK_UNICORN=$(find build/DerivedData/SourcePackages/artifacts -name 'libunicorn.a' -path '*/ios-arm64/libunicorn.a' | head -n 1)
           [[ -n "$FORK_UNICORN" ]] || { echo 'ERROR: fork Unicorn artifact not found in SPM artifacts' >&2; exit 1; }
           python3 Scripts/audit-ios-archive.py "$FORK_UNICORN"
           if grep -Ei 'built for newer.*than being linked' build/xcodebuild.log; then
