@@ -161,7 +161,7 @@ int main() {
     }
     for (const auto name : {"_ZTVMissing", "_ZTINope", "_ZTSNope", "kCFMissing", "kAudioMissing",
                             "OBJC_Missing", "__CFConstantStringClassReference", "__sF", "environ",
-                            "__stack_chk_guard", "__ctype_"}) {
+                            "__ctype_"}) {
         vm.execution_error.clear();
         const auto data = resolve(name, 0x10);
         assert(data && vm.execution_error.empty());
@@ -170,6 +170,14 @@ int main() {
         assert(uc_mem_read(vm.uc, data, zeros, sizeof zeros) == UC_ERR_OK);
         for (const auto value : zeros) assert(value == 0);
     }
+    const auto guard = resolve("__stack_chk_guard", 0x10);
+    assert(guard == kGuestTLSAddress + kGuestTLSStackGuardOffset);
+    assert(resolve("__stack_chk_guard", 0x11) == guard);
+    assert(!vm.fallback_data_imports.count("__stack_chk_guard"));
+    assert(!vm.import_stubs.count(guard));
+    uint64_t guardValue = 0;
+    assert(uc_mem_read(vm.uc, guard, &guardValue, sizeof guardValue) == UC_ERR_OK);
+    assert(guardValue != 0);
     vm.execution_error.clear();
     assert(resolve("synthetic_answer", 0x16) == code && vm.execution_error.empty()); // Real exports win, as upstream.
     vm.execution_error.clear();

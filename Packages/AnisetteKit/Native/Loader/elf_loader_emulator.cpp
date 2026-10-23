@@ -11,9 +11,9 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-
 #if defined(_WIN32) || defined(_MSC_VER)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -355,6 +355,30 @@ EmulatorVM::EmulatorVM()
     if (!initialized(uc_mem_map(uc, errno_addr, 0x10000, UC_PROT_READ | UC_PROT_WRITE))) return;
     uint32_t zero = 0;
     if (!initialized(uc_mem_write(uc, errno_addr, &zero, sizeof(zero)))) return;
+    // Bionic arm64 compiler-generated stack protectors load TPIDR_EL0 + 0x28.
+    // Initialize once per VM, before any library constructor. Do not reset on
+    // procedure entry, derive from host TLS, or repair invalid guest accesses.
+    uint64_t stack_guard = 0;
+    try {
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
+        arc4random_buf(&stack_guard, sizeof(stack_guard));
+#elif defined(__linux__)
+        int result;
+        do { result = getentropy(&stack_guard, sizeof(stack_guard)); } while (result != 0 && errno == EINTR);
+        if (result != 0) { initialization_error = UC_ERR_RESOURCE; return; }
+#else
+        std::random_device entropy;
+        stack_guard = std::uniform_int_distribution<uint64_t>{}(entropy);
+#endif
+    } catch (...) {
+        initialization_error = UC_ERR_RESOURCE;
+        return;
+    }
+    if (!stack_guard) { initialization_error = UC_ERR_RESOURCE; return; }
+    if (!initialized(uc_mem_map(uc, kGuestTLSAddress, kGuestTLSSize, UC_PROT_READ | UC_PROT_WRITE))) return;
+    if (!initialized(uc_mem_write(uc, kGuestTLSAddress + kGuestTLSStackGuardOffset,
+                                   &stack_guard, sizeof(stack_guard)))) return;
+    if (!initialized(uc_reg_write(uc, UC_ARM64_REG_TPIDR_EL0, &kGuestTLSAddress))) return;
     if (!initialized(uc_hook_add(uc, &invalid_hook, UC_HOOK_MEM_UNMAPPED, (void *)hook_mem_invalid, this, 1, 0))) return;
     uc_hook intr_hook = 0;
     if (!initialized(uc_hook_add(uc, &intr_hook, UC_HOOK_INTR, (void *)hook_intr, this, 1, 0))) return;
@@ -415,6 +439,19 @@ uint64_t EmulatorVM::register_data_import(const std::string &name) {
         record_fault(FaultReason::dataImport);
         execution_error = "Invalid guest data import: " + name;
         return 0;
+    }
+    // Bionic copies the global guard value into its TLS stack-guard slot.
+    // For our single guest thread, alias that one guest word so both access
+    // forms agree. Never expose a host pointer or classify this as a dummy ABI.
+    if (name == "__stack_chk_guard") {
+        if (!uc || initialization_error != UC_ERR_OK) {
+            record_fault(FaultReason::dataImport);
+            execution_error = "Guest stack guard is not initialized";
+            return 0;
+        }
+        const uint64_t address = kGuestTLSAddress + kGuestTLSStackGuardOffset;
+        imported_symbols[name] = address;
+        return address;
     }
     // Deliberately match upstream's fixed-size placeholder. This does not supply
     // a real vtable, CF object or Android runtime, and must not imply login success.
@@ -1612,6 +1649,11 @@ int32_t run_vm_procedure(EmulatorVM *vm, uint64_t proc_addr, const std::vector<u
         return -1000;
     }
     if (!vm->execution_depth) vm->fault = {};
+    if (vm->initialization_error != UC_ERR_OK) {
+        vm->record_fault(EmulatorVM::FaultReason::engine, true, vm->initialization_error);
+        vm->execution_error = "Guest VM initialization failed";
+        return -1000 - static_cast<int32_t>(vm->initialization_error);
+    }
     if (!vm->uc || !proc_addr) {
         vm->record_fault(EmulatorVM::FaultReason::invalidProcedure);
         vm->execution_error = "Invalid guest procedure";

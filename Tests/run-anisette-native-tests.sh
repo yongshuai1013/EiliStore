@@ -50,9 +50,11 @@ LINK=(-pthread)
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeVMStartupTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/vm-startup"
 "$OUT/vm-startup"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeConstructorFaultTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/constructor-faults"
-python3 - "$OUT/constructor-faults" <<'PY'
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeGuestTLSTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/guest-tls"
+python3 - "$OUT/constructor-faults" "$OUT/guest-tls" <<'PY'
 import subprocess
 import sys
-subprocess.run([sys.argv[1]], check=True, timeout=90)
+for executable in sys.argv[1:]:
+    subprocess.run([executable], check=True, timeout=90)
 PY
-echo 'PASS: native TCI synthetic ABI, linker, VM startup, constructor-fault and provisioning-output tests (not Apple login verification)'
+echo 'PASS: native TCI synthetic ABI, linker, VM startup, guest stack-guard TLS, constructor-fault and provisioning-output tests (not Apple login verification)'

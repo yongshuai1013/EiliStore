@@ -42,6 +42,12 @@ static const uint32_t kStackSize     = 2u * 1024u * 1024u;
 static const uint64_t kImportAddress = 0x80000000;
 static const uint32_t kImportSize    = 0x10000;
 
+// Single emulated thread, stack protector only; not a Bionic TCB/pthread ABI.
+// Separate from libraries, heap, stack, errno and module-iteration trampoline.
+static const uint64_t kGuestTLSAddress = 0x60000000;
+static const uint32_t kGuestTLSSize = 0x1000;
+static const uint64_t kGuestTLSStackGuardOffset = 5 * sizeof(uint64_t); // Bionic arm64 +0x28
+
 struct AndroidSystemProperties {
     const char *sdk_version  = "30";
     const char *release      = "11";
