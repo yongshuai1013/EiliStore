@@ -42,7 +42,7 @@ import SideSign
             rejects { _ = try item.validated() }
         }
         _ = try EiliSideSignClientConfiguration(grandSlam: .init(service: "hello world", userAgent: "hello world")).validated()
-        _ = try EiliSideSignClientConfiguration(grandSlam: .init(xcodeVersion: "14.2 (14C18)", clientInfo: "<Windows> <Windows;10.0.19045>", phoneClientInfo: "<Mac15,7> <macOS;27.0>")).validated()
+        _ = try EiliSideSignClientConfiguration(grandSlam: .init(clientInfo: "<Windows> <Windows;10.0.19045>", xcodeVersion: "14.2 (14C18)", phoneClientInfo: "<Mac15,7> <macOS;27.0>")).validated()
         for item in [EiliSideSignClientConfiguration(grandSlam: .init(clientInfo: "é")),
                      EiliSideSignClientConfiguration(grandSlam: .init(phoneClientInfo: "é"))] {
             rejects { _ = try item.validated() }
