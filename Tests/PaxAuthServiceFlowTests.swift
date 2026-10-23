@@ -44,6 +44,14 @@ private final class LockedValue<Value>: @unchecked Sendable {
         KeychainHelper.data[sk] = s; KeychainHelper.data[ik] = i; UserDefaults.standard.set("old-mode", forKey: EiliAnisetteMode.sessionKey); return (s, i)
     }
     static func unchanged(_ old: (Data, Data)) { assert(KeychainHelper.data[sk] == old.0 && KeychainHelper.data[ik] == old.1); assert(UserDefaults.standard.string(forKey: EiliAnisetteMode.sessionKey) == "old-mode") }
+    static func diagnosticOutcome(_ expected: String) {
+        let report = EiliLoginDiagnostics.shared.report()
+        let current = report.components(separatedBy: "前一次")[0]
+        assert(current.contains("最近一次：\(expected)"))
+        for sensitive in ["@example.invalid", "123456", "654321", "anisette-snapshot", "sms-id", "voice-id"] {
+            assert(!report.contains(sensitive), "diagnostics leaked synthetic input")
+        }
+    }
     static func main() async throws {
         let service = PaxAuthService.shared
         UserDefaults.standard.set(EiliAnisetteMode.remote.rawValue, forKey: EiliAnisetteMode.preferenceKey)
@@ -54,6 +62,7 @@ private final class LockedValue<Value>: @unchecked Sendable {
         EiliAnisetteService.shared.onFetch = { UserDefaults.standard.set(EiliAnisetteMode.onDevice.rawValue, forKey: EiliAnisetteMode.preferenceKey) }
         let retryLogin = try await service.login(appleID: "input@example.invalid", password: "unused", codeProvider: retry)
         assert(retryLogin)
+        diagnosticOutcome("succeeded")
         assert(events.get() == ["trustedDevice:false", "trustedDevice:true"] && SideSign.DeveloperPortal.responses.count == 2)
         assert(SideSign.DeveloperPortal.authCalls == 1 && SideSign.DeveloperPortal.remainingRequests == 0)
         assert(SideSign.DeveloperPortal.observedAnisette?.machineID == "anisette-snapshot" && SideSign.DeveloperPortal.observedXcodeVersion == "test-xcode")
@@ -85,6 +94,7 @@ private final class LockedValue<Value>: @unchecked Sendable {
             SideSign.DeveloperPortal.reset(result: .failure(portalError)); let before = EiliAnisetteService.shared.calls
             do { _ = try await service.login(appleID: "new@example.invalid", password: "bad", codeProvider: p); fatalError("portal error expected") } catch {}
             unchanged(old); assert(EiliAnisetteService.shared.calls == before + 1 && !logged.get())
+            diagnosticOutcome("failed")
         }
         // Cancel from inside the actual pending code callback.
         do {
@@ -93,6 +103,7 @@ private final class LockedValue<Value>: @unchecked Sendable {
             SideSign.DeveloperPortal.reset(requests: [.sms(phoneID: "p", phoneNumber: "***", error: nil)])
             do { _ = try await service.login(appleID: "new@example.invalid", password: "p", codeProvider: p); fatalError("cancel expected") } catch {}
             unchanged(old); assert(!logged.get() && SideSign.DeveloperPortal.responses.isEmpty)
+            diagnosticOutcome("cancelled")
         }
         // Fake authenticate hook cancels before portal completion; production's post-auth cancellation guard must preserve prior state.
         do {
@@ -101,6 +112,7 @@ private final class LockedValue<Value>: @unchecked Sendable {
             SideSign.DeveloperPortal.reset(result: .success(.init(appleID: "must-not-save@example.invalid")), onAuthenticate: { p.cancel() })
             do { _ = try await service.login(appleID: "new@example.invalid", password: "p", codeProvider: p); fatalError("post-portal cancel expected") } catch {}
             unchanged(old); assert(!logged.get())
+            diagnosticOutcome("cancelled")
         }
         // Keep both transactional-write failure cases.
         for failed in [sk, ik] {
@@ -109,11 +121,13 @@ private final class LockedValue<Value>: @unchecked Sendable {
             SideSign.DeveloperPortal.reset(result: .success(.init(appleID: "new@example.invalid")))
             do { _ = try await service.login(appleID: "new@example.invalid", password: "p", codeProvider: p); fatalError("save failure expected") } catch {}
             unchanged(old); assert(!logged.get())
+            diagnosticOutcome("failed")
         }
         let old = try oldState(), calls = SideSign.DeveloperPortal.authCalls
         EiliAnisetteService.shared.failure = true
         do { _ = try await service.login(appleID: "new@example.invalid", password: "p"); fatalError("fetch failure expected") } catch {}
         assert(SideSign.DeveloperPortal.authCalls == calls); unchanged(old)
+        diagnosticOutcome("failed")
         print("PaxAuthServiceFlowTests: PASS (offline fake SDK; no Apple login/network)")
     }
 }

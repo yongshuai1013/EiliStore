@@ -1,0 +1,121 @@
+import Foundation
+
+/// Fixed vocabulary only: never pass credentials, headers, URLs, errors or provider payloads here.
+/// This is a last-known-stage journal, NOT a crash handler or proof of an OS termination reason.
+final class EiliLoginDiagnostics: @unchecked Sendable {
+    static let shared = EiliLoginDiagnostics()
+    @TaskLocal static var attempt: UUID?
+
+    enum Stage: String, Codable, Sendable {
+        case loginTapped, loginStarted, configurationLoading, configurationReady
+        case anisetteWaiting, remoteRequestStarted, remoteRequestReturned
+        case localPreflightStarted, localPreflightPassed, localAcquisitionStarted
+        case localClientCreating, localClientReady, localRequestStarted, localRequestReturned
+        case nativeHeadersStarted, nativeHeadersReturned
+        case nativeProvisionStartStarted, nativeProvisionStartReturned
+        case nativeProvisionEndStarted, nativeProvisionEndReturned
+        case anisetteReady, authenticationStarted, verificationWaiting
+        case authenticationReturned, sessionSaving
+    }
+    enum Outcome: String, Codable { case unfinished, succeeded, failed, cancelled }
+    struct Entry: Codable { let stage: Stage; let date: Date }
+    struct Attempt: Codable {
+        let id: UUID
+        let mode: String
+        let build: String
+        let os: String
+        var entries: [Entry]
+        var outcome: Outcome
+    }
+    private struct Journal: Codable { var current: Attempt?; var previous: Attempt? }
+    private let lock = NSLock()
+    private let file: URL
+    private var journal = Journal()
+    private var writeFailed = false
+
+    init(file: URL? = nil) {
+        self.file = file ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("EiliStore/Diagnostics/login-stages.json")
+        if let size = try? self.file.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+           size <= 65536, let data = try? Data(contentsOf: self.file),
+           let saved = try? JSONDecoder().decode(Journal.self, from: data) {
+            journal = saved
+        }
+    }
+
+    @discardableResult
+    func begin(onDevice: Bool) -> UUID {
+        lock.lock(); defer { lock.unlock() }
+        let id = UUID()
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        journal.previous = journal.current
+        journal.current = Attempt(id: id, mode: onDevice ? "onDevice" : "remote",
+            build: "\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"))",
+            os: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)",
+            entries: [Entry(stage: .loginTapped, date: Date())], outcome: .unfinished)
+        persist()
+        return id
+    }
+
+    static func record(_ stage: Stage) {
+        guard let id = attempt else { return }
+        shared.record(stage, for: id)
+    }
+
+    func record(_ stage: Stage, for id: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        guard journal.current?.id == id, journal.current?.outcome == .unfinished else { return }
+        journal.current?.entries.append(Entry(stage: stage, date: Date()))
+        if let count = journal.current?.entries.count, count > 48 {
+            journal.current?.entries.removeFirst(count - 48)
+        }
+        persist()
+    }
+
+    func finish(_ outcome: Outcome, for id: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        guard journal.current?.id == id, journal.current?.outcome == .unfinished else { return }
+        journal.current?.outcome = outcome
+        persist()
+    }
+
+    func clear() {
+        lock.lock(); defer { lock.unlock() }
+        journal = Journal()
+        persist()
+    }
+
+    func report() -> String {
+        lock.lock(); defer { lock.unlock() }
+        var lines = ["EiliStore 登入階段診斷 v1", "僅記錄階段、時間、模式及版本；不含帳號、密碼、驗證碼、Session 或 Anisette 內容。", "未完成不等於已確認閃退；也可能是強制關閉或系統終止。"]
+        if writeFailed { lines.append("注意：診斷寫入失敗，重開後的紀錄可能不完整。") }
+        let formatter = ISO8601DateFormatter()
+        for (label, attempt) in [("最近一次", journal.current), ("前一次", journal.previous)] {
+            guard let attempt else { continue }
+            lines += ["", "\(label)：\(attempt.outcome.rawValue)", "模式：\(attempt.mode)；App：\(attempt.build)；系統：\(attempt.os)"]
+            lines += attempt.entries.map { "\(formatter.string(from: $0.date)) \($0.stage.rawValue)" }
+        }
+        if journal.current == nil { lines.append("尚無登入階段紀錄。") }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Persist before entering risky work. No signal/exception handlers, no network, bounded storage.
+    private func persist() {
+        do {
+            let directory = file.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var excluded = directory
+            var values = URLResourceValues(); values.isExcludedFromBackup = true
+            try? excluded.setResourceValues(values)
+            let data = try JSONEncoder().encode(journal)
+            try data.write(to: file, options: .atomic)
+            let handle = try FileHandle(forWritingTo: file)
+            defer { try? handle.close() }
+            try handle.synchronize()
+            writeFailed = false
+        } catch {
+            // Diagnostics must never turn an otherwise recoverable login into a failure.
+            writeFailed = true
+        }
+    }
+}

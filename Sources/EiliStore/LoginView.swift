@@ -108,6 +108,13 @@ struct LoginView: View {
                 .disabled(isLoading)
             }
 
+            Section(footer: Text("若登入時 App 結束，重開後可在此查看並複製最後階段；不含帳號、密碼或驗證碼。")) {
+                NavigationLink(destination: EiliLoginDiagnosticsView(loginInProgress: isLoading)) {
+                    Text("登入診斷（重開後仍保留）")
+                }
+                .disabled(isLoading)
+            }
+
             if !debugLog.isEmpty {
                 Section(header: Text("調試日誌")) {
                     ScrollView {
@@ -161,6 +168,7 @@ struct LoginView: View {
 
     private func doLogin() {
         guard !isLoading else { return }
+        let diagnosticAttempt = EiliLoginDiagnostics.shared.begin(onDevice: EiliAnisetteMode.selected == .onDevice)
         let provider = TwoFACodeProvider()
         codeProvider = provider
         isLoading = true
@@ -213,7 +221,8 @@ struct LoginView: View {
                 let success = try await PaxAuthService.shared.login(
                     appleID: appleID,
                     password: password,
-                    codeProvider: provider
+                    codeProvider: provider,
+                    diagnosticAttempt: diagnosticAttempt
                 )
                 try Task.checkCancellation()
                 guard codeProvider === provider else { return }
@@ -315,6 +324,9 @@ struct AccountView: View {
                 }
             }
             Section(header: Text("Developer Portal Services")) {
+                NavigationLink(destination: EiliLoginDiagnosticsView(loginInProgress: false)) {
+                    Text("登入診斷（重開後仍保留）")
+                }
                 NavigationLink(destination: DeveloperPortalView()) {
                     Label("Developer Portal", systemImage: "person.crop.circle.badge.checkmark")
                 }

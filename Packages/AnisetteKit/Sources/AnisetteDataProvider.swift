@@ -10,6 +10,12 @@ import Foundation
 import anisette_core
 
 
+public enum AnisetteProviderStage: String, Sendable {
+    case headersStarted, headersReturned
+    case provisionStartStarted, provisionStartReturned
+    case provisionEndStarted, provisionEndReturned
+}
+
 public protocol AnisetteDataProvider: Sendable {
     var requiresLocalLibraries: Bool { get }
     func getAnisetteHeaders(libDir: String, provisioningDir: String, identifier: [UInt8], adiPb: [UInt8]) async throws -> AnisetteDataResponse
@@ -79,27 +85,40 @@ extension AnisetteDataProvider {
 public struct UnicornAnisetteDataProvider: AnisetteDataProvider {
     public var requiresLocalLibraries: Bool { true }
 
-    public init() {}
+    private let onStage: (@Sendable (AnisetteProviderStage) -> Void)?
+
+    public init(onStage: (@Sendable (AnisetteProviderStage) -> Void)? = nil) {
+        self.onStage = onStage
+    }
 
     public func getAnisetteHeaders(libDir: String, provisioningDir: String, identifier: [UInt8], adiPb: [UInt8]) throws -> AnisetteDataResponse {
         var outPtr: CStringPointer? = nil
+        onStage?(.headersStarted)
         let res = get_anisette_headers_uc(libDir, provisioningDir, identifier, adiPb, UInt32(adiPb.count), &outPtr)
         defer { if let p = outPtr { free_c_string(p) } }
-        return try parseHeadersResponse(code: res, outPtr: outPtr, providerName: "Unicorn")
+        let response = try parseHeadersResponse(code: res, outPtr: outPtr, providerName: "Unicorn")
+        onStage?(.headersReturned)
+        return response
     }
 
     public func startProvision(libDir: String, provisioningDir: String, identifier: [UInt8], spim: [UInt8]) throws -> (cpim: Data, session: UInt32) {
         var outPtr: CStringPointer? = nil
+        onStage?(.provisionStartStarted)
         let res = start_provision_uc(libDir, provisioningDir, identifier, spim, UInt32(spim.count), &outPtr)
         defer { if let p = outPtr { free_c_string(p) } }
-        return try parseStartProvisionResponse(code: res, outPtr: outPtr, providerName: "Unicorn")
+        let response = try parseStartProvisionResponse(code: res, outPtr: outPtr, providerName: "Unicorn")
+        onStage?(.provisionStartReturned)
+        return response
     }
 
     public func endProvision(libDir: String, provisioningDir: String, identifier: [UInt8], session: UInt32, ptm: [UInt8], tk: [UInt8]) throws -> Data {
         var outPtr: CStringPointer? = nil
+        onStage?(.provisionEndStarted)
         let res = end_provision_uc(libDir, provisioningDir, identifier, session, ptm, UInt32(ptm.count), tk, UInt32(tk.count), &outPtr)
         defer { if let p = outPtr { free_c_string(p) } }
-        return try parseEndProvisionResponse(code: res, outPtr: outPtr, providerName: "Unicorn")
+        let response = try parseEndProvisionResponse(code: res, outPtr: outPtr, providerName: "Unicorn")
+        onStage?(.provisionEndReturned)
+        return response
     }
 }
 

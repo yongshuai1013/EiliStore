@@ -381,6 +381,7 @@ static void hook_malloc(EmulatorVM *vm) {
     uint64_t size = 0;
     uc_reg_read(vm->uc, UC_ARM64_REG_X0, &size);
     uint64_t ptr = size > UINT64_MAX - 16 ? 0 : vm->heap.alloc(size + 16);
+    if (ptr) vm->malloc_sizes[ptr] = size;
     uc_reg_write(vm->uc, UC_ARM64_REG_X0, &ptr);
 }
 
@@ -392,6 +393,7 @@ static void hook_calloc(EmulatorVM *vm) {
     if (size == 0 || num <= (UINT64_MAX - 16) / size) {
         const uint64_t total = num * size;
         ptr = vm->heap.alloc(total + 16);
+        if (ptr) vm->malloc_sizes[ptr] = total;
         // A failed guest allocation must not allocate a host vector anyway.
         // Zero in fixed chunks so temporary host memory stays bounded.
         const uint8_t zeros[4096] = {};
@@ -411,11 +413,36 @@ static void hook_realloc(EmulatorVM *vm) {
     uint64_t ptr = 0, new_size = 0;
     uc_reg_read(vm->uc, UC_ARM64_REG_X0, &ptr);
     uc_reg_read(vm->uc, UC_ARM64_REG_X1, &new_size);
-    uint64_t new_ptr = new_size > UINT64_MAX - 16 ? 0 : vm->heap.alloc(new_size + 16);
-    if (new_ptr && ptr != 0 && new_size > 0) {
-        std::vector<uint8_t> buf(new_size);
-        uc_mem_read(vm->uc, ptr, buf.data(), new_size);
-        uc_mem_write(vm->uc, new_ptr, buf.data(), new_size);
+    uint64_t new_ptr = 0;
+    if (new_size == 0) {
+        // The heap is a bump allocator and cannot release the old block.
+    } else if (ptr == 0) {
+        if (new_size <= UINT64_MAX - 16) {
+            new_ptr = vm->heap.alloc(new_size + 16);
+            if (new_ptr) vm->malloc_sizes[new_ptr] = new_size;
+        }
+    } else {
+        const auto old = vm->malloc_sizes.find(ptr);
+        if (old != vm->malloc_sizes.end() && new_size <= UINT64_MAX - 16) {
+            const uint64_t old_size = old->second;
+            const uint64_t copy_size = std::min(old_size, new_size);
+            new_ptr = vm->heap.alloc(new_size + 16);
+            if (new_ptr) {
+                uint8_t chunk[4096];
+                bool copied = true;
+                for (uint64_t offset = 0; offset < copy_size;) {
+                    const size_t count = static_cast<size_t>(std::min<uint64_t>(sizeof chunk, copy_size - offset));
+                    if (uc_mem_read(vm->uc, ptr + offset, chunk, count) != UC_ERR_OK ||
+                        uc_mem_write(vm->uc, new_ptr + offset, chunk, count) != UC_ERR_OK) {
+                        copied = false;
+                        break;
+                    }
+                    offset += count;
+                }
+                if (copied) vm->malloc_sizes[new_ptr] = new_size;
+                else new_ptr = 0; // Old allocation and its metadata remain valid.
+            }
+        }
     }
     uc_reg_write(vm->uc, UC_ARM64_REG_X0, &new_ptr);
 }

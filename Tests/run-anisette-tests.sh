@@ -8,6 +8,7 @@ trap 'rm -rf "$build" "$isolated_home"' EXIT
 swiftc -swift-version 6 -parse-as-library -emit-module -emit-object -module-name SideSign \
   -emit-module-path "$build/SideSign.swiftmodule" Tests/Fixtures/EiliAnisetteSideSignStub.swift -o "$build/SideSign.o"
 swiftc -swift-version 6 -strict-concurrency=complete -parse-as-library -I "$build" \
+  Sources/EiliStore/EiliLoginDiagnostics.swift \
   Sources/EiliStore/ADIElfMetadata.swift Sources/EiliStore/ADILibraryCompatibility.swift Tests/Fixtures/ADIElfFixture.swift \
   Tests/Fixtures/FakeADIRuntimeLibraryDownloader.swift \
   Sources/EiliStore/EiliAnisetteClientConfiguration.swift Sources/EiliStore/EiliAnisetteConfigurationAdapter.swift \
@@ -16,6 +17,7 @@ HOME="$isolated_home" "$build/anisette-tests-remote"
 swiftc -swift-version 6 -parse-as-library -emit-module -emit-object -module-name AnisetteKit \
   -emit-module-path "$build/AnisetteKit.swiftmodule" Tests/Fixtures/FakeAnisetteKit.swift -o "$build/AnisetteKit.o"
 swiftc -swift-version 6 -strict-concurrency=complete -parse-as-library -D EILI_ON_DEVICE_ANISETTE -I "$build" \
+  Sources/EiliStore/EiliLoginDiagnostics.swift \
   Sources/EiliStore/ADIElfMetadata.swift Sources/EiliStore/ADILibraryCompatibility.swift Tests/Fixtures/ADIElfFixture.swift \
   Tests/Fixtures/FakeADIRuntimeLibraryDownloader.swift \
   Sources/EiliStore/EiliAnisetteClientConfiguration.swift Sources/EiliStore/EiliAnisetteConfigurationAdapter.swift \

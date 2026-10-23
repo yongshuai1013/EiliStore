@@ -1,5 +1,11 @@
 import Foundation
 
+public enum AnisetteProviderStage: String, Sendable {
+    case headersStarted, headersReturned
+    case provisionStartStarted, provisionStartReturned
+    case provisionEndStarted, provisionEndReturned
+}
+
 public struct AnisetteRequestHeaders: Sendable {
     public var rawHeaders: [String: String]
     public init(rawHeaders: [String: String]) { self.rawHeaders = rawHeaders }
@@ -46,7 +52,9 @@ public enum FakeAnisetteKitControl {
 }
 public enum FakeAnisetteError: Error { case expected }
 public enum AnisetteKitLogging { public static func setLogging(_ enabled: Bool) {} }
-public struct UnicornAnisetteDataProvider: Sendable { public init() {} }
+public struct UnicornAnisetteDataProvider: Sendable {
+    public init(onStage: (@Sendable (AnisetteProviderStage) -> Void)? = nil) {}
+}
 public final class AnisetteClient: @unchecked Sendable {
     public init(provisioningDir: URL, requiredLibraries: [String] = [], provider: UnicornAnisetteDataProvider, libraryDirectoryResolver: @escaping @Sendable () throws -> URL) throws { FakeAnisetteKitControl.didInitialize() }
     public func getAnisetteData(identifier: UUID, storage: ProvisioningStorage, headers: AnisetteRequestHeaders? = nil) async throws -> (headers: [String: String], newBlob: Data?) {

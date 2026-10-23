@@ -102,6 +102,9 @@ struct EmulatorVM {
     std::string dynamic_link_error;
     PageAllocator heap;
     PageAllocator library_alloc;
+    // Exact requested sizes for guest malloc-family pointers only. Other heap
+    // users retain the allocator's existing bump-allocation semantics.
+    std::unordered_map<uint64_t, uint64_t> malloc_sizes;
     
     std::unordered_map<std::string, uint64_t> imported_symbols;
     std::unordered_map<uint64_t, std::string> import_stubs;

@@ -33,6 +33,34 @@ int main() {
     assert(call(vm, "realloc", {allocation, kHeapSize}) == 0);
     uint8_t retained = 0;
     assert(uc_mem_read(vm.uc, allocation, &retained, 1) == UC_ERR_OK && retained == oldValue);
+    // realloc copies the exact requested allocation size, not padding or the
+    // caller's larger request; the bump allocator leaves the original intact.
+    const auto small = call(vm, "malloc", {4});
+    assert(small);
+    const uint8_t initial[] = {0x11, 0x22, 0x33, 0x44};
+    assert(uc_mem_write(vm.uc, small, initial, sizeof initial) == UC_ERR_OK);
+    uint8_t adjacent = 0xE7;
+    assert(uc_mem_write(vm.uc, small + sizeof initial, &adjacent, 1) == UC_ERR_OK);
+    const auto expanded = call(vm, "realloc", {small, 12});
+    assert(expanded && expanded != small);
+    uint8_t expandedBytes[12]{};
+    assert(uc_mem_read(vm.uc, expanded, expandedBytes, sizeof expandedBytes) == UC_ERR_OK);
+    for (size_t i = 0; i < sizeof initial; ++i) assert(expandedBytes[i] == initial[i]);
+    for (size_t i = sizeof initial; i < sizeof expandedBytes; ++i) assert(expandedBytes[i] == 0);
+    const auto shrunk = call(vm, "realloc", {expanded, 2});
+    assert(shrunk && shrunk != expanded);
+    uint8_t shrunkBytes[2]{};
+    assert(uc_mem_read(vm.uc, shrunk, shrunkBytes, sizeof shrunkBytes) == UC_ERR_OK);
+    assert(shrunkBytes[0] == initial[0] && shrunkBytes[1] == initial[1]);
+    assert(call(vm, "realloc", {0x1234, 8}) == 0); // Not a malloc-family pointer.
+    assert(call(vm, "realloc", {small, 0}) == 0); // No free support; old data remains.
+    assert(vm.malloc_sizes.count(small) && vm.malloc_sizes.at(small) == sizeof initial);
+    const uint64_t ioFailure = 0x50000000; // Unmapped guest source, tracked for this failure-path test.
+    vm.malloc_sizes[ioFailure] = 4;
+    // Force source IO failure while keeping a tracked pointer: realloc returns
+    // null and does not discard the old allocation's metadata.
+    assert(call(vm, "realloc", {ioFailure, 8}) == 0);
+    assert(vm.malloc_sizes.count(ioFailure) && vm.malloc_sizes.at(ioFailure) == 4);
     const uint64_t code = 0x05000000;
     assert(uc_mem_map(vm.uc, code, 0x10000, UC_PROT_ALL) == UC_ERR_OK);
     const uint32_t instructions[] = {0xD2800540, 0xD65F03C0}; // mov x0,#42; ret
