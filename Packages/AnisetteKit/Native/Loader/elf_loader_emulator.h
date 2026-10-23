@@ -35,10 +35,14 @@ static const uint64_t kReturnAddress = 0xDEAD0000;
 static const uint64_t kHeapAddress   = 0x48000000;
 // Mobile budgets, not the desktop Unicorn defaults. Exhaustion must return
 // an error/null guest allocation instead of growing the host without bounds.
-static const uint32_t kHeapSize      = 32u * 1024u * 1024u;
-static const uint32_t kTCGBufferSize = 8u * 1024u * 1024u;
+// Heap + stack + TCG total 84 MiB (88,080,384 bytes), below 100 decimal MB.
+// This is NOT a total-process RSS cap; libraries and other allocations add more.
+static const uint32_t kHeapSize      = 64u * 1024u * 1024u;
+static const uint32_t kTCGBufferSize = 16u * 1024u * 1024u;
 static const uint64_t kStackAddress  = 0x70000000;
-static const uint32_t kStackSize     = 2u * 1024u * 1024u;
+static const uint32_t kStackSize     = 4u * 1024u * 1024u;
+static_assert(uint64_t(kHeapSize) + kStackSize + kTCGBufferSize <= 100000000ULL,
+              "Configured VM startup budgets must stay within 100 MB (not total RSS)");
 static const uint64_t kImportAddress = 0x80000000;
 static const uint32_t kImportSize    = 0x10000;
 
