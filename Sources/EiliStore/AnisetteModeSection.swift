@@ -63,7 +63,7 @@ struct AnisetteModeSection: View {
                     .accessibilityIdentifier("anisette-library-import")
                 Text("Apple 函式庫不隨 App 提供。舊版選取 libCoreADI.so 與 libstoreservicescore.so。新版（如 6.5.3）選取 libstoreapi.so、libCoreADI.so、libCoreFP.so、libCoreLSKD.so、libFPDIFor3P.so，保留原名、勿混用版本，且須有權取得及使用。")
                     .font(.caption).foregroundColor(.secondary)
-                Text("舊版兩庫依 SideStore 方式載入：未提供的相依庫不單獨阻擋；未知函式回傳 0，未解析的一般資料符號使用 256 位元組零填充占位。這些不是完整 ABI 實作，仍可能執行失敗；TLS 符號、PT_TLS 與未支援重定位僅供診斷，未實作的重定位會忽略，並不代表已支援 TLS。缺少必要入口、依賴庫、SONAME 或未支援格式僅列為診斷；結構損毀或無法讀取仍會阻擋。不相容匯入不會覆蓋原有通過檢查的庫組。新版五庫仍只供離線診斷，不能用於本機登入。檢查通過不代表來源可信、安全、已授權或登入成功；遠端預設不變。")
+                Text("舊版兩庫參考 SideStore 的載入順序與符號解析；靜態檔案檢查不會啟動引擎。重定位階段保留回傳 0 的函式 stub 與 256 位元組零填充資料占位供診斷，但它們不是 ABI 實作，不能滿足必要強符號。在任何函式庫建構子執行前，引擎會檢查全部已載入庫的動態符號；無法解析或未實作的必要強符號會阻擋，即使尚未呼叫。未解析的弱符號不因此阻擋，但不保證可呼叫。WorkQueue 工廠、物件生命週期與佇列／執行緒排程尚未實作，不能用假物件或回傳 0 代替。TLS 與略過的重定位也不代表完整支援。結構損毀或無法讀取仍會阻擋。不相容匯入不會覆蓋原有通過檢查的庫組。新版五庫仍只供離線診斷，不能用於本機登入。檢查通過不代表來源可信、安全、已授權或登入成功；遠端預設不變。")
                     .font(.caption).foregroundColor(.secondary)
                 Button("重設 adi.pb（本機 Anisette）", role: .destructive) { model.resetting = true }
                     .disabled(model.working)

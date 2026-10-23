@@ -78,14 +78,14 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
                 // SideStore's remote resolver accepts either a ZIP response or
                 // UTF-8 Base64 carrying the ZIP. Bound both representations.
                 if let encoded = String(data: responseData, encoding: .utf8),
-                   let decoded = Data(base64Encoded: encoded.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                   let decoded = Self.decodeArchiveBase64(encoded) {
                     guard decoded.count <= limits.archiveBytes else { throw DownloadError.large }
                     archiveData = decoded
                 } else {
                     archiveData = responseData
                 }
             } else {
-                guard let data = Data(base64Encoded: payload) else { throw DownloadError.metadata }
+                guard let data = Self.decodeArchiveBase64(payload) else { throw DownloadError.metadata }
                 guard data.count <= limits.archiveBytes else { throw DownloadError.large }
                 archiveData = data
             }
@@ -104,6 +104,14 @@ struct ADIRuntimeLibraryDownloader: @unchecked Sendable {
         } catch {
             throw DownloadError.invalid
         }
+    }
+
+    /// Accept formatted Base64 as the reference resolver does, but do not use
+    /// ignoreUnknownCharacters: punctuation and other non-alphabet bytes remain
+    /// invalid. The caller has already bounded the encoded metadata/response.
+    private static func decodeArchiveBase64(_ text: String) -> Data? {
+        let compact = text.utf8.filter { ![9, 10, 13, 32].contains($0) }
+        return Data(base64Encoded: Data(compact))
     }
 
     /// Mirrors SideStore's source resolution: direct ODA first; otherwise a

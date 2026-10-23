@@ -90,6 +90,40 @@ final class ADIRuntimeLibraryDownloaderTests: XCTestCase {
         XCTAssertEqual(remotePaths.map(\.lastPathComponent), ["libCoreADI.so", "libstoreservicescore.so"])
         XCTAssertEqual(try Data(contentsOf: remotePaths[0]), try data("valid.elf"))
     }
+    func testFormattedBase64InlineAndHTTPSPreservesArchiveBytes() async throws {
+        let archive = try data("valid.zip")
+        let encoded = Array(archive.base64EncodedString())
+        let formatted = stride(from: 0, to: encoded.count, by: 64).map {
+            String(encoded[$0..<min($0 + 64, encoded.count)])
+        }.joined(separator: "\r\n\t ")
+        for inline in [true, false] {
+            let d = try makeDownloader(inline ? "valid.zip" : nil)
+            if inline {
+                let digest = try String(contentsOf: fixtures.appendingPathComponent("valid.zip.sha256"), encoding: .utf8)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let metadata = try JSONSerialization.data(withJSONObject: ["s": digest, "l": formatted])
+                MockURLProtocol.set(.init(status: 200, data: metadata, delay: 0), for: "/metadata")
+            } else {
+                MockURLProtocol.set(.init(status: 200, data: Data(formatted.utf8), delay: 0), for: "/archive")
+            }
+            let paths = try await d.stageLibraries(in: try stageDir())
+            XCTAssertEqual(paths.count, 2)
+            for path in paths { XCTAssertEqual(try Data(contentsOf: path), try data("valid.elf")) }
+        }
+    }
+    func testFormattedBase64DoesNotIgnoreNonWhitespaceGarbage() async throws {
+        let encoded = try data("valid.zip").base64EncodedString() + "!"
+        for inline in [true, false] {
+            let d = try makeDownloader(inline ? "valid.zip" : nil)
+            if inline {
+                let metadata = try JSONSerialization.data(withJSONObject: ["s": String(repeating: "0", count: 64), "l": encoded])
+                MockURLProtocol.set(.init(status: 200, data: metadata, delay: 0), for: "/metadata")
+            } else {
+                MockURLProtocol.set(.init(status: 200, data: Data(encoded.utf8), delay: 0), for: "/archive")
+            }
+            await assertFailure(inline ? .metadata : .archive, downloader: d)
+        }
+    }
     func testAppleDoubleMetadataAcceptedWithoutWritingMetadata() async throws {
         for archive in ["metadata-two.zip", "metadata-five.zip", "metadata-dir.zip"] {
             let dir = try stageDir()
