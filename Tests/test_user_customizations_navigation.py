@@ -99,7 +99,8 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         self.assertIn("新版五庫仍只供離線診斷，不能用於本機登入", mode)
         self.assertIn("未知函式回傳 0", mode)
         self.assertIn("256 位元組零填充占位", mode)
-        self.assertIn("真正 TLS、不安全 ELF 與缺少必要入口仍會阻擋", mode)
+        self.assertIn("TLS 符號、PT_TLS 與未支援重定位僅供診斷", mode)
+        self.assertIn("缺少必要入口或結構損毀仍會阻擋", mode)
         self.assertIn("檢查通過不代表來源可信、安全、已授權或登入成功", mode)
 
     def test_oda_management_has_explicit_consent_and_read_only_status(self):

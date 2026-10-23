@@ -97,12 +97,16 @@ void test_read_guest_bytes() {
     length = sizeof(bytes);
     put_guest(&vm, slots, &pointer, sizeof(pointer));
     put_guest(&vm, slots + 8, &length, sizeof(length));
-    assert(!read_guest_bytes(&vm, slots, slots + 8, &out, &out_len));
+    assert(read_guest_bytes(&vm, slots, slots + 8, &out, &out_len));
+    assert(out_len == sizeof(bytes));
+    for (uint32_t i = 0; i < out_len; ++i) assert(out[i] == 0);
+    delete[] out; out = nullptr; out_len = 0;
     pointer = payload;
     length = 0;
     put_guest(&vm, slots, &pointer, sizeof(pointer));
     put_guest(&vm, slots + 8, &length, sizeof(length));
-    assert(!read_guest_bytes(&vm, slots, slots + 8, &out, &out_len));
+    assert(read_guest_bytes(&vm, slots, slots + 8, &out, &out_len) && out_len == 0);
+    delete[] out; out = nullptr;
     assert(!read_guest_bytes(nullptr, slots, slots + 8, &out, &out_len));
     assert(!read_guest_bytes(&vm, 0xdead0000, slots + 8, &out, &out_len));
     assert(!read_guest_bytes(&vm, slots, 0xdead0000, &out, &out_len));
@@ -114,7 +118,7 @@ void test_capi_invalid_and_oversize() {
     const uint8_t id[16] = {};
     const uint8_t tiny[] = {1};
     char *json = reinterpret_cast<char *>(1);
-    assert(get_anisette_headers_uc("x", "y", id, tiny, 0, &json) == ANISETTE_ERR_INVALID_ARGUMENT && json == nullptr);
+    assert(get_anisette_headers_uc("x", "y", id, nullptr, 0, &json) == ANISETTE_ERR_INVALID_ARGUMENT && json == nullptr);
     json = reinterpret_cast<char *>(1);
     assert(get_anisette_headers_uc("x", "y", id, tiny, 64u * 1024u * 1024u + 1u, &json) == ANISETTE_ERR_INVALID_ARGUMENT && json == nullptr);
     json = reinterpret_cast<char *>(1);
@@ -135,14 +139,17 @@ void test_synthetic_otp_and_file_io() {
     const std::string uuid_dir = child(prov, format_uuid_string(id));
     char *json = nullptr;
 
-    // OTP stub returns success but leaves all output slots untouched (zero): never accept as success.
+    // SideStore preserves empty OTP/machineID fields when the underlying call
+    // returns zero. This is native response parity, NOT an Apple login test.
     prepare_initialized_vm(prov, id);
     const uint64_t otp = 0x10000000;
     map_code_and_stub(g_shared_vm, otp);
     inject_symbol(g_shared_vm, kADISymbols.otp_request, otp);
     int32_t rc = get_anisette_headers_uc(libs.c_str(), prov.c_str(), id, pb, sizeof(pb), &json);
-    assert(rc == ANISETTE_ERR_READ_FILE_FAILED);
-    assert(json != nullptr && std::strstr(json, "Incomplete or invalid OTP response") != nullptr);
+    assert(rc == ANISETTE_OK);
+    assert(json != nullptr && std::strstr(json, "\"X-Apple-I-MD-M\":\"\"") && std::strstr(json, "\"X-Apple-I-MD\":\"\""));
+    free_c_string(json); json = nullptr;
+    assert(get_anisette_headers_uc(libs.c_str(), prov.c_str(), id, pb, 0, &json) == ANISETTE_OK);
     free_c_string(json); json = nullptr;
     reset_synthetic_vm();
     assert(std::remove(child(uuid_dir, kADISymbols.adi_pb_filename).c_str()) == 0);
@@ -159,7 +166,7 @@ void test_synthetic_otp_and_file_io() {
     reset_synthetic_vm();
     assert(rmdir(child(uuid_dir, kADISymbols.adi_pb_filename).c_str()) == 0);
 
-    // End stub success cannot imply a generated provisioning file exists or is valid.
+    // A zero ADI return still requires the generated file to exist, as upstream.
     const uint64_t end = 0x10001000;
     prepare_initialized_vm(prov, id);
     map_code_and_stub(g_shared_vm, end);
@@ -176,8 +183,8 @@ void test_synthetic_otp_and_file_io() {
     map_code_and_stub(g_shared_vm, end);
     inject_symbol(g_shared_vm, kADISymbols.provisioning_end, end);
     rc = end_provision_uc(libs.c_str(), prov.c_str(), id, 7, ptm, sizeof(ptm), tk, sizeof(tk), &json);
-    assert(rc == ANISETTE_ERR_READ_FILE_FAILED);
-    assert(json != nullptr && std::strstr(json, "Invalid or incomplete generated adi.pb") != nullptr);
+    assert(rc == ANISETTE_OK);
+    assert(json != nullptr && std::strstr(json, "\"adi_pb_base64\":\"\"") != nullptr);
     free_c_string(json); json = nullptr;
     reset_synthetic_vm();
 
@@ -189,7 +196,22 @@ void test_synthetic_otp_and_file_io() {
     rc = end_provision_uc(libs.c_str(), prov.c_str(), id, 7, ptm, sizeof(ptm), tk, sizeof(tk), &json);
     assert(rc == ANISETTE_OK);
     assert(json != nullptr && std::strstr(json, "adi_pb_base64") != nullptr && std::strstr(json, "CAE=") != nullptr);
-    free_c_string(json);
+    free_c_string(json); json = nullptr;
+    // Empty CPIM/session output likewise follows the real ADI return code.
+    const uint64_t start = 0x10002000;
+    map_code_and_stub(g_shared_vm, start);
+    inject_symbol(g_shared_vm, kADISymbols.provisioning_start, start);
+    assert(start_provision_uc(libs.c_str(), prov.c_str(), id, ptm, 0, &json) == ANISETTE_OK);
+    assert(json && std::strstr(json, "\"cpim_base64\":\"\"") && std::strstr(json, "\"session\":0"));
+    free_c_string(json); json = nullptr;
+    const uint32_t failing_code[] = {0xD2800020u, 0xD65F03C0u}; // mov x0,#1; ret
+    const uint64_t failing = 0x10003000;
+    assert(uc_mem_map(g_shared_vm->uc, failing, 0x1000, UC_PROT_ALL) == UC_ERR_OK);
+    put_guest(g_shared_vm, failing, failing_code, sizeof failing_code);
+    inject_symbol(g_shared_vm, kADISymbols.provisioning_start, failing);
+    assert(start_provision_uc(libs.c_str(), prov.c_str(), id, ptm, sizeof ptm, &json) == 1);
+    assert(json && std::strstr(json, "ADIProvisioningStart failed") && !std::strstr(json, "cpim_base64"));
+    free_c_string(json); json = nullptr;
     reset_synthetic_vm();
 
     assert(std::remove(child(uuid_dir, kADISymbols.adi_pb_filename).c_str()) == 0);
@@ -214,8 +236,8 @@ void test_recreated_provisioning_directory() {
     free_c_string(json); json = nullptr;
     inject_symbol(g_shared_vm, kADISymbols.set_provisioning_path, stub);
     assert(rmdir(uuid_dir.c_str()) == 0);
-    assert(get_anisette_headers_uc(libs.c_str(), prov.c_str(), id, pb, sizeof pb, &json) == ANISETTE_ERR_READ_FILE_FAILED);
-    assert(json && std::strstr(json, "Incomplete or invalid OTP response"));
+    assert(get_anisette_headers_uc(libs.c_str(), prov.c_str(), id, pb, sizeof pb, &json) == ANISETTE_OK);
+    assert(json && std::strstr(json, "\"X-Apple-I-MD\":\"\""));
     free_c_string(json);
     reset_synthetic_vm();
     assert(std::remove(child(uuid_dir, kADISymbols.adi_pb_filename).c_str()) == 0);
@@ -229,6 +251,6 @@ int main() {
     test_capi_invalid_and_oversize();
     test_synthetic_otp_and_file_io();
     test_recreated_provisioning_directory();
-    std::puts("PASS: synthetic native output bounds, file errors, provisioning directory recreation");
+    std::puts("PASS: synthetic SideStore empty-response parity, ADI errors, output bounds, file errors and provisioning directory recreation (not login verification)");
     return 0;
 }

@@ -168,8 +168,8 @@ static bool supported_guest_import(const std::string &name) {
     return names.count(name) != 0;
 }
 
-// Match SideStore's data-name classification, but never treat TLS as an object.
-// A zero-filled guest object is compatibility behavior, not an implemented ABI.
+// Match SideStore's data-name classification. Other unresolved types use the
+// generic function fallback; neither that nor an object placeholder implements TLS.
 static bool guest_data_symbol_name(const std::string &symbol) {
     return symbol.rfind("_ZTV", 0) == 0 || symbol.rfind("_ZTI", 0) == 0 ||
         symbol.rfind("_ZTS", 0) == 0 || symbol.rfind("kCF", 0) == 0 ||
@@ -297,16 +297,12 @@ EmulatorVM::~EmulatorVM() {
 }
 
 uint64_t EmulatorVM::register_import(const std::string &name) {
-    if (fallback_data_imports.count(name)) {
-        execution_error = "Conflicting guest function/data import: " + name;
-        return 0;
-    }
     auto it = imported_symbols.find(name);
     if (it != imported_symbols.end()) {
         return it->second;
     }
 
-    if (name.empty() || name.size() >= 4096 || guest_data_symbol_name(name) ||
+    if (name.empty() || name.size() >= 4096 ||
         next_import_address > kImportAddress + kImportSize - 8) {
         execution_error = "Invalid guest function import or exhausted import area: " + name;
         return 0;
@@ -330,10 +326,12 @@ uint64_t EmulatorVM::register_import(const std::string &name) {
 }
 
 uint64_t EmulatorVM::register_data_import(const std::string &name) {
-    auto cached = fallback_data_imports.find(name);
-    if (cached != fallback_data_imports.end()) return cached->second;
-    if (name.empty() || name.size() >= 4096 || imported_symbols.count(name)) {
-        execution_error = "Invalid or conflicting guest data import: " + name;
+    // Upstream uses one imported-symbol cache: the first resolution wins even
+    // when another library declares the same name with a different symbol type.
+    auto cached = imported_symbols.find(name);
+    if (cached != imported_symbols.end()) return cached->second;
+    if (name.empty() || name.size() >= 4096) {
+        execution_error = "Invalid guest data import: " + name;
         return 0;
     }
     // Deliberately match upstream's fixed-size placeholder. This does not supply
@@ -961,9 +959,9 @@ static void hook_dlsym(EmulatorVM *vm) {
         }
         if (!result && (handle == 0 || handle == 1 || system_module_has_import(handle, name)) && supported_guest_import(name))
             result = vm->register_import(name);
-        // Match SideStore's dlsym fallback for otherwise unknown function names.
-        // Do not turn a known export from a different module or a data name into a stub.
-        if (!result && !supported_guest_import(name) && !guest_data_symbol_name(name) &&
+        // dlsym has no ELF type metadata. Match SideStore's generic fallback,
+        // including data-style names, while preserving explicit module lookup.
+        if (!result && !supported_guest_import(name) &&
             !get_vm_symbol_address(vm, name)) result = vm->register_import(name);
         if (!result) vm->dynamic_link_error = "Guest symbol not found: " + name;
     }
@@ -1160,14 +1158,6 @@ static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo 
         return 0;
     }
 
-    const uint8_t type = sym.st_info & 0xf;
-    // A TLS offset is not a guest address. Check before weak/export resolution so
-    // a same-name function or object cannot accidentally bypass the TLS guard.
-    if (type == 6 || (sym.st_shndx == 0 && type != 0 && type != 1 && type != 2)) {
-        vm->execution_error = "Unsupported guest TLS/non-function symbol type: " + std::to_string(type);
-        return 0;
-    }
-
     std::string sym_name;
     if (sym.st_name < current_lib.strsz) {
         std::vector<char> name_buf(256, 0);
@@ -1211,6 +1201,7 @@ static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo 
 
     // Upstream resolves both weak and strong imports through these fallbacks.
     // Data must never be allocated an executable function stub.
+    const uint8_t type = sym.st_info & 0xf;
     if (type == 1 || guest_data_symbol_name(sym_name)) return vm->register_data_import(sym_name);
     return vm->register_import(sym_name);
 }
@@ -1235,14 +1226,15 @@ static void apply_vm_relocations(EmulatorVM *vm, EmulatorVM::LibraryInfo &lib) {
             } else if (type == R_AARCH64_JUMP_SLOT || type == R_AARCH64_GLOB_DAT || type == R_AARCH64_ABS64) {
                 uint64_t sym_addr = vm_resolve_symbol(vm, lib, sym_idx);
                 if (!vm->execution_error.empty()) return;
-                {
+                if (sym_addr != 0) {
                     uint64_t final_val = sym_addr + r.r_addend;
                     uc_mem_write(vm->uc, target_addr, &final_val, sizeof(final_val));
                     applied++;
                 }
             } else if (type != 0) {
-                vm->execution_error = "Unsupported guest relocation: " + std::to_string(type);
-                return;
+                // SideStore only applies the four cases above. Keep its skip
+                // behavior, but report it honestly: this is NOT TLS support.
+                LOG_UC("[SideStore compatibility] Ignored unimplemented guest relocation %u in '%s' (not implemented ABI)\n", type, lib.name.c_str());
             }
         }
         LOG_UC("[Emulator] Applied %zu / %zu relocations for %s in '%s'\n",
@@ -1298,10 +1290,6 @@ bool load_library_to_vm(EmulatorVM *vm, const std::string &file_path, const std:
     const Elf64_Phdr *phdrs = headers.data();
 
     for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdrs[i].p_type == 7) { // PT_TLS: no Android TLS module/thread adapter.
-            vm->execution_error = "Unsupported guest PT_TLS segment";
-            return false;
-        }
         if (phdrs[i].p_type == PT_LOAD) {
             if (phdrs[i].p_offset > file_size || phdrs[i].p_filesz > file_size - phdrs[i].p_offset ||
                 phdrs[i].p_filesz > phdrs[i].p_memsz || phdrs[i].p_memsz > UINT64_MAX - phdrs[i].p_vaddr ||

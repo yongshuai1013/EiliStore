@@ -55,10 +55,13 @@ static bool read_guest_bytes(EmulatorVM *vm, uint64_t pointer_slot,
     if (!vm || !vm->uc || !data || !length ||
         uc_mem_read(vm->uc, pointer_slot, &guest_pointer, sizeof(guest_pointer)) != UC_ERR_OK ||
         uc_mem_read(vm->uc, length_slot, &guest_length, sizeof(guest_length)) != UC_ERR_OK ||
-        guest_pointer == 0 || guest_length == 0 || guest_length > kMaxADIDataSize) return false;
-    uint8_t *buffer = new (std::nothrow) uint8_t[guest_length];
+        guest_length > kMaxADIDataSize) return false;
+    // SideStore accepts empty outputs after ADI returns zero and leaves a
+    // zero-initialized vector when a nonempty output has a null guest pointer.
+    // Retain only the host allocation/read bounds, not an extra nonempty rule.
+    uint8_t *buffer = new (std::nothrow) uint8_t[guest_length ? guest_length : 1]();
     if (!buffer) return false;
-    if (uc_mem_read(vm->uc, guest_pointer, buffer, guest_length) != UC_ERR_OK) {
+    if (guest_length && guest_pointer && uc_mem_read(vm->uc, guest_pointer, buffer, guest_length) != UC_ERR_OK) {
         delete[] buffer;
         return false;
     }
@@ -222,7 +225,7 @@ static int32_t get_anisette_headers_uc_impl(
 ) {
     LOG_UC("[AnisetteKit - UC] Invoked get_anisette_headers_uc\n");
     if (!lib_dir || !provisioning_dir || !identifier || !adi_pb || !out_json ||
-        adi_pb_len == 0 || adi_pb_len > kMaxADIDataSize) {
+        adi_pb_len > kMaxADIDataSize) {
         return ANISETTE_ERR_INVALID_ARGUMENT;
     }
 
@@ -283,6 +286,9 @@ static int32_t get_anisette_headers_uc_impl(
         return ANISETTE_ERR_READ_FILE_FAILED;
     }
     std::unique_ptr<uint8_t[]> mid_owner(mid_data), otp_owner(otp_data);
+    if (!final_mid_len || !final_otp_len) {
+        LOG_UC("[SideStore compatibility] ADIOTPRequest returned zero with empty output; preserving response, not verifying Apple login\n");
+    }
     std::string mid = base64_encode(mid_owner.get(), final_mid_len);
     std::string otp = base64_encode(otp_owner.get(), final_otp_len);
 
@@ -305,7 +311,7 @@ static int32_t start_provision_uc_impl(
 ) {
     LOG_UC("[AnisetteKit - UC] Invoked start_provision_uc\n");
     if (!lib_dir || !provisioning_dir || !identifier || !spim || !out_json ||
-        spim_len == 0 || spim_len > kMaxADIDataSize) {
+        spim_len > kMaxADIDataSize) {
         return ANISETTE_ERR_INVALID_ARGUMENT;
     }
 
@@ -388,7 +394,7 @@ static int32_t end_provision_uc_impl(
 ) {
     LOG_UC("[AnisetteKit - UC] Invoked end_provision_uc\n");
     if (!lib_dir || !provisioning_dir || !identifier || !ptm || !tk || !out_json ||
-        ptm_len == 0 || tk_len == 0 || ptm_len > kMaxADIDataSize || tk_len > kMaxADIDataSize) {
+        ptm_len > kMaxADIDataSize || tk_len > kMaxADIDataSize) {
         return ANISETTE_ERR_INVALID_ARGUMENT;
     }
 
@@ -434,7 +440,7 @@ static int32_t end_provision_uc_impl(
 
     bool io_ok = fseek(f, 0, SEEK_END) == 0;
     long file_size = io_ok ? ftell(f) : -1;
-    io_ok = io_ok && file_size > 0 && (unsigned long)file_size <= kMaxADIDataSize;
+    io_ok = io_ok && file_size >= 0 && (unsigned long)file_size <= kMaxADIDataSize;
     if (io_ok) io_ok = fseek(f, 0, SEEK_SET) == 0;
     std::vector<uint8_t> pb_data;
     if (io_ok) {
@@ -447,6 +453,9 @@ static int32_t end_provision_uc_impl(
         return ANISETTE_ERR_READ_FILE_FAILED;
     }
 
+    if (pb_data.empty()) {
+        LOG_UC("[SideStore compatibility] ADIProvisioningEnd returned zero with an empty adi.pb; preserving response, not verifying provisioning/login\n");
+    }
     std::string adi_pb_b64 = base64_encode(pb_data.data(), pb_data.size());
 
     std::stringstream ss;

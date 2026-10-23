@@ -124,9 +124,12 @@ int main() {
     reject([](Fixture &f) { f.headers[0].p_memsz = UINT64_MAX; });
     reject([](Fixture &f) { f.headers[0].p_filesz = f.headers[0].p_memsz = 0; });
     reject([](Fixture &f) { f.headers[1].p_type = PT_DYNAMIC; f.headers[1].p_vaddr = UINT64_MAX; });
-    reject([](Fixture &f) { f.headers[1].p_type = 7; }); // PT_TLS, even without a TLS relocation.
+    Fixture tls;
+    tls.headers[1].p_type = 7; // PT_TLS is ignored like SideStore, not implemented.
+    EmulatorVM tls_vm;
+    assert(load(tls_vm, tls.bytes()) && tls_vm.execution_error.empty());
     EmulatorVM empty;
     assert(!load(empty, {}));
     assert(!load(empty, std::vector<uint8_t>(sizeof(Elf64_Ehdr) - 1, 0)));
-    std::cout << "PASS: generated ELF bounds, exact headers, BSS, SideStore DT_NEEDED policy and PT_TLS rejection\n";
+    std::cout << "PASS: generated ELF bounds, exact headers, BSS and SideStore DT_NEEDED/PT_TLS ignore policy (not TLS support)\n";
 }

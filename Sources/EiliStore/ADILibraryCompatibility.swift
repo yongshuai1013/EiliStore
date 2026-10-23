@@ -43,8 +43,9 @@ struct ADILibraryCompatibility: Equatable, Sendable {
     var runtimeAdapterAvailable: Bool { profile == .legacy }
     var hasStaticBlockers: Bool {
         !missingFiles.isEmpty || (profile == .modern && !missingDependencies.isEmpty) || !missingEntryPoints.isEmpty ||
-        !blockedDataImports.isEmpty || !unsupportedRelocations.isEmpty ||
-        !unsupportedDynamicTags.isEmpty || hasThreadLocalSegments || !mismatchedSONAMEs.isEmpty
+        !blockedDataImports.isEmpty ||
+        (profile == .modern && (!unsupportedRelocations.isEmpty || !unsupportedDynamicTags.isEmpty || hasThreadLocalSegments)) ||
+        !mismatchedSONAMEs.isEmpty
     }
     var summary: String {
         var parts: [String] = []
@@ -57,9 +58,9 @@ struct ADILibraryCompatibility: Equatable, Sendable {
         if !fallbackDataImports.isEmpty { parts.append("SideStore 相容資料 placeholder（256-byte zero-filled；非實際 ABI 實作，未驗證登入）：\(fallbackDataImports.count) 個") }
         if !unsupportedSymbolImports.isEmpty { parts.append("含尚未支援的 ELF 符號類型：\(unsupportedSymbolImports.count) 個") }
         if !blockedDataImports.isEmpty { parts.append("\(blockedDataImports.count) 個資料/TLS 外部符號無法安全 stub") }
-        if !unsupportedRelocations.isEmpty { parts.append("\(unsupportedRelocations.count) 種重定位尚未支援") }
-        if !unsupportedDynamicTags.isEmpty { parts.append("含尚未支援的動態連結格式") }
-        if hasThreadLocalSegments { parts.append("含尚未支援的 PT_TLS 執行緒區段") }
+        if !unsupportedRelocations.isEmpty { parts.append(profile == .legacy ? "\(unsupportedRelocations.count) 種重定位依 SideStore 略過（非實際 ABI/TLS 支援）" : "\(unsupportedRelocations.count) 種重定位尚未支援") }
+        if !unsupportedDynamicTags.isEmpty { parts.append(profile == .legacy ? "提示：含載入器未實作的動態連結格式（不另行阻擋，不保證可運作）" : "含尚未支援的動態連結格式") }
+        if hasThreadLocalSegments { parts.append(profile == .legacy ? "提示：PT_TLS 依 SideStore 不額外阻擋，但未實作執行緒 TLS" : "含尚未支援的 PT_TLS 執行緒區段") }
         if !mismatchedSONAMEs.isEmpty { parts.append("函式庫內部名稱與檔名不符，請勿改名混用") }
         if parts.isEmpty { parts.append("靜態檢查未發現已知阻礙，但不代表實際登入已驗證") }
         return parts.joined(separator: "；") + "。未啟動本機引擎，遠端預設不變。"
@@ -156,14 +157,13 @@ struct ADILibraryCompatibility: Equatable, Sendable {
         // Include weak imports: SideStore routes them through the same fallback.
         let imports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.undefinedStrongSymbols) }
             .union(functionImports).union(dataImports).union(tlsImports).union(unsupportedImports)
-        let functionVsDataConflicts = functionImports.intersection(dataImports).filter { !isSideStoreDataName($0) }
-        let unsafeImports = tlsImports.union(unsupportedImports).union(functionVsDataConflicts)
+        // SideStore's legacy resolver uses exported symbols first; unresolved type-1
+        // and named data heuristics get zero-filled storage, everything else a zero-return stub.
         let needed = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.needed) }
         let relocations = metadata.values.reduce(into: Set<UInt32>()) { $0.formUnion($1.relocationTypes) }
         let dynamicTags = metadata.values.reduce(into: Set<UInt64>()) { $0.formUnion($1.unsupportedDynamicTags) }
         // Match vm_resolve_symbol's existing __ndk1 -> __1 lookup, not a new shim.
         let unresolved = imports.filter { name in
-            if unsafeImports.contains(name) { return true }
             if exports.contains(name) { return false }
             if handledImports.contains(name) && functionImports.contains(name) &&
                 !dataImports.contains(name) && !isSideStoreDataName(name) { return false }
@@ -172,8 +172,8 @@ struct ADILibraryCompatibility: Equatable, Sendable {
             else if let range = converted.range(of: "__ndk1") { converted.replaceSubrange(range, with: "__1") }
             return !exports.contains(converted)
         }
-        let fallback = unresolved.filter { !unsafeImports.contains($0) && functionImports.contains($0) && !dataImports.contains($0) && !isSideStoreDataName($0) }
-        let fallbackData = unresolved.filter { !unsafeImports.contains($0) && (dataImports.contains($0) || isSideStoreDataName($0)) }
+        let fallbackData = unresolved.filter { dataImports.contains($0) || isSideStoreDataName($0) }
+        let fallback = unresolved.filter { !fallbackData.contains($0) }
         let blockedData = unresolved.filter { !fallback.contains($0) && !fallbackData.contains($0) }
         let mismatches = metadata.compactMap { name, value -> String? in
             // SONAME is optional in ELF; reject an explicit mismatch, not its absence.

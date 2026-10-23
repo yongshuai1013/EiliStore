@@ -53,8 +53,9 @@ int main() {
     assert(run_vm_procedure(&vm, missing, {UINT64_MAX}, 1000000, 1000) == 0);
     assert(vm.execution_error.empty() && vm.fallback_import_calls.at("missing_function") == 1);
     assert(call(vm, "dlerror") == 0);
-    assert(call(vm, "dlsym", {0, vm.write_string("environ")}) == 0);
-    assert(call(vm, "dlerror") != 0);
+    const auto unknownDataLookup = call(vm, "dlsym", {0, vm.write_string("kCFDlsymName")});
+    assert(unknownDataLookup && vm.import_stubs.at(unknownDataLookup) == "kCFDlsymName");
+    assert(call(vm, "dlerror") == 0);
     assert(call(vm, "dlsym", {0, vm.write_string("synthetic_answer")}) == code);
     assert(call(vm, "dlsym", {999, vm.write_string("strlen")}) == 0);
     assert(call(vm, "dlerror") != 0);
@@ -108,8 +109,9 @@ int main() {
     for (const auto info : {0x16, 0x26, 0x13, 0x23, 0x1A}) {
         vm.execution_error.clear();
         const std::string name = "unknown_nonfunction_" + std::to_string(info);
-        assert(resolve(name, static_cast<uint8_t>(info)) == 0 && !vm.execution_error.empty());
-        assert(!vm.imported_symbols.count(name));
+        const auto fallbackSymbol = resolve(name, static_cast<uint8_t>(info));
+        assert(fallbackSymbol && vm.execution_error.empty());
+        assert(vm.import_stubs.at(fallbackSymbol) == name); // Generic fallback, NOT TLS support.
     }
     for (const auto name : {"_ZTVMissing", "_ZTINope", "_ZTSNope", "kCFMissing", "kAudioMissing",
                             "OBJC_Missing", "__CFConstantStringClassReference", "__sF", "environ",
@@ -123,13 +125,14 @@ int main() {
         for (const auto value : zeros) assert(value == 0);
     }
     vm.execution_error.clear();
-    assert(resolve("synthetic_answer", 0x16) == 0 && !vm.execution_error.empty()); // Export cannot hide TLS.
+    assert(resolve("synthetic_answer", 0x16) == code && vm.execution_error.empty()); // Real exports win, as upstream.
     vm.execution_error.clear();
-    assert(resolve("kCFTLS", 0x16) == 0 && !vm.execution_error.empty()); // Name heuristic cannot hide TLS.
+    const auto namedTLS = resolve("kCFTLS", 0x16);
+    assert(namedTLS && namedTLS == vm.fallback_data_imports.at("kCFTLS")); // Heuristic classifies data, not TLS ABI.
     vm.execution_error.clear();
-    assert(!resolve("unknown_typed_function", 0x11) && !vm.execution_error.empty()); // Function/data conflict.
+    assert(resolve("unknown_typed_function", 0x11) == typed_function && vm.execution_error.empty()); // First cached import wins.
     vm.execution_error.clear();
-    assert(!resolve("unknown_object", 0x12) && !vm.execution_error.empty());
+    assert(resolve("unknown_object", 0x12) == object && vm.execution_error.empty());
     vm.execution_error.clear();
     // Apply an actual synthetic GLOB_DAT relocation with an addend into a data
     // placeholder; no vendor library is loaded and no guest object is executed.
@@ -154,12 +157,24 @@ int main() {
     uint64_t relocated = 0;
     assert(uc_mem_read(vm.uc, code + 0x100, &relocated, sizeof relocated) == UC_ERR_OK);
     assert(relocated == vm.fallback_data_imports.at("relocated_data") + 8);
-    // Invalid allocation and direct function requests for data still fail closed.
+    // Upstream skips unhandled relocations; the target is left untouched.
+    const uint64_t canary = 0x123456789ABCDEF0ULL;
+    assert(uc_mem_write(vm.uc, code + 0x108, &canary, sizeof canary) == UC_ERR_OK);
+    dataRelocation.r_offset = 0x108;
+    dataRelocation.r_info = 1028; // R_AARCH64_TLS_DTPMOD64, deliberately not implemented.
+    assert(uc_mem_write(vm.uc, relocation.rela, &dataRelocation, sizeof dataRelocation) == UC_ERR_OK);
+    apply_vm_relocations(&vm, relocation);
+    assert(vm.execution_error.empty());
+    assert(uc_mem_read(vm.uc, code + 0x108, &relocated, sizeof relocated) == UC_ERR_OK && relocated == canary);
+    // Host allocation/name bounds remain. dlsym-style calls have no ELF type
+    // metadata and may register a generic stub even for a data-looking name.
     assert(vm.register_data_import("") == 0 && !vm.execution_error.empty());
     vm.execution_error.clear();
-    assert(vm.register_import("environ") == 0 && !vm.execution_error.empty());
+    assert(vm.register_import("environ") == vm.fallback_data_imports.at("environ") && vm.execution_error.empty());
+    const auto untypedDataName = vm.register_import("kCFDlsymUnknown");
+    assert(untypedDataName && vm.import_stubs.at(untypedDataName) == "kCFDlsymUnknown");
     vm.execution_error.clear();
     vm.next_import_address = kImportAddress + kImportSize;
     assert(vm.register_import("exhausted_function") == 0 && !vm.execution_error.empty());
-    std::cout << "PASS: synthetic guest lookup, constructors, SideStore function/data fallbacks, relocations and TLS rejection (not login proof)\n";
+    std::cout << "PASS: synthetic guest lookup, constructors, SideStore fallbacks, cached symbols and ignored TLS relocations (not TLS support or login proof)\n";
 }

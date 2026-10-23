@@ -62,6 +62,21 @@ class ADILoaderContractTests(unittest.TestCase):
         self.assertIn('fallback_data_imports', placeholder)
         self.assertNotIn('register_import(', placeholder)
 
+    def test_sidestore_empty_output_and_tls_policy(self):
+        core = (ROOT / 'Packages/AnisetteKit/Native/anisette_core_uc.cpp').read_text()
+        self.assertNotRegex(core, r'(?:adi_pb|spim|ptm|tk)_len\s*==\s*0')
+        self.assertNotIn('guest_length == 0', core)
+        self.assertIn('file_size >= 0', core)
+        self.assertIn('if (res != 0)', core)
+        native = (ROOT / 'Packages/AnisetteKit/Native/Loader/elf_loader_emulator.cpp').read_text()
+        self.assertNotIn('Unsupported guest PT_TLS segment', native)
+        self.assertNotIn('Unsupported guest TLS/non-function symbol type', native)
+        self.assertNotIn('execution_error = "Unsupported guest relocation', native)
+        self.assertIn('Ignored unimplemented guest relocation', native)
+        response = (ROOT / 'Packages/AnisetteKit/Sources/AnisetteDataResponse.swift').read_text()
+        self.assertIn('guard let otp = dictionary', response)
+        self.assertNotIn('.isEmpty', response)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -78,10 +78,11 @@ User Customizations management follow-up
 - The adi.pb reset action is explicitly local-only: preserves library cache, client header configuration, remote credentials/session and certificates; an active local session requires the user to sign out first. Unlike SideStore's Reset & Sign Out dialog and restart-based mode change, this integration intentionally does not sign out automatically, clear shared/remote provisioning, or restart the app. Mode changes continue to affect the next login only. These are retained safeguards, not claims of exact behavioral parity.
 - New synthetic tests cover source-list/fallback request selection, no fallback on authoritative failures, cache-hit no-network behavior, consent-off missing cache, consent-on synthetic acquisition, post-acquisition incompatibility, storage status and local/remote isolation. The UI harness covers reaching ODA management and cancelling automatic-acquisition consent; it uses inert service stubs, never Apple libraries or credentials.
 
-目前策略：對齊 SideStore 舊版兩庫的資料 fallback 與相依庫處理
+目前策略：依 SideStore 實際舊版兩庫流程，不額外拒絕空回傳或 TLS
 
 - 依上方鎖定的 AnisetteKit `vm_resolve_symbol` 實作（`Native/Loader/elf_loader_emulator.cpp:1000–1024`），ELF `STT_OBJECT` 及 vtable／RTTI、kCF、kAudio、OBJC 等已辨識資料名稱，在真實 guest export 優先解析後仍未找到時，配置每個符號獨立的 **256-byte 零填充 guest 占位**，重複解析沿用同一位址。函式保持 X0=0 fallback；強／弱匯入採同樣分類。這些占位及 stub 均不列入已實作 ABI，不能提供真實 C++／CoreFoundation 語義。
-- 舊版兩庫 `DT_NEEDED` 中未提供的相依庫只列為診斷，不再單獨阻止匯入或本機嘗試；原生 loader 和 SideStore 一樣不遞迴載入它們。這不是新增 `libmediaplatform.so`、`libCoreFoundation.so` 或 `libc++_shared.so`。新版五庫仍沒有 runtime adapter；缺少選定庫檔、六個必要入口、SONAME 不符、危險路徑、未支援重定位／動態格式仍阻擋。
-- TLS 不套用一般資料占位。原生與 Swift 均拒絕 `PT_TLS`，TLS 符號即使為弱匯入、名稱符合資料規則或有同名 export，也不能繞過防護；其他未支援的未定義符號型別及函式／資料混用亦 fail closed。`dlsym` 沒有 ELF 型別資訊時不猜測未知資料；只保留既有函式 fallback 與真實 export 查找。
-- 預檢及設定頁說明同步更新，唯讀 CLI 分開輸出 `fallback_function_imports`、`fallback_data_imports`、真正被阻擋的符號及缺失相依庫。一般資料不再與 TLS 混為同一阻擋原因。遠端仍預設，開啟設定或匯入只處理檔案及狀態，不自動佈建、選擇本機或修改遠端身分。
-- 合成回歸測試覆蓋 3 個缺失相依庫、331 個函式、40 個一般資料符號的預檢、256-byte 初始零填充與穩定位址、資料重定位加值、函式／資料衝突及 TLS 拒絕。既有 provisioning／OTP 輸出驗證不放寬：回傳 0 但沒有有效輸出或 `adi.pb` 仍然失敗。測試只執行自製合成 ARM64 指令；不執行、提交、上傳或重新散布使用者提供的 Apple `.so`。Apple archive／模擬器通過也不表示真機登入已驗證。
+- 舊版兩庫 `DT_NEEDED` 中未提供的相依庫只列為診斷，不單獨阻止匯入或本機嘗試；原生 loader 和 SideStore 一樣不遞迴載入它們。這不是新增 `libmediaplatform.so`、`libCoreFoundation.so` 或 `libc++_shared.so`。新版五庫仍沒有 runtime adapter；缺少選定庫檔、六個必要入口、SONAME 不符、危險路徑及損壞／越界 ELF 結構仍阻擋。
+- 更正先前 EiliStore 額外加入的行為：鎖定 SideStore 版本沒有 `PT_TLS`／TLS 符號阻擋或完整 TLS adapter。現在不額外拒絕這些類型；仍先查真實 export，未解析者依 OBJECT／資料名稱規則配置占位，其他符號走泛用函式 stub。同名匯入使用第一個已快取位址，不額外拒絕函式／資料型別衝突。重定位只套用 RELATIVE、JUMP_SLOT、GLOB_DAT、ABS64，其他類型依上游略過並保留警告；這不是 TLS 支援。未實作動態格式仍列出診斷，不能保證可執行。
+- ADI 的非零回傳仍原樣失敗。當 ADI 回傳 0 時，OTP／machineID 的 key 必須存在，但其值可以為空；CPIM 亦允許空值及 session 0；`ADIProvisioningEnd` 後的 `adi.pb` 必須可讀但可以是空檔，序列化為空 Base64，與 upstream Swift parser 一致。app 端不再把存在的空 OTP／machineID 改判為缺失。這只代表保留原生回報，不表示 Apple 已接受登入或已驗證佈建。保留有界主機配置、guest 讀取與檔案 I/O 錯誤檢查，防止越界／無限資源使用；不是全面複製所有上游未檢查的錯誤。
+- 預檢及設定頁說明同步更新，唯讀 CLI 分開輸出 fallback、缺失相依庫、未支援／略過重定位及 `true_tls_abi_implemented: false`。遠端仍預設，開啟設定或匯入只處理檔案及狀態，不自動佈建、選擇本機或修改遠端身分。
+- 合成回歸測試覆蓋 3 個缺失相依庫、331 個函式、40 個一般資料符號、256-byte 初始零填充與穩定位址、資料重定位加值、首個符號快取、略過 TLS 重定位、空 OTP／CPIM／adi.pb 與非零 ADI 錯誤傳遞。測試只執行自製合成 ARM64 指令；不執行、提交、上傳或重新散布使用者提供的 Apple `.so`。Apple archive／模擬器通過也不表示真機登入已驗證。

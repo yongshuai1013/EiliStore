@@ -53,9 +53,9 @@ import Foundation
             var set = legacySet
             set["libCoreADI.so"] = try metadata("libCoreADI.so", exports: Array(required.prefix(3)) + ["cross_library_hook"], imports: [name], types: [name: type])
             let result = ADILibraryCompatibility.inspect(profile: legacy, metadata: set)
-            precondition(result.hasStaticBlockers && result.blockedDataImports == [name], "unsafe symbol must block: \(name)")
-            if type != 6 { precondition(result.unsupportedSymbolImports == [name]) }
-            precondition(result.fallbackFunctionImports.isEmpty)
+            precondition(!result.hasStaticBlockers && result.blockedDataImports.isEmpty, "unsupported symbol type is diagnostic only: \(name)")
+            precondition(result.unsupportedSymbolImports == (type == 6 ? [] : [name]))
+            precondition(result.fallbackFunctionImports == [name] && result.fallbackDataImports.isEmpty)
         }
         for (name, type): (String, UInt8) in [("object", 1), ("malloc", 1), ("_ZTVMissing", 0),
                                             ("_ZTIMissing", 2), ("_ZTSMissing", 0), ("kCFMissing", 0),
@@ -81,15 +81,16 @@ import Foundation
         conflicting["libCoreADI.so"] = try metadata("libCoreADI.so", exports: Array(required.prefix(3)), imports: ["conflict"], types: ["conflict": 2])
         conflicting["libstoreservicescore.so"] = try metadata("libstoreservicescore.so", exports: Array(required.dropFirst(3)), imports: ["conflict"], types: ["conflict": 6])
         let conflict = ADILibraryCompatibility.inspect(profile: legacy, metadata: conflicting)
-        precondition(conflict.hasStaticBlockers && conflict.blockedDataImports == ["conflict"] && conflict.fallbackFunctionImports.isEmpty && conflict.fallbackDataImports.isEmpty)
+        precondition(!conflict.hasStaticBlockers && conflict.blockedDataImports.isEmpty)
         conflicting["libstoreservicescore.so"] = try metadata("libstoreservicescore.so", exports: Array(required.dropFirst(3)), imports: ["conflict"], types: ["conflict": 1])
-        precondition(ADILibraryCompatibility.inspect(profile: legacy, metadata: conflicting).hasStaticBlockers, "function/object conflict must block")
+        let dataConflict = ADILibraryCompatibility.inspect(profile: legacy, metadata: conflicting)
+        precondition(!dataConflict.hasStaticBlockers && dataConflict.blockedDataImports.isEmpty, "lookup conflict is resolved at runtime, not preflight-blocked")
         for type: UInt8 in [3, 6, 10] {
             var weakSet = legacySet
             weakSet["libCoreADI.so"] = try ADIELFMetadata.parse(ADIElfFixture.make(soname: "libCoreADI.so", exports: Array(required.prefix(3)) + ["cross_library_hook"], weakImports: ["kCFUnsafe"], symbolTypes: ["kCFUnsafe": type]))
             weakSet["libstoreservicescore.so"] = try metadata("libstoreservicescore.so", exports: Array(required.dropFirst(3)) + ["kCFUnsafe"])
             let result = ADILibraryCompatibility.inspect(profile: legacy, metadata: weakSet)
-            precondition(result.hasStaticBlockers && result.blockedDataImports == ["kCFUnsafe"] && result.fallbackFunctionImports.isEmpty && result.fallbackDataImports.isEmpty, "weak unsafe type must block despite data heuristic and same-name export")
+            precondition(!result.hasStaticBlockers && result.blockedDataImports.isEmpty, "weak imports use SideStore resolution semantics")
         }
         var weakFallback = legacySet
         weakFallback["libCoreADI.so"] = try ADIELFMetadata.parse(ADIElfFixture.make(soname: "libCoreADI.so", exports: Array(required.prefix(3)) + ["cross_library_hook"], weakImports: ["weak_func", "weak_object"], symbolTypes: ["weak_object": 1]))
@@ -101,7 +102,7 @@ import Foundation
         tlsSegmentBytes[56] = 3; tlsSegmentBytes[176] = 7
         tlsSegmentSet["libCoreADI.so"] = try ADIELFMetadata.parse(tlsSegmentBytes)
         let tlsSegmentReport = ADILibraryCompatibility.inspect(profile: legacy, metadata: tlsSegmentSet)
-        precondition(tlsSegmentReport.hasThreadLocalSegments && tlsSegmentReport.hasStaticBlockers)
+        precondition(tlsSegmentReport.hasThreadLocalSegments && !tlsSegmentReport.hasStaticBlockers, "PT_TLS is reported, not preflight-blocked")
 
         // The two optional native entrypoints are not part of the six required entrypoints.
         let optionalMissing = ADILibraryCompatibility.inspect(profile: legacy, metadata: legacySet)
@@ -116,6 +117,11 @@ import Foundation
         badLegacy["libCoreADI.so"] = try metadata("wrongCoreADI.so", exports: Array(required.prefix(3)), relocations: [1027, 1028], tags: [36])
         let bad = ADILibraryCompatibility.inspect(profile: legacy, metadata: badLegacy)
         precondition(bad.mismatchedSONAMEs == ["libCoreADI.so"] && bad.unsupportedRelocations == [1028] && bad.unsupportedDynamicTags == [36] && bad.hasStaticBlockers)
+        let ignoredLegacyFormats = ADILibraryCompatibility.inspect(profile: legacy, metadata: [
+            "libCoreADI.so": try metadata("libCoreADI.so", exports: Array(required.prefix(3)), relocations: [1027, 1028], tags: [36]),
+            "libstoreservicescore.so": try metadata("libstoreservicescore.so", exports: Array(required.dropFirst(3)))
+        ])
+        precondition(ignoredLegacyFormats.unsupportedRelocations == [1028] && ignoredLegacyFormats.unsupportedDynamicTags == [36] && !ignoredLegacyFormats.hasStaticBlockers, "legacy ignored formats remain diagnostics")
         let noSONAME = ADIELFMetadata(needed: [], soname: nil, exportedSymbols: Set(required), undefinedStrongSymbols: [], relocationTypes: [1027], unsupportedDynamicTags: [])
         let noSONAMEResult = ADILibraryCompatibility.inspect(profile: legacy, metadata: ["libCoreADI.so": noSONAME, "libstoreservicescore.so": try metadata("libstoreservicescore.so", exports: [])])
         precondition(noSONAMEResult.mismatchedSONAMEs.isEmpty, "missing SONAME is allowed")
@@ -144,7 +150,7 @@ import Foundation
         precondition(ADILibraryCompatibility.inspect(profile: profile, metadata: all).missingDependencies == ["libnotprovided.so"])
         all["libCoreFP.so"] = try metadata("libwrong.so", relocations: [1027, 1028], tags: [36])
         let badModern = ADILibraryCompatibility.inspect(profile: profile, metadata: all)
-        precondition(badModern.mismatchedSONAMEs == ["libCoreFP.so"] && badModern.unsupportedRelocations == [1028] && badModern.unsupportedDynamicTags == [36])
+        precondition(badModern.mismatchedSONAMEs == ["libCoreFP.so"] && badModern.unsupportedRelocations == [1028] && badModern.unsupportedDynamicTags == [36] && badModern.hasStaticBlockers)
         all.removeValue(forKey: "libCoreFP.so")
         let missing = ADILibraryCompatibility.inspect(profile: profile, metadata: all)
         precondition(missing.missingFiles == ["libCoreFP.so"] && missing.missingDependencies == ["libCoreFP.so"])

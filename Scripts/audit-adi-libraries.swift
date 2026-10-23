@@ -47,13 +47,15 @@ import Foundation
             "has_thread_local_segments": report.hasThreadLocalSegments,
             "missing_dependencies_are_informational": report.profile == .legacy,
             "unsupported_relocations": report.unsupportedRelocations,
+            "ignored_relocations": report.profile == .legacy ? report.unsupportedRelocations : [],
+            "true_tls_abi_implemented": false,
             "unsupported_dynamic_tags": report.unsupportedDynamicTags,
             "mismatched_sonames": report.mismatchedSONAMEs,
             "has_known_static_blockers": report.hasStaticBlockers,
             "runtime_adapter_available": report.runtimeAdapterAvailable,
             "runtime_verified": false, "libraries": perLibrary,
             "summary": report.summary,
-            "note": "Only static metadata was read. No Apple code, VM, provisioning, account, signing or network operations were executed. Explicit emulator hooks are not proof of correct ABI semantics."
+            "note": "Only static metadata was read. No Apple code, VM, provisioning, account, signing or network operations were executed. SideStore-compatible stubs, placeholders and ignored relocations are not real ABI/TLS support or login verification."
         ]
         let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
         FileHandle.standardOutput.write(data + Data("\n".utf8))

@@ -249,7 +249,11 @@ actor EiliAnisetteService {
                      "X-Mme-Device-Id", "X-Apple-I-SRL-NO", "X-Mme-Client-Info", "User-Agent",
                      "X-Apple-I-Client-Time", "X-Apple-Locale", "X-Apple-I-TimeZone"]
         let values = names.map { name in headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value ?? "" }
-        guard values.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+        // SideStore preserves present-but-empty generated machineID/OTP values.
+        // Required header presence remains strict, and all other metadata must be nonempty.
+        guard headers.keys.contains(where: { $0.caseInsensitiveCompare(names[0]) == .orderedSame }),
+              headers.keys.contains(where: { $0.caseInsensitiveCompare(names[1]) == .orderedSame }),
+              values.dropFirst(2).allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             throw EiliAnisetteError.invalidHeaders
         }
         return SideSign.AnisetteData(machineID: values[0], oneTimePassword: values[1], localUserID: values[2],

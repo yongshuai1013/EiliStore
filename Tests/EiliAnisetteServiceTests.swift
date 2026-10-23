@@ -379,14 +379,12 @@ enum KeychainHelper {
         check(FakeAnisetteKitControl.resetCount >= 2, "local engine not reset after import and reset")
         print("PASS: local reset preserves session, Apple ID, remote identity/blob, certificate, mode and libraries")
 
-        let unsafeDir = fixtureDir.appendingPathComponent("unsafe-legacy-tls")
+        let unsafeDir = fixtureDir.appendingPathComponent("legacy-missing-required-entry")
         try FileManager.default.createDirectory(at: unsafeDir, withIntermediateDirectories: true)
         let unsafeFiles = try ADILibraryProfile.legacy.filenames.map { name in
             let url = unsafeDir.appendingPathComponent(name)
             try ADIElfFixture.make(soname: name,
-                exports: name == "libstoreservicescore.so" ? ADILibraryCompatibility.requiredEntryPoints.sorted() : [],
-                imports: name == "libCoreADI.so" ? ["sidestore_unsupported_tls"] : [],
-                symbolTypes: name == "libCoreADI.so" ? ["sidestore_unsupported_tls": 6] : [:]).write(to: url)
+                exports: name == "libstoreservicescore.so" ? Array(ADILibraryCompatibility.requiredEntryPoints.sorted().dropFirst()) : []).write(to: url)
             return url
         }
         try FileManager.default.removeItem(at: libraryDirectory)
@@ -397,29 +395,55 @@ enum KeychainHelper {
         let unsafeIdentity = KeychainHelper.load(forKey: "eilistore.anisette.local.identifier")
         let unsafeBlob = KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")
         let unsafeImported = try await svc.importLibraries(unsafeFiles)
-        if case .incompatible = unsafeImported {} else { fatalError("TLS legacy fixture marked runnable") }
-        do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("TLS-blocked legacy executed") }
+        if case .incompatible = unsafeImported {} else { fatalError("missing-entry legacy fixture marked runnable") }
+        do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("missing-entry legacy executed") }
         catch EiliAnisetteError.incompatibleLibraries {}
-        if case .incompatible = await svc.localLibraryStatus() {} else { fatalError("TLS blocker missing from status") }
-        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "TLS-blocked legacy touched provider")
-        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == unsafeIdentity && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == unsafeBlob, "TLS-blocked legacy mutated identity")
-        check(await manager.calls == remoteBeforeUnsafe && !FileManager.default.fileExists(atPath: provisioning.path), "TLS block fell back remotely or created provisioning")
-        check(EiliAnisetteMode.selected == legacyMode && EiliAnisetteMode.savedSessionMode == legacySessionMode, "TLS preflight changed modes")
-        for (key, value) in protectedLoginValues { check(KeychainHelper.load(forKey: key) == value, "TLS preflight changed protected login data") }
+        if case .incompatible = await svc.localLibraryStatus() {} else { fatalError("missing-entry blocker missing from status") }
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "missing-entry legacy touched provider")
+        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == unsafeIdentity && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == unsafeBlob, "missing-entry legacy mutated identity")
+        check(await manager.calls == remoteBeforeUnsafe && !FileManager.default.fileExists(atPath: provisioning.path), "missing-entry block fell back remotely or created provisioning")
+        check(EiliAnisetteMode.selected == legacyMode && EiliAnisetteMode.savedSessionMode == legacySessionMode, "missing-entry preflight changed modes")
+        for (key, value) in protectedLoginValues { check(KeychainHelper.load(forKey: key) == value, "missing-entry preflight changed protected login data") }
         try await svc.importLibraries(elfFiles)
         check(await svc.localLibraryStatus() == .present, "compatible legacy restore blocked")
         // A newly incompatible set must not replace the restored usable cache.
         let resetBeforeUnsafeReplacement = FakeAnisetteKitControl.resetCount
-        do { _ = try await svc.importLibraries(unsafeFiles); fatalError("TLS replaced usable cache") }
+        do { _ = try await svc.importLibraries(unsafeFiles); fatalError("missing-entry set replaced usable cache") }
         catch EiliAnisetteError.incompatibleLibraries {}
-        check(FakeAnisetteKitControl.resetCount == resetBeforeUnsafeReplacement, "unsafe replacement reset engine")
+        check(FakeAnisetteKitControl.resetCount == resetBeforeUnsafeReplacement, "missing-entry replacement reset engine")
         check(await svc.localLibraryStatus() == .present, "unsafe replacement damaged usable cache")
         // Header-correct but structurally incomplete metadata must not replace it.
         for url in unsafeFiles { try Data(validCore.prefix(128)).write(to: url) }
         do { _ = try await svc.importLibraries(unsafeFiles); fatalError("header-only legacy accepted") }
         catch EiliAnisetteError.invalidLibraries {}
         check(await svc.localLibraryStatus() == .present, "malformed import damaged cache")
-        print("PASS: unsupported TLS remains a preflight blocker without VM/provider/identity mutation")
+        print("PASS: missing required legacy entry remains blocked without VM/provider/identity mutation")
+
+        // TLS symbol classification is diagnostic-only under SideStore parity: it
+        // cannot prevent import/status. Inspecting metadata must not start the VM or
+        // create/change any provisioning identity. Synthetic metadata is not TLS support.
+        let tlsDir = fixtureDir.appendingPathComponent("tls-metadata")
+        try FileManager.default.createDirectory(at: tlsDir, withIntermediateDirectories: true)
+        let tlsFiles = try ADILibraryProfile.legacy.filenames.map { name in
+            let url = tlsDir.appendingPathComponent(name)
+            try ADIElfFixture.make(soname: name,
+                exports: name == "libstoreservicescore.so" ? ADILibraryCompatibility.requiredEntryPoints.sorted() : [],
+                imports: name == "libCoreADI.so" ? ["sidestore_tls_metadata"] : [],
+                symbolTypes: name == "libCoreADI.so" ? ["sidestore_tls_metadata": 6] : [:]).write(to: url)
+            return url
+        }
+        FakeAnisetteKitControl.reset()
+        let identityBeforeTLS = KeychainHelper.load(forKey: "eilistore.anisette.local.identifier")
+        let blobBeforeTLS = KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")
+        let tlsImported = try await svc.importLibraries(tlsFiles)
+        check(tlsImported == .present, "TLS metadata alone blocked legacy import")
+        let tlsReport = try ADILibraryCompatibility.read(directory: libraryDirectory, profile: .legacy)
+        check(!tlsReport.hasStaticBlockers, "TLS metadata alone was classified as a static blocker")
+        let resetsBeforeTLSStatus = FakeAnisetteKitControl.resetCount
+        check(await svc.localLibraryStatus() == .present, "TLS metadata alone blocked status")
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == resetsBeforeTLSStatus, "TLS metadata inspection touched VM/provider")
+        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == identityBeforeTLS && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == blobBeforeTLS, "TLS metadata import/status mutated provisioning identity")
+        try await svc.importLibraries(elfFiles)
 
         // Unknown functions use the requested SideStore compatibility path, without
         // making the read-only status operation execute a VM or create an identity.
@@ -446,17 +470,19 @@ enum KeychainHelper {
         check(await svc.localLibraryStatus() == .present, "read-only fallback status blocked")
         check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == resetCountBeforeFallbackStatus, "fallback status touched engine")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == identityBeforeFallback && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == blobBeforeFallback, "fallback status created identity")
-        for type: UInt8 in [3, 6, 10] {
+        for type: UInt8 in [3, 10] {
             try ADIElfFixture.make(soname: "libCoreADI.so", imports: ["sidestore_missing_nonfunction"],
                 symbolTypes: ["sidestore_missing_nonfunction": type]).write(to: fallbackFiles[0])
-            do { _ = try await svc.importLibraries(fallbackFiles); fatalError("unsafe symbol replaced usable fallback cache") }
-            catch EiliAnisetteError.incompatibleLibraries {}
-            check(await svc.localLibraryStatus() == .present, "unsafe symbol rejection damaged usable fallback cache")
+            let importedOtherType = try await svc.importLibraries(fallbackFiles)
+            check(importedOtherType == .present && !fallbackReport.hasStaticBlockers, "other unknown symbol type blocked SideStore path")
+            let otherTypeReport = try ADILibraryCompatibility.read(directory: libraryDirectory, profile: .legacy)
+            check(otherTypeReport.unsupportedSymbolImports == ["sidestore_missing_nonfunction"] && otherTypeReport.fallbackFunctionImports == ["sidestore_missing_nonfunction"], "unknown symbol type lost diagnostic or fallback")
+            check(await svc.localLibraryStatus() == .present, "unknown symbol diagnostic blocked read-only status")
         }
         check(EiliAnisetteMode.selected == legacyMode && EiliAnisetteMode.savedSessionMode == legacySessionMode, "fallback preflight changed mode")
         for (key, value) in protectedLoginValues { check(KeychainHelper.load(forKey: key) == value, "fallback preflight changed protected data") }
         try await svc.importLibraries(elfFiles)
-        print("PASS: SideStore function/data placeholders, informational missing dependencies, unsafe TLS rejection, read-only VM/identity isolation (placeholders are not ABI implementations or login verification)")
+        print("PASS: SideStore function/data placeholders, informational missing dependencies, TLS metadata diagnostics, missing-entry blocking and read-only VM/identity isolation (placeholders are not ABI implementations or login verification)")
 
 
         let modernDir = FileManager.default.temporaryDirectory.appendingPathComponent("anisette-modern-\(UUID().uuidString)")
@@ -524,7 +550,12 @@ enum KeychainHelper {
         let mapped = try EiliAnisetteService.convertHeaders(validHeaders)
         check(mapped.machineID == "m" && mapped.oneTimePassword == "otp" && mapped.deviceID == "dev" && mapped.timeZone == "UTC", "case insensitive header mapping")
         for key in validHeaders.keys { var missing = validHeaders; missing.removeValue(forKey: key); do { _ = try EiliAnisetteService.convertHeaders(missing); fatalError("missing header accepted: \(key)") } catch EiliAnisetteError.invalidHeaders {} }
-        var empty = validHeaders; empty["user-agent"] = " \n"; do { _ = try EiliAnisetteService.convertHeaders(empty); fatalError("empty header accepted") } catch EiliAnisetteError.invalidHeaders {}
+        var emptyGeneratedValues = validHeaders
+        emptyGeneratedValues["X-apple-i-md-m"] = ""
+        emptyGeneratedValues["x-APPLE-I-MD"] = ""
+        let convertedEmptyGenerated = try EiliAnisetteService.convertHeaders(emptyGeneratedValues)
+        check(convertedEmptyGenerated.machineID.isEmpty && convertedEmptyGenerated.oneTimePassword.isEmpty, "present empty generated machineID/OTP were not preserved")
+        var empty = validHeaders; empty["user-agent"] = " \n"; do { _ = try EiliAnisetteService.convertHeaders(empty); fatalError("empty non-generated header accepted") } catch EiliAnisetteError.invalidHeaders {}
 
         func elf(machine: UInt8 = 183, bits: UInt8 = 2, kind: UInt8 = 3) -> Data {
             var b = [UInt8](repeating: 0, count: 65); b[0...3] = [0x7f, 0x45, 0x4c, 0x46]; b[4] = bits; b[5] = 1; b[6] = 1; b[16] = kind; b[18] = machine; return Data(b)
