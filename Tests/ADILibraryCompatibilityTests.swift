@@ -111,12 +111,12 @@ import Foundation
         missingEntrySet["libstoreservicescore.so"] = try metadata("libstoreservicescore.so", exports: Array(required.dropFirst(4)))
         let missingEntry = ADILibraryCompatibility.inspect(profile: legacy, metadata: missingEntrySet)
         precondition(missingEntry.missingEntryPoints == [required[3]])
-        precondition(missingEntry.hasStaticBlockers, "missing required entrypoint must block")
+        precondition(!missingEntry.hasStaticBlockers, "missing legacy entrypoint is diagnostic only")
 
         var badLegacy = legacySet
         badLegacy["libCoreADI.so"] = try metadata("wrongCoreADI.so", exports: Array(required.prefix(3)), relocations: [1027, 1028], tags: [36])
         let bad = ADILibraryCompatibility.inspect(profile: legacy, metadata: badLegacy)
-        precondition(bad.mismatchedSONAMEs == ["libCoreADI.so"] && bad.unsupportedRelocations == [1028] && bad.unsupportedDynamicTags == [36] && bad.hasStaticBlockers)
+        precondition(bad.mismatchedSONAMEs == ["libCoreADI.so"] && bad.unsupportedRelocations == [1028] && bad.unsupportedDynamicTags == [36] && !bad.hasStaticBlockers)
         let ignoredLegacyFormats = ADILibraryCompatibility.inspect(profile: legacy, metadata: [
             "libCoreADI.so": try metadata("libCoreADI.so", exports: Array(required.prefix(3)), relocations: [1027, 1028], tags: [36]),
             "libstoreservicescore.so": try metadata("libstoreservicescore.so", exports: Array(required.dropFirst(3)))

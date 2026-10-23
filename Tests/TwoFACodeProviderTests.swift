@@ -5,7 +5,7 @@ import SideSign
 @main
 @MainActor
 struct TwoFACodeProviderTests {
-    static func expectCancellation<T>(_ operation: () async throws -> T) async {
+    static func expectCancellation<T: Sendable>(_ operation: () async throws -> T) async {
         do {
             _ = try await operation()
             fatalError("預期取消，但等待正常返回")

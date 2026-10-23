@@ -111,9 +111,8 @@ actor EiliAnisetteService {
     }
     private var libraries: URL { root.appendingPathComponent("Libraries", isDirectory: true) }
 
-    /// Both layouts require bounded ELF metadata and symbol/relocation preflight.
-    /// Legacy missing dependencies and function/data fallbacks follow SideStore;
-    /// passing preflight is not proof of ABI support or successful provisioning.
+    /// Both layouts require bounded ELF metadata. Legacy symbol/dependency findings
+    /// are diagnostic only; passing preflight is not proof of ABI or login support.
     /// Neither path initializes a VM/provider, creates an identity, or contacts Apple.
     func localStorageStatus() -> EiliAnisetteStorageStatus {
         let provisioning = root.appendingPathComponent("Provisioning", isDirectory: true).appendingPathComponent("adi.pb")
@@ -223,7 +222,7 @@ actor EiliAnisetteService {
             requestHeaders["X-Apple-I-MD-RINFO"] = routingInfo
         }
         let (headers, blob) = try await client.getAnisetteData(identifier: identifier,
-            storage: .memory(existingBlob: KeychainHelper.load(forKey: Self.localBlobKey)),
+            storage: .memory(existingBlob: KeychainHelper.load(forKey: Self.localBlobKey).flatMap { $0.isEmpty ? nil : $0 }),
             headers: .init(rawHeaders: requestHeaders))
         // Save a provisioned identity before honouring cancellation, never log its payload.
         if let blob, !KeychainHelper.save(blob, forKey: Self.localBlobKey) {

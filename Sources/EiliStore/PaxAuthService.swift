@@ -1,7 +1,7 @@
 import Foundation
 import SideSign
 
-/// PaxStore 登入服務（用 SideSign，跟 SideStore 同款）
+/// EiliStore 登入接線：參照 SideStore 的流程語義，使用 SideSign 而不複製其 app 實作。
 public final class PaxAuthService {
     public static let shared = PaxAuthService()
     
@@ -131,12 +131,14 @@ public final class PaxAuthService {
         try Task.checkCancellation()
         guard !codeProvider.isCancelled else { throw CancellationError() }
 
-        // 保存 session 到 Keychain
-        guard KeychainHelper.saveCodable(session, forKey: KeychainKey.session) else {
-            throw LoginError.sessionSaveFailed
-        }
-        guard KeychainHelper.saveString(appleID, forKey: KeychainKey.appleID) else {
-            KeychainHelper.delete(forKey: KeychainKey.session)
+        // SideSign 必須先回傳真正的 AuthSession；兩項保存視為同一筆交易。
+        // 寫入失敗不能破壞既有登入，也不能留下新舊帳號混合的狀態。
+        let previousSession = KeychainHelper.load(forKey: KeychainKey.session)
+        let previousAppleID = KeychainHelper.load(forKey: KeychainKey.appleID)
+        guard KeychainHelper.saveCodable(session, forKey: KeychainKey.session),
+              KeychainHelper.saveString(appleID, forKey: KeychainKey.appleID) else {
+            restoreKeychainItem(previousSession, forKey: KeychainKey.session)
+            restoreKeychainItem(previousAppleID, forKey: KeychainKey.appleID)
             throw LoginError.sessionSaveFailed
         }
         UserDefaults.standard.set(anisetteMode.rawValue, forKey: EiliAnisetteMode.sessionKey)

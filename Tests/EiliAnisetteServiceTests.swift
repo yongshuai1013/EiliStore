@@ -297,6 +297,11 @@ enum KeychainHelper {
         check(remoteCallsAfterImplicitLocal == remoteCallsBeforeMissing, "saved on-device preference called remote")
         check(localData.machineID == "v0" && localData.oneTimePassword == "v1", "local header conversion")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == localResponseBlob, "local blob persistence")
+        KeychainHelper.save(Data(), forKey: "eilistore.anisette.local.adiblob")
+        FakeAnisetteKitControl.reset(); FakeAnisetteKitControl.configure(blob: Data(), routingInfo: "v3")
+        _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
+        check(FakeAnisetteKitControl.blob == nil, "empty persisted local blob was reused instead of reprovisioned")
+        check(KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")?.isEmpty == true, "empty current response was not persisted")
         let routingKey = "eilistore.anisette.local.routinginfo"
         check(KeychainHelper.loadString(forKey: routingKey) == "v3", "local routing-info not persisted")
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteBlobBeforeLocal, "local branch modified remote blob")
@@ -392,32 +397,26 @@ enum KeychainHelper {
         let legacySessionMode = EiliAnisetteMode.savedSessionMode
         let remoteBeforeUnsafe = await manager.calls
         FakeAnisetteKitControl.reset()
-        let unsafeIdentity = KeychainHelper.load(forKey: "eilistore.anisette.local.identifier")
-        let unsafeBlob = KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")
         let unsafeImported = try await svc.importLibraries(unsafeFiles)
-        if case .incompatible = unsafeImported {} else { fatalError("missing-entry legacy fixture marked runnable") }
-        do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("missing-entry legacy executed") }
-        catch EiliAnisetteError.incompatibleLibraries {}
-        if case .incompatible = await svc.localLibraryStatus() {} else { fatalError("missing-entry blocker missing from status") }
-        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "missing-entry legacy touched provider")
-        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == unsafeIdentity && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == unsafeBlob, "missing-entry legacy mutated identity")
-        check(await manager.calls == remoteBeforeUnsafe && !FileManager.default.fileExists(atPath: provisioning.path), "missing-entry block fell back remotely or created provisioning")
+        check(unsafeImported == .present, "missing-entry legacy diagnostic blocked import")
+        check(await svc.localLibraryStatus() == .present, "missing-entry legacy diagnostic blocked status")
+        _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)
+        check(FakeAnisetteKitControl.calls == 1, "missing-entry legacy did not reach native provider")
+        check(KeychainHelper.loadString(forKey: "eilistore.anisette.local.identifier") != nil, "native provisioning attempt did not establish local identity")
+        check(await manager.calls == remoteBeforeUnsafe && FileManager.default.fileExists(atPath: provisioning.path), "legacy call fell back remotely or skipped native provisioning")
         check(EiliAnisetteMode.selected == legacyMode && EiliAnisetteMode.savedSessionMode == legacySessionMode, "missing-entry preflight changed modes")
         for (key, value) in protectedLoginValues { check(KeychainHelper.load(forKey: key) == value, "missing-entry preflight changed protected login data") }
         try await svc.importLibraries(elfFiles)
         check(await svc.localLibraryStatus() == .present, "compatible legacy restore blocked")
-        // A newly incompatible set must not replace the restored usable cache.
-        let resetBeforeUnsafeReplacement = FakeAnisetteKitControl.resetCount
-        do { _ = try await svc.importLibraries(unsafeFiles); fatalError("missing-entry set replaced usable cache") }
-        catch EiliAnisetteError.incompatibleLibraries {}
-        check(FakeAnisetteKitControl.resetCount == resetBeforeUnsafeReplacement, "missing-entry replacement reset engine")
-        check(await svc.localLibraryStatus() == .present, "unsafe replacement damaged usable cache")
+        // A malformed file, unlike missing symbol metadata, must not replace cache.
+        let resetBeforeMalformedReplacement = FakeAnisetteKitControl.resetCount
         // Header-correct but structurally incomplete metadata must not replace it.
         for url in unsafeFiles { try Data(validCore.prefix(128)).write(to: url) }
         do { _ = try await svc.importLibraries(unsafeFiles); fatalError("header-only legacy accepted") }
         catch EiliAnisetteError.invalidLibraries {}
+        check(FakeAnisetteKitControl.resetCount == resetBeforeMalformedReplacement, "malformed replacement reset engine")
         check(await svc.localLibraryStatus() == .present, "malformed import damaged cache")
-        print("PASS: missing required legacy entry remains blocked without VM/provider/identity mutation")
+        print("PASS: missing required legacy entry is diagnostic; malformed replacement preserves usable cache")
 
         // TLS symbol classification is diagnostic-only under SideStore parity: it
         // cannot prevent import/status. Inspecting metadata must not start the VM or
@@ -482,9 +481,10 @@ enum KeychainHelper {
         check(EiliAnisetteMode.selected == legacyMode && EiliAnisetteMode.savedSessionMode == legacySessionMode, "fallback preflight changed mode")
         for (key, value) in protectedLoginValues { check(KeychainHelper.load(forKey: key) == value, "fallback preflight changed protected data") }
         try await svc.importLibraries(elfFiles)
-        print("PASS: SideStore function/data placeholders, informational missing dependencies, TLS metadata diagnostics, missing-entry blocking and read-only VM/identity isolation (placeholders are not ABI implementations or login verification)")
+        print("PASS: SideStore function/data placeholders, informational missing dependencies, TLS diagnostics, missing-entry compatibility and read-only VM/identity isolation (placeholders are not ABI implementations or login verification)")
 
 
+        try await svc.resetLocal()
         let modernDir = FileManager.default.temporaryDirectory.appendingPathComponent("anisette-modern-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: modernDir) }
         try FileManager.default.createDirectory(at: modernDir, withIntermediateDirectories: true)

@@ -42,10 +42,13 @@ struct ADILibraryCompatibility: Equatable, Sendable {
     // libstoreapi requires a new Android ABI adapter; do not send it into the legacy loader.
     var runtimeAdapterAvailable: Bool { profile == .legacy }
     var hasStaticBlockers: Bool {
-        !missingFiles.isEmpty || (profile == .modern && !missingDependencies.isEmpty) || !missingEntryPoints.isEmpty ||
-        !blockedDataImports.isEmpty ||
-        (profile == .modern && (!unsupportedRelocations.isEmpty || !unsupportedDynamicTags.isEmpty || hasThreadLocalSegments)) ||
-        !mismatchedSONAMEs.isEmpty
+        // SideStore attempts loading legacy ELF files and lets native calls report
+        // ABI/dependency/symbol failures. Those findings are diagnostics, not gates.
+        // The modern profile remains diagnostics-only and requires complete metadata.
+        !missingFiles.isEmpty || (profile == .modern &&
+            (!missingDependencies.isEmpty || !missingEntryPoints.isEmpty || !blockedDataImports.isEmpty ||
+             !unsupportedRelocations.isEmpty || !unsupportedDynamicTags.isEmpty || hasThreadLocalSegments ||
+             !mismatchedSONAMEs.isEmpty))
     }
     var summary: String {
         var parts: [String] = []

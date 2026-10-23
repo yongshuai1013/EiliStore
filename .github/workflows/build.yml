@@ -49,6 +49,8 @@ jobs:
           bash Tests/run-adi-elf-tests.sh
           PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_adi_loader_contract.py
           bash Tests/run-anisette-tests.sh
+          bash Tests/run-login-flow-tests.sh
+          bash Tests/run-twofa-tests.sh
           bash Tests/run-adi-download-tests.sh
           PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_user_customizations_navigation.py
           bash Tests/run-anisette-client-config-tests.sh
