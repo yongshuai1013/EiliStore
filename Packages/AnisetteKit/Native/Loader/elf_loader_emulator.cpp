@@ -1381,6 +1381,42 @@ static void import_callback_router(uc_engine *uc, uint64_t address, uint32_t siz
     }
 }
 
+// Resolve only ordinary mapped definitions as image-relative addresses. Absolute
+// values are not rebased; TLS/COMMON/XINDEX require semantics this VM lacks.
+static bool defined_symbol_address(const EmulatorVM::LibraryInfo &lib,
+                                   const Elf64_Sym &sym, uint64_t &address) {
+    if (sym.st_shndx == 0xfff1) { address = sym.st_value; return true; } // SHN_ABS
+    if (!sym.st_shndx || sym.st_shndx == 0xfff2 || sym.st_shndx == 0xffff ||
+        (sym.st_info & 0xf) == 6) return false;
+    for (const auto &range : lib.load_ranges) {
+        // A zero-sized linker marker may legally denote the segment endpoint.
+        if (sym.st_value < range.first || sym.st_value > range.second ||
+            sym.st_size > range.second - sym.st_value ||
+            (sym.st_size && sym.st_value == range.second)) continue;
+        if (sym.st_value < lib.min_vaddr ||
+            sym.st_value - lib.min_vaddr > UINT64_MAX - lib.base_address) return false;
+        address = lib.base_address + (sym.st_value - lib.min_vaddr);
+        return true;
+    }
+    return false;
+}
+
+static bool symbol_name(EmulatorVM *vm, const EmulatorVM::LibraryInfo &lib,
+                        const Elf64_Sym &sym, std::string &name) {
+    if (sym.st_name >= lib.strsz || lib.strsz > UINT64_MAX - lib.strtab) return false;
+    // Bounded chunks avoid copying the entire string table for every symbol.
+    for (size_t offset = sym.st_name; offset < lib.strsz;) {
+        char bytes[256];
+        const size_t n = std::min(sizeof bytes, lib.strsz - offset);
+        if (uc_mem_read(vm->uc, lib.strtab + offset, bytes, n) != UC_ERR_OK) return false;
+        const char *end = std::find(bytes, bytes + n, '\0');
+        name.append(bytes, static_cast<size_t>(end - bytes));
+        if (end != bytes + n) return true;
+        offset += n;
+    }
+    return false;
+}
+
 static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo &current_lib, uint32_t sym_idx,
     EmulatorVM::ResolutionSource *source = nullptr, bool *is_cxa_atexit = nullptr) {
     using Source = EmulatorVM::ResolutionSource;
@@ -1390,28 +1426,25 @@ static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo 
         if (source) *source = from;
         return address;
     };
-    if (!current_lib.symtab || !current_lib.strtab) return 0;
-    Elf64_Sym sym;
-    if (uc_mem_read(vm->uc, current_lib.symtab + sym_idx * sizeof(Elf64_Sym), &sym, sizeof(sym)) != UC_ERR_OK) {
+    auto invalid = [&]() -> uint64_t {
+        vm->execution_error = "Invalid or unsupported ELF relocation symbol in " + current_lib.name;
         return 0;
-    }
-
+    };
+    if (!current_lib.symtab || !current_lib.strtab || sym_idx >= current_lib.symbol_count ||
+        sym_idx > (UINT64_MAX - current_lib.symtab) / sizeof(Elf64_Sym)) return invalid();
+    Elf64_Sym sym;
+    if (uc_mem_read(vm->uc, current_lib.symtab + uint64_t(sym_idx) * sizeof sym,
+                    &sym, sizeof sym) != UC_ERR_OK) return invalid();
     std::string sym_name;
-    if (sym.st_name < current_lib.strsz) {
-        std::vector<char> name_buf(256, 0);
-        uc_mem_read(vm->uc, current_lib.strtab + sym.st_name, name_buf.data(), 255);
-        sym_name = name_buf.data();
-    }
-
+    if (!symbol_name(vm, current_lib, sym, sym_name)) return invalid();
     if (is_cxa_atexit) *is_cxa_atexit = sym_name == "__cxa_atexit";
-    if (sym_name.empty()) {
-        if (sym.st_value != 0) return resolved(current_lib.base_address + (sym.st_value - current_lib.min_vaddr), Source::definedSymbol);
-        return current_lib.base_address;
+    if (sym.st_shndx != 0) {
+        uint64_t address = 0;
+        if (!defined_symbol_address(current_lib, sym, address)) return invalid();
+        return resolved(address, Source::definedSymbol);
     }
-
-    if (sym.st_value != 0 && sym.st_shndx != 0) {
-        return resolved(current_lib.base_address + (sym.st_value - current_lib.min_vaddr), Source::definedSymbol);
-    }
+    // The null symbol denotes zero, not an import named "" or the image base.
+    if (sym_name.empty()) return resolved(0, Source::definedSymbol);
 
     auto self_it = current_lib.symbols.find(sym_name);
     if (self_it != current_lib.symbols.end()) return resolved(self_it->second, Source::selfSymbol);
@@ -1463,6 +1496,10 @@ static void apply_vm_relocations(EmulatorVM *vm, EmulatorVM::LibraryInfo &lib) {
                 uc_mem_write(vm->uc, target_addr, &final_val, sizeof(final_val));
                 applied++;
             } else if (type == R_AARCH64_JUMP_SLOT || type == R_AARCH64_GLOB_DAT || type == R_AARCH64_ABS64) {
+                if (sym_idx >= lib.symbol_count) {
+                    vm->execution_error = "Relocation symbol index outside validated dynsym in " + lib.name;
+                    return;
+                }
                 EmulatorVM::ResolutionSource source;
                 bool is_cxa_atexit = false;
                 uint64_t sym_addr = vm_resolve_symbol(vm, lib, sym_idx, &source, &is_cxa_atexit);
@@ -1477,7 +1514,7 @@ static void apply_vm_relocations(EmulatorVM *vm, EmulatorVM::LibraryInfo &lib) {
                     else if (vm->cxa_atexit_slots.size() < 8) vm->cxa_atexit_slots.push_back(slot);
                 }
                 if (!vm->execution_error.empty()) return;
-                if (sym_addr != 0) {
+                if (source != EmulatorVM::ResolutionSource::unresolved) {
                     uint64_t final_val = sym_addr + r.r_addend;
                     uc_mem_write(vm->uc, target_addr, &final_val, sizeof(final_val));
                     applied++;
@@ -1586,6 +1623,10 @@ bool load_library_to_vm(EmulatorVM *vm, const std::string &file_path, const std:
     lib.init_array = 0;
     lib.init_arraysz = 0;
     lib.program_header_count = ehdr->e_phnum;
+    for (const auto &ph : headers) {
+        if (ph.p_type == PT_LOAD && ph.p_memsz)
+            lib.load_ranges.push_back({ph.p_vaddr, ph.p_vaddr + ph.p_memsz});
+    }
     const auto phdr_bytes = reinterpret_cast<const uint8_t *>(headers.data());
     lib.program_headers.assign(phdr_bytes, phdr_bytes + headers.size() * sizeof(Elf64_Phdr));
     lib.program_headers_guest = vm->write_bytes(lib.program_headers.data(), lib.program_headers.size());
@@ -1613,58 +1654,171 @@ bool load_library_to_vm(EmulatorVM *vm, const std::string &file_path, const std:
         }
     }
 
-    if (lib.dynamic_address) {
-        size_t dyn_offset = 0;
-        while (true) {
+    // Metadata must come from actual file-backed PT_LOAD bytes, never the
+    // zero-filled BSS or the VM's page-alignment padding.
+    auto file_span = [&](uint64_t va, uint64_t size, size_t &off) {
+        for (const auto &ph : headers) {
+            if (ph.p_type != PT_LOAD || va < ph.p_vaddr) continue;
+            const uint64_t delta = va - ph.p_vaddr;
+            if (delta <= ph.p_filesz && size <= ph.p_filesz - delta) {
+                off = static_cast<size_t>(ph.p_offset + delta);
+                return true;
+            }
+        }
+        return false;
+    };
+    auto file_available = [&](uint64_t va) -> uint64_t {
+        uint64_t available = 0;
+        for (const auto &ph : headers) if (ph.p_type == PT_LOAD && va >= ph.p_vaddr &&
+            va - ph.p_vaddr < ph.p_filesz)
+            available = std::max(available, ph.p_filesz - (va - ph.p_vaddr));
+        return available;
+    };
+    auto guest_pointer = [&](uint64_t va, uint64_t &ptr) {
+        if (va < min_vaddr || va >= max_vaddr || va - min_vaddr > UINT64_MAX - base_address) return false;
+        ptr = base_address + (va - min_vaddr);
+        return true;
+    };
+    uint64_t hash_va = 0, gnu_va = 0, sym_va = 0, str_va = 0;
+    bool syment_seen = false;
+    std::vector<uint64_t> metadata_starts;
+    size_t dynamic_count = 0;
+    for (const auto &ph : headers) {
+        if (ph.p_type != PT_DYNAMIC) continue;
+        if (++dynamic_count > 1 || !ph.p_filesz || ph.p_filesz > ph.p_memsz ||
+            ph.p_filesz % sizeof(Elf64_Dyn)) return false;
+        size_t dynamic_off;
+        if (!file_span(ph.p_vaddr, ph.p_filesz, dynamic_off) ||
+            ph.p_offset != dynamic_off) return false;
+        bool terminated = false;
+        for (uint64_t off = 0; off < ph.p_filesz; off += sizeof(Elf64_Dyn)) {
             Elf64_Dyn dyn;
-            if (uc_mem_read(vm->uc, lib.dynamic_address + dyn_offset, &dyn, sizeof(dyn)) != UC_ERR_OK) break;
-            dyn_offset += sizeof(dyn);
-            if (dyn.d_tag == DT_NULL) break;
-
-            uint64_t val = (uint64_t)dyn.d_un.d_val;
-            uint64_t ptr = (val >= min_vaddr) ? (base_address + (val - min_vaddr)) : (base_address + val);
-
+            memcpy(&dyn, buffer.data() + dynamic_off + off, sizeof dyn);
+            if (dyn.d_tag == DT_NULL) { terminated = true; break; }
+            const uint64_t val = dyn.d_un.d_val;
+            uint64_t *ptr = nullptr;
             switch (dyn.d_tag) {
-                case DT_SYMTAB: lib.symtab = ptr; break;
-                case DT_STRTAB: lib.strtab = ptr; break;
-                case DT_STRSZ:  lib.strsz = (size_t)val; break;
-                case DT_REL:    lib.rel = ptr; break;
-                case DT_RELSZ:  lib.relsz = (size_t)val; break;
-                case DT_RELA:   lib.rela = ptr; break;
-                case DT_RELASZ: lib.relasz = (size_t)val; break;
-                case DT_JMPREL: lib.jmprel = ptr; break;
-                case DT_PLTRELSZ: lib.pltrelsz = (size_t)val; break;
-                case DT_INIT:   lib.init_func = ptr; break;
-                case DT_INIT_ARRAY: lib.init_array = ptr; break;
-                case DT_INIT_ARRAYSZ: lib.init_arraysz = (size_t)val; break;
+                case DT_HASH: hash_va = val; metadata_starts.push_back(val); break;
+                case 0x6ffffef5: gnu_va = val; metadata_starts.push_back(val); break; // DT_GNU_HASH
+                case DT_SYMTAB: sym_va = val; ptr = &lib.symtab; break;
+                case DT_STRTAB: str_va = val; ptr = &lib.strtab; break;
+                case DT_STRSZ: if (val > SIZE_MAX) return false; lib.strsz = size_t(val); break;
+                case DT_SYMENT: if (val != sizeof(Elf64_Sym)) return false; syment_seen = true; break;
+                case DT_REL: ptr = &lib.rel; break;
+                case DT_RELSZ: lib.relsz = size_t(val); break;
+                case DT_RELA: ptr = &lib.rela; break;
+                case DT_RELASZ: lib.relasz = size_t(val); break;
+                case DT_JMPREL: ptr = &lib.jmprel; break;
+                case DT_PLTRELSZ: lib.pltrelsz = size_t(val); break;
+                case DT_INIT: ptr = &lib.init_func; break;
+                case DT_INIT_ARRAY: ptr = &lib.init_array; break;
+                case DT_INIT_ARRAYSZ: lib.init_arraysz = size_t(val); break;
+                // Bound GNU chain reads before neighboring version metadata too.
+                case 0x6ffffffe: case 0x6ffffffc: case 0x6ffffff0:
+                    metadata_starts.push_back(val); break;
                 default: break;
             }
+            if (ptr) {
+                if (!guest_pointer(val, *ptr)) return false;
+                metadata_starts.push_back(val);
+            }
         }
+        if (!terminated) return false;
     }
-
-    if (lib.symtab && lib.strtab && lib.strsz) {
-        size_t sym_offset = 0;
-        while (true) {
+    if (lib.symtab) {
+        if (!lib.strtab || !lib.strsz || !syment_seen || (!hash_va && !gnu_va)) return false;
+        size_t strings_off;
+        if (!file_span(str_va, lib.strsz, strings_off)) return false;
+        uint64_t capacity = file_available(sym_va) / sizeof(Elf64_Sym);
+        for (uint64_t next : metadata_starts) if (next > sym_va)
+            capacity = std::min(capacity, (next - sym_va) / sizeof(Elf64_Sym));
+        if (!capacity) return false;
+        auto word = [&](uint64_t va, uint32_t &value) {
+            size_t off;
+            if (!file_span(va, sizeof value, off)) return false;
+            memcpy(&value, buffer.data() + off, sizeof value);
+            return true;
+        };
+        size_t sysv_count = 0, gnu_count = 0;
+        bool gnu_nonempty = false;
+        if (hash_va) {
+            uint32_t nbucket, nchain;
+            if (hash_va > UINT64_MAX - 8 || !word(hash_va, nbucket) ||
+                !word(hash_va + 4, nchain) || !nbucket || !nchain || nchain > capacity) return false;
+            const uint64_t words = uint64_t(nbucket) + nchain;
+            size_t off;
+            if (!file_span(hash_va, 8 + words * 4, off)) return false;
+            for (uint64_t i = 0; i < words; ++i) {
+                uint32_t index;
+                memcpy(&index, buffer.data() + off + 8 + i * 4, 4);
+                if (index >= nchain) return false;
+            }
+            sysv_count = nchain;
+        }
+        if (gnu_va) {
+            uint32_t h[4]; size_t off;
+            if (!file_span(gnu_va, sizeof h, off)) return false;
+            memcpy(h, buffer.data() + off, sizeof h);
+            const uint64_t nbucket = h[0], first = h[1], bloom = h[2];
+            if (!nbucket || !first || first > capacity || !bloom ||
+                (bloom & (bloom - 1)) || h[3] >= 64) return false;
+            const uint64_t prefix = 16 + bloom * 8 + nbucket * 4;
+            if (!file_span(gnu_va, prefix, off) || gnu_va > UINT64_MAX - prefix) return false;
+            const uint64_t chains = gnu_va + prefix;
+            uint64_t chain_bytes = file_available(chains);
+            for (uint64_t next : metadata_starts) if (next > gnu_va) {
+                if (next < chains) return false;
+                chain_bytes = std::min(chain_bytes, next - chains);
+            }
+            std::vector<uint32_t> buckets;
+            for (uint64_t i = 0; i < nbucket; ++i) {
+                uint32_t bucket;
+                memcpy(&bucket, buffer.data() + off + 16 + bloom * 8 + i * 4, 4);
+                if (!bucket) continue;
+                if (bucket < first || bucket >= capacity) return false;
+                buckets.push_back(bucket);
+            }
+            std::sort(buckets.begin(), buckets.end());
+            if (std::adjacent_find(buckets.begin(), buckets.end()) != buckets.end()) return false;
+            gnu_count = size_t(first);
+            for (size_t b = 0; b < buckets.size(); ++b) {
+                gnu_nonempty = true;
+                uint64_t index = buckets[b];
+                while (true) {
+                    const uint64_t delta = index - first;
+                    uint32_t hash;
+                    if (index >= capacity || delta >= chain_bytes / 4 ||
+                        !word(chains + delta * 4, hash)) return false;
+                    ++index;
+                    if (hash & 1) break;
+                    if (b + 1 < buckets.size() && index >= buckets[b + 1]) return false;
+                }
+                if (b + 1 < buckets.size() && index != buckets[b + 1]) return false;
+                gnu_count = size_t(index);
+            }
+        }
+        // SysV carries an explicit total count. An entirely empty GNU hash may
+        // describe only an unhashed prefix, so do not reject that valid case.
+        if (hash_va && gnu_va && (gnu_count > sysv_count ||
+            (gnu_nonempty && gnu_count != sysv_count))) return false;
+        lib.symbol_count = hash_va ? sysv_count : gnu_count;
+        size_t symbols_off;
+        if (!file_span(sym_va, uint64_t(lib.symbol_count) * sizeof(Elf64_Sym), symbols_off)) return false;
+        for (size_t idx = 0; idx < lib.symbol_count; ++idx) {
             Elf64_Sym sym;
-            if (uc_mem_read(vm->uc, lib.symtab + sym_offset, &sym, sizeof(sym)) != UC_ERR_OK) break;
-            sym_offset += sizeof(sym);
-            if (sym.st_name >= lib.strsz) continue;
-
-            std::vector<char> name_buf(256, 0);
-            uc_mem_read(vm->uc, lib.strtab + sym.st_name, name_buf.data(), 255);
-            std::string sym_name = name_buf.data();
-            if (sym_name.empty()) {
-                if (sym_offset > sizeof(sym) * 4 && sym.st_value == 0) break;
-                continue;
-            }
-
-            if (sym.st_value != 0) {
-                uint64_t sym_addr = base_address + (sym.st_value - min_vaddr);
-                lib.symbols[sym_name] = sym_addr;
-            }
+            memcpy(&sym, buffer.data() + symbols_off + idx * sizeof sym, sizeof sym);
+            if (sym.st_name >= lib.strsz) return false;
+            const char *name = reinterpret_cast<const char *>(buffer.data() + strings_off + sym.st_name);
+            const void *nul = memchr(name, 0, lib.strsz - sym.st_name);
+            if (!nul) return false;
+            // Undefined values are never exports, even if st_value is nonzero.
+            if (!sym.st_shndx || !*name) continue;
+            if (sym.st_shndx == 0xfff2 || sym.st_shndx == 0xffff || (sym.st_info & 0xf) == 6) continue;
+            uint64_t address;
+            if (!defined_symbol_address(lib, sym, address)) return false;
+            lib.symbols[std::string(name, static_cast<const char *>(nul))] = address;
         }
-    }
-
+    } else if (hash_va || gnu_va) return false;
     vm->loaded_libraries.push_back(lib);
     return true;
 }

@@ -85,6 +85,8 @@ struct EmulatorVM {
         uint64_t symtab;
         uint64_t strtab;
         size_t   strsz;
+        size_t   symbol_count = 0;
+        std::vector<std::pair<uint64_t, uint64_t>> load_ranges; // [vaddr, vaddr+memsz)
         uint64_t rel;
         size_t   relsz;
         uint64_t rela;

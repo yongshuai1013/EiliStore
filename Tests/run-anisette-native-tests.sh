@@ -47,6 +47,8 @@ LINK=(-pthread)
 "$OUT/module-iteration"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeELFProgramHeadersTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/elf-headers"
 "$OUT/elf-headers"
+"$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeELFSymbolTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/elf-symbols"
+"$OUT/elf-symbols"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeVMStartupTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/vm-startup"
 "$OUT/vm-startup"
 "$CXX" -std=c++17 -UNDEBUG "${INCLUDES[@]}" "$ROOT/Tests/NativeConstructorFaultTests.cpp" "$LOADER" "$BASE" "$LIB" "${LINK[@]}" -o "$OUT/constructor-faults"

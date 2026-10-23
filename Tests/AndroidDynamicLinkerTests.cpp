@@ -128,6 +128,7 @@ int main() {
         synthetic.symtab = vm.write_bytes(reinterpret_cast<const uint8_t *>(&sym), sizeof sym);
         synthetic.strtab = vm.write_bytes(reinterpret_cast<const uint8_t *>(strings.data()), strings.size());
         synthetic.strsz = strings.size();
+        synthetic.symbol_count = 1;
         return vm_resolve_symbol(&vm, synthetic, 0);
     };
     const auto typed_function = resolve("unknown_typed_function", 0x12);
@@ -200,6 +201,7 @@ int main() {
     relocation.symtab = vm.write_bytes(reinterpret_cast<const uint8_t *>(&dataSymbol), sizeof dataSymbol);
     relocation.strtab = vm.write_bytes(reinterpret_cast<const uint8_t *>(dataStrings), sizeof dataStrings);
     relocation.strsz = sizeof dataStrings;
+    relocation.symbol_count = 1;
     Elf64_Rela dataRelocation{};
     dataRelocation.r_offset = 0x100;
     dataRelocation.r_info = R_AARCH64_GLOB_DAT;

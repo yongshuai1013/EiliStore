@@ -61,6 +61,7 @@ VM::LibraryInfo &library(VM &vm) {
     VM::LibraryInfo lib{};
     lib.name = kADISymbols.lib_ssc; lib.base_address = kCode; lib.min_vaddr = 0;
     lib.max_vaddr = 0x1000; lib.init_func = kPc - 12;
+    lib.symbol_count = 2;
     lib.symtab = kCode + 0x300; lib.strtab = kCode + 0x380; lib.strsz = 32;
     lib.jmprel = kCode + 0x400; lib.pltrelsz = sizeof(Elf64_Rela);
     vm.loaded_libraries.push_back(lib); return vm.loaded_libraries.back();
