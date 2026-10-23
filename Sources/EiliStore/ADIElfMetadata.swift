@@ -7,14 +7,17 @@ public struct ADIELFMetadata: Equatable, Sendable {
     public let undefinedStrongSymbols: Set<String>
     public let undefinedFunctionSymbols: Set<String>
     public let undefinedDataSymbols: Set<String>
+    public let undefinedTLSSymbols: Set<String>
+    public let hasThreadLocalSegment: Bool
+    public let undefinedUnsupportedSymbols: Set<String>
     public let relocationTypes: Set<UInt32>
     public let unsupportedDynamicTags: Set<UInt64>
 
-    public init(needed: [String], soname: String?, exportedSymbols: Set<String>, undefinedStrongSymbols: Set<String>, relocationTypes: Set<UInt32>, unsupportedDynamicTags: Set<UInt64>, undefinedFunctionSymbols: Set<String> = [], undefinedDataSymbols: Set<String> = []) {
+    public init(needed: [String], soname: String?, exportedSymbols: Set<String>, undefinedStrongSymbols: Set<String>, relocationTypes: Set<UInt32>, unsupportedDynamicTags: Set<UInt64>, undefinedFunctionSymbols: Set<String> = [], undefinedDataSymbols: Set<String> = [], undefinedTLSSymbols: Set<String> = [], hasThreadLocalSegment: Bool = false, undefinedUnsupportedSymbols: Set<String> = []) {
         self.needed = needed; self.soname = soname; self.exportedSymbols = exportedSymbols
         self.undefinedStrongSymbols = undefinedStrongSymbols; self.relocationTypes = relocationTypes
         self.unsupportedDynamicTags = unsupportedDynamicTags; self.undefinedFunctionSymbols = undefinedFunctionSymbols
-        self.undefinedDataSymbols = undefinedDataSymbols
+        self.undefinedDataSymbols = undefinedDataSymbols; self.undefinedTLSSymbols = undefinedTLSSymbols; self.hasThreadLocalSegment = hasThreadLocalSegment; self.undefinedUnsupportedSymbols = undefinedUnsupportedSymbols
     }
 
     public enum ParseError: Error, Equatable { case malformed(String) }
@@ -45,10 +48,12 @@ public struct ADIELFMetadata: Equatable, Sendable {
         _ = try range(phoff, mul(phents, phnum)); _ = try range(shoff, mul(shents, shnum))
         struct Seg { let va, mem, off, size: UInt64 }
         var loads:[Seg]=[], dynamics:[Seg]=[]
+        var hasTLSProgramSegment = false
         for i in 0..<phnum {
             let p=try add(phoff, try mul(i,phents)), typ=try u(p,4), off=try u(try add(p,8),8), va=try u(try add(p,16),8), fs=try u(try add(p,32),8), ms=try u(try add(p,40),8)
             _ = try range(off,fs); guard fs <= ms else { throw fail("invalid program segment") }
             if typ == 1, fs > 0, ms > 0 { loads.append(Seg(va:va,mem:ms,off:off,size:fs)) }
+            if typ == 7 { hasTLSProgramSegment = true }
             if typ == 2, fs > 0 { dynamics.append(Seg(va:va,mem:ms,off:off,size:fs)) }
         }
         guard !loads.isEmpty, !dynamics.isEmpty else { throw fail("missing PT_LOAD or PT_DYNAMIC") }
@@ -88,7 +93,7 @@ public struct ADIELFMetadata: Equatable, Sendable {
             if tag == 1 { let s=try str(val); guard Self.safeName(s) else { throw fail("unsafe DT_NEEDED") }; needed.append(s) }
             if tag == 14 { let s=try str(val); guard Self.safeName(s) else { throw fail("unsafe SONAME") }; soname=s }
         }
-        var exports:Set<String>=[], undefined:Set<String>=[], functions:Set<String>=[], data:Set<String>=[], relocs:Set<UInt32>=[]
+        var exports:Set<String>=[], undefined:Set<String>=[], functions:Set<String>=[], data:Set<String>=[], tls:Set<String>=[], unsupportedSymbols:Set<String>=[], relocs:Set<UInt32>=[]
         var sawDynsym=false
         for i in 0..<shnum {
             let p=try add(shoff,try mul(i,shents)), typ=try u(try add(p,4),4), off=try u(try add(p,24),8), size=try u(try add(p,32),8), link=try u(try add(p,40),4), ents=try u(try add(p,56),8)
@@ -110,11 +115,14 @@ public struct ADIELFMetadata: Equatable, Sendable {
                     let nameOff=try add(to,no), rem=ts-no
                     guard let end=b[try range(nameOff,rem)].firstIndex(of:0), let name=String(bytes:b[Int(nameOff)..<end],encoding:.utf8), !name.isEmpty else { throw fail("bad symbol string") }
                     let bind=info >> 4, vis=other & 3
+                    let type = info & 0x0f
+                    if type == 6 { tls.insert(name) }
                     if shndx == 0 && (bind == 1 || bind == 2) {
                         if bind == 1 { undefined.insert(name) }
-                        let type = info & 0x0f
                         if type == 2 || type == 0 { functions.insert(name) }
-                        else { data.insert(name) }
+                        else if type == 1 { data.insert(name) }
+                        else if type == 6 { tls.insert(name) }
+                        else { unsupportedSymbols.insert(name) }
                     }
                     if shndx != 0 && (bind == 1 || bind == 2) && (vis == 0 || vis == 3) { exports.insert(name) }
                 }
@@ -122,7 +130,7 @@ public struct ADIELFMetadata: Equatable, Sendable {
         }
         guard sawDynsym else { throw fail("missing SHT_DYNSYM") }
         let unsupported:Set<UInt64>=[0x6000000f,0x60000011,0x6fffe000,36,DT_REL,DT_RELR,DT_ANDROID_REL,DT_ANDROID_RELA]
-        return Self(needed:needed,soname:soname,exportedSymbols:exports,undefinedStrongSymbols:undefined,relocationTypes:relocs,unsupportedDynamicTags:Set(dyn.map{$0.0}).intersection(unsupported),undefinedFunctionSymbols:functions,undefinedDataSymbols:data)
+        return Self(needed:needed,soname:soname,exportedSymbols:exports,undefinedStrongSymbols:undefined,relocationTypes:relocs,unsupportedDynamicTags:Set(dyn.map{$0.0}).intersection(unsupported),undefinedFunctionSymbols:functions,undefinedDataSymbols:data,undefinedTLSSymbols:tls,hasThreadLocalSegment:hasTLSProgramSegment,undefinedUnsupportedSymbols:unsupportedSymbols)
     }
 
     private static let DT_REL:UInt64=17, DT_RELA:UInt64=7, DT_RELSZ:UInt64=18, DT_RELASZ:UInt64=8, DT_RELENT:UInt64=19, DT_RELAENT:UInt64=9, DT_SYMENT:UInt64=11, DT_RELR:UInt64=36, DT_ANDROID_REL:UInt64=0x6000000f, DT_ANDROID_RELA:UInt64=0x60000011

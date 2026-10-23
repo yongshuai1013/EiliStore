@@ -111,7 +111,9 @@ actor EiliAnisetteService {
     }
     private var libraries: URL { root.appendingPathComponent("Libraries", isDirectory: true) }
 
-    /// Both layouts require bounded ELF metadata, dependencies and symbol preflight.
+    /// Both layouts require bounded ELF metadata and symbol/relocation preflight.
+    /// Legacy missing dependencies and function/data fallbacks follow SideStore;
+    /// passing preflight is not proof of ABI support or successful provisioning.
     /// Neither path initializes a VM/provider, creates an identity, or contacts Apple.
     func localStorageStatus() -> EiliAnisetteStorageStatus {
         let provisioning = root.appendingPathComponent("Provisioning", isDirectory: true).appendingPathComponent("adi.pb")

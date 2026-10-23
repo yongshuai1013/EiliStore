@@ -78,6 +78,29 @@ int main() {
     assert(uc_mem_read(vm.uc, lib.base_address + 0x101C0, bss, sizeof bss) == UC_ERR_OK);
     for (uint8_t value : bss) assert(value == 0);
 
+    // SideStore loads only the selected ADI pair, not the DT_NEEDED closure.
+    // Synthetic absent dependencies must not be opened or cause loader failure.
+    Fixture dependencies;
+    dependencies.headers[1].p_type = PT_DYNAMIC;
+    dependencies.headers[1].p_offset = 0x100;
+    dependencies.headers[1].p_vaddr = 0x20100;
+    dependencies.headers[1].p_filesz = dependencies.headers[1].p_memsz = 6 * sizeof(Elf64_Dyn);
+    auto dependency_bytes = dependencies.bytes();
+    const char names[] = "\0libmediaplatform.so\0libCoreFoundation.so\0libc++_shared.so\0";
+    Elf64_Dyn dynamic[6]{};
+    dynamic[0].d_tag = DT_STRTAB; dynamic[0].d_un.d_val = 0x20180;
+    dynamic[1].d_tag = DT_STRSZ; dynamic[1].d_un.d_val = sizeof names;
+    dynamic[2].d_tag = DT_NEEDED; dynamic[2].d_un.d_val = 1;
+    dynamic[3].d_tag = DT_NEEDED; dynamic[3].d_un.d_val = 21;
+    dynamic[4].d_tag = DT_NEEDED; dynamic[4].d_un.d_val = 42;
+    std::memcpy(dependency_bytes.data() + 0x100, dynamic, sizeof dynamic);
+    std::memcpy(dependency_bytes.data() + 0x180, names, sizeof names);
+    EmulatorVM dependency_vm;
+    assert(load(dependency_vm, dependency_bytes));
+    assert(dependency_vm.execution_error.empty() && dependency_vm.loaded_libraries.size() == 1);
+    relocate_all_vm_libraries(&dependency_vm);
+    assert(dependency_vm.execution_error.empty());
+
     Fixture unaligned;
     unaligned.header.e_phoff = sizeof(Elf64_Ehdr) + 1;
     auto unaligned_bytes = unaligned.bytes();
@@ -101,8 +124,9 @@ int main() {
     reject([](Fixture &f) { f.headers[0].p_memsz = UINT64_MAX; });
     reject([](Fixture &f) { f.headers[0].p_filesz = f.headers[0].p_memsz = 0; });
     reject([](Fixture &f) { f.headers[1].p_type = PT_DYNAMIC; f.headers[1].p_vaddr = UINT64_MAX; });
+    reject([](Fixture &f) { f.headers[1].p_type = 7; }); // PT_TLS, even without a TLS relocation.
     EmulatorVM empty;
     assert(!load(empty, {}));
     assert(!load(empty, std::vector<uint8_t>(sizeof(Elf64_Ehdr) - 1, 0)));
-    std::cout << "PASS: generated ELF bounds, exact program headers and chunked BSS writes\n";
+    std::cout << "PASS: generated ELF bounds, exact headers, BSS, SideStore DT_NEEDED policy and PT_TLS rejection\n";
 }

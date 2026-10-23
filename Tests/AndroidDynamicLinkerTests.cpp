@@ -89,9 +89,23 @@ int main() {
     assert(vm.fallback_import_calls.at("unknown_typed_function") == 1);
     assert(resolve("unknown_notype_function", 0x10) && vm.execution_error.empty());
     assert(resolve("synthetic_answer", 0x12) == code); // Real exports win.
-    assert(resolve("weak_function", 0x22) == 0 && vm.execution_error.empty());
-    assert(resolve("weak_object", 0x21) == 0 && vm.execution_error.empty());
-    for (const auto info : {0x11, 0x16, 0x13}) {
+    assert(resolve("weak_function", 0x22) != 0 && vm.execution_error.empty());
+    assert(resolve("weak_object", 0x21) != 0 && vm.execution_error.empty());
+    const auto functionCount = vm.import_stubs.size();
+    const auto object = resolve("unknown_object", 0x11);
+    assert(object && vm.execution_error.empty());
+    assert(object >= kHeapAddress && object < kHeapAddress + kHeapSize);
+    uint8_t placeholder[256];
+    assert(uc_mem_read(vm.uc, object, placeholder, sizeof placeholder) == UC_ERR_OK);
+    for (const auto value : placeholder) assert(value == 0);
+    assert(vm.fallback_data_imports.at("unknown_object") == object);
+    assert(!vm.fallback_import_calls.count("unknown_object"));
+    assert(vm.import_stubs.size() == functionCount);
+    const uint8_t marker = 0xA5;
+    assert(uc_mem_write(vm.uc, object + 255, &marker, 1) == UC_ERR_OK);
+    assert(resolve("unknown_object", 0x11) == object); // Stable per-VM symbol identity.
+    assert(uc_mem_read(vm.uc, object + 255, placeholder, 1) == UC_ERR_OK && placeholder[0] == marker);
+    for (const auto info : {0x16, 0x26, 0x13, 0x23, 0x1A}) {
         vm.execution_error.clear();
         const std::string name = "unknown_nonfunction_" + std::to_string(info);
         assert(resolve(name, static_cast<uint8_t>(info)) == 0 && !vm.execution_error.empty());
@@ -101,13 +115,51 @@ int main() {
                             "OBJC_Missing", "__CFConstantStringClassReference", "__sF", "environ",
                             "__stack_chk_guard", "__ctype_"}) {
         vm.execution_error.clear();
-        assert(resolve(name, 0x10) == 0 && !vm.execution_error.empty());
-        assert(!vm.imported_symbols.count(name));
+        const auto data = resolve(name, 0x10);
+        assert(data && vm.execution_error.empty());
+        assert(vm.fallback_data_imports.at(name) == data && !vm.import_stubs.count(data));
+        uint8_t zeros[256];
+        assert(uc_mem_read(vm.uc, data, zeros, sizeof zeros) == UC_ERR_OK);
+        for (const auto value : zeros) assert(value == 0);
     }
+    vm.execution_error.clear();
+    assert(resolve("synthetic_answer", 0x16) == 0 && !vm.execution_error.empty()); // Export cannot hide TLS.
+    vm.execution_error.clear();
+    assert(resolve("kCFTLS", 0x16) == 0 && !vm.execution_error.empty()); // Name heuristic cannot hide TLS.
+    vm.execution_error.clear();
+    assert(!resolve("unknown_typed_function", 0x11) && !vm.execution_error.empty()); // Function/data conflict.
+    vm.execution_error.clear();
+    assert(!resolve("unknown_object", 0x12) && !vm.execution_error.empty());
+    vm.execution_error.clear();
+    // Apply an actual synthetic GLOB_DAT relocation with an addend into a data
+    // placeholder; no vendor library is loaded and no guest object is executed.
+    EmulatorVM::LibraryInfo relocation{};
+    relocation.name = "synthetic-data-relocation";
+    relocation.base_address = code;
+    Elf64_Sym dataSymbol{};
+    dataSymbol.st_info = 0x11;
+    dataSymbol.st_name = 1;
+    const char dataStrings[] = "\0relocated_data\0";
+    relocation.symtab = vm.write_bytes(reinterpret_cast<const uint8_t *>(&dataSymbol), sizeof dataSymbol);
+    relocation.strtab = vm.write_bytes(reinterpret_cast<const uint8_t *>(dataStrings), sizeof dataStrings);
+    relocation.strsz = sizeof dataStrings;
+    Elf64_Rela dataRelocation{};
+    dataRelocation.r_offset = 0x100;
+    dataRelocation.r_info = R_AARCH64_GLOB_DAT;
+    dataRelocation.r_addend = 8;
+    relocation.rela = vm.write_bytes(reinterpret_cast<const uint8_t *>(&dataRelocation), sizeof dataRelocation);
+    relocation.relasz = sizeof dataRelocation;
+    apply_vm_relocations(&vm, relocation);
+    assert(vm.execution_error.empty());
+    uint64_t relocated = 0;
+    assert(uc_mem_read(vm.uc, code + 0x100, &relocated, sizeof relocated) == UC_ERR_OK);
+    assert(relocated == vm.fallback_data_imports.at("relocated_data") + 8);
+    // Invalid allocation and direct function requests for data still fail closed.
+    assert(vm.register_data_import("") == 0 && !vm.execution_error.empty());
     vm.execution_error.clear();
     assert(vm.register_import("environ") == 0 && !vm.execution_error.empty());
     vm.execution_error.clear();
     vm.next_import_address = kImportAddress + kImportSize;
     assert(vm.register_import("exhausted_function") == 0 && !vm.execution_error.empty());
-    std::cout << "PASS: synthetic guest lookup, constructors, SideStore zero-return function fallback and data/TLS rejection (not login proof)\n";
+    std::cout << "PASS: synthetic guest lookup, constructors, SideStore function/data fallbacks, relocations and TLS rejection (not login proof)\n";
 }

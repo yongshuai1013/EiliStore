@@ -51,6 +51,17 @@ class ADILoaderContractTests(unittest.TestCase):
         self.assertIn('return false;', gate)
         self.assertIn('does not implement', gate)
 
+    def test_data_name_heuristics_match_native_loader(self):
+        native = (ROOT / 'Packages/AnisetteKit/Native/Loader/elf_loader_emulator.cpp').read_text()
+        names = native.split('static bool guest_data_symbol_name', 1)[1].split('const AndroidSystemProperties', 1)[0]
+        policy = (ROOT / 'Sources/EiliStore/ADILibraryCompatibility.swift').read_text()
+        declared = policy.split('static func isSideStoreDataName', 1)[1].split('static let requiredEntryPoints', 1)[0]
+        self.assertEqual(set(re.findall(r'"([^"]+)"', names)), set(re.findall(r'"([^"]+)"', declared)))
+        placeholder = native.split('uint64_t EmulatorVM::register_data_import', 1)[1].split('uint64_t EmulatorVM::write_bytes', 1)[0]
+        self.assertIn('const uint8_t zeros[256] = {};', placeholder)
+        self.assertIn('fallback_data_imports', placeholder)
+        self.assertNotIn('register_import(', placeholder)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -168,8 +168,8 @@ static bool supported_guest_import(const std::string &name) {
     return names.count(name) != 0;
 }
 
-// The upstream loader distinguishes data names before allocating function stubs.
-// Keep that distinction: an unresolved object/TLS symbol is not a callable ABI.
+// Match SideStore's data-name classification, but never treat TLS as an object.
+// A zero-filled guest object is compatibility behavior, not an implemented ABI.
 static bool guest_data_symbol_name(const std::string &symbol) {
     return symbol.rfind("_ZTV", 0) == 0 || symbol.rfind("_ZTI", 0) == 0 ||
         symbol.rfind("_ZTS", 0) == 0 || symbol.rfind("kCF", 0) == 0 ||
@@ -297,6 +297,10 @@ EmulatorVM::~EmulatorVM() {
 }
 
 uint64_t EmulatorVM::register_import(const std::string &name) {
+    if (fallback_data_imports.count(name)) {
+        execution_error = "Conflicting guest function/data import: " + name;
+        return 0;
+    }
     auto it = imported_symbols.find(name);
     if (it != imported_symbols.end()) {
         return it->second;
@@ -323,6 +327,27 @@ uint64_t EmulatorVM::register_import(const std::string &name) {
     import_stubs[stub_addr] = name;
 
     return stub_addr;
+}
+
+uint64_t EmulatorVM::register_data_import(const std::string &name) {
+    auto cached = fallback_data_imports.find(name);
+    if (cached != fallback_data_imports.end()) return cached->second;
+    if (name.empty() || name.size() >= 4096 || imported_symbols.count(name)) {
+        execution_error = "Invalid or conflicting guest data import: " + name;
+        return 0;
+    }
+    // Deliberately match upstream's fixed-size placeholder. This does not supply
+    // a real vtable, CF object or Android runtime, and must not imply login success.
+    const uint8_t zeros[256] = {};
+    const uint64_t address = heap.alloc(sizeof zeros);
+    if (!uc || !address || uc_mem_write(uc, address, zeros, sizeof zeros) != UC_ERR_OK) {
+        execution_error = "Cannot allocate guest data placeholder: " + name;
+        return 0;
+    }
+    imported_symbols[name] = address;
+    fallback_data_imports[name] = address;
+    LOG_UC("[SideStore compatibility] Created 256-byte zero-filled guest data placeholder: %s (not an implemented ABI)\n", name.c_str());
+    return address;
 }
 
 uint64_t EmulatorVM::write_bytes(const uint8_t *data, size_t len) {
@@ -1135,6 +1160,14 @@ static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo 
         return 0;
     }
 
+    const uint8_t type = sym.st_info & 0xf;
+    // A TLS offset is not a guest address. Check before weak/export resolution so
+    // a same-name function or object cannot accidentally bypass the TLS guard.
+    if (type == 6 || (sym.st_shndx == 0 && type != 0 && type != 1 && type != 2)) {
+        vm->execution_error = "Unsupported guest TLS/non-function symbol type: " + std::to_string(type);
+        return 0;
+    }
+
     std::string sym_name;
     if (sym.st_name < current_lib.strsz) {
         std::vector<char> name_buf(256, 0);
@@ -1176,14 +1209,9 @@ static uint64_t vm_resolve_symbol(EmulatorVM *vm, const EmulatorVM::LibraryInfo 
         }
     }
 
-    // Undefined weak symbols may legally resolve to zero. Strong data symbols
-    // require a real implementation, never a fabricated zero-filled object.
-    if ((sym.st_info >> 4) == 2) return 0;
-    const uint8_t type = sym.st_info & 0xf;
-    if ((type != 0 && type != 2) || guest_data_symbol_name(sym_name)) {
-        vm->execution_error = "Unsupported guest data/non-function symbol: " + sym_name;
-        return 0;
-    }
+    // Upstream resolves both weak and strong imports through these fallbacks.
+    // Data must never be allocated an executable function stub.
+    if (type == 1 || guest_data_symbol_name(sym_name)) return vm->register_data_import(sym_name);
     return vm->register_import(sym_name);
 }
 
@@ -1270,6 +1298,10 @@ bool load_library_to_vm(EmulatorVM *vm, const std::string &file_path, const std:
     const Elf64_Phdr *phdrs = headers.data();
 
     for (int i = 0; i < ehdr->e_phnum; i++) {
+        if (phdrs[i].p_type == 7) { // PT_TLS: no Android TLS module/thread adapter.
+            vm->execution_error = "Unsupported guest PT_TLS segment";
+            return false;
+        }
         if (phdrs[i].p_type == PT_LOAD) {
             if (phdrs[i].p_offset > file_size || phdrs[i].p_filesz > file_size - phdrs[i].p_offset ||
                 phdrs[i].p_filesz > phdrs[i].p_memsz || phdrs[i].p_memsz > UINT64_MAX - phdrs[i].p_vaddr ||

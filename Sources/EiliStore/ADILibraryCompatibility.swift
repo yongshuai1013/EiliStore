@@ -30,30 +30,36 @@ struct ADILibraryCompatibility: Equatable, Sendable {
     let missingEntryPoints: [String]
     let unhandledImports: [String]
     let fallbackFunctionImports: [String]
+    let fallbackDataImports: [String]
+    let unsupportedSymbolImports: [String]
     let blockedDataImports: [String]
     let unsupportedRelocations: [UInt32]
     let unsupportedDynamicTags: [UInt64]
+    let hasThreadLocalSegments: Bool
     let mismatchedSONAMEs: [String]
 
     // This is an explicit capability gate, not a claim that static linking proves runtime safety.
     // libstoreapi requires a new Android ABI adapter; do not send it into the legacy loader.
     var runtimeAdapterAvailable: Bool { profile == .legacy }
     var hasStaticBlockers: Bool {
-        !missingFiles.isEmpty || !missingDependencies.isEmpty || !missingEntryPoints.isEmpty ||
+        !missingFiles.isEmpty || (profile == .modern && !missingDependencies.isEmpty) || !missingEntryPoints.isEmpty ||
         !blockedDataImports.isEmpty || !unsupportedRelocations.isEmpty ||
-        !unsupportedDynamicTags.isEmpty || !mismatchedSONAMEs.isEmpty
+        !unsupportedDynamicTags.isEmpty || hasThreadLocalSegments || !mismatchedSONAMEs.isEmpty
     }
     var summary: String {
         var parts: [String] = []
         if !runtimeAdapterAvailable { parts.append("已識別新版 libstoreapi 庫組，但目前引擎尚未支援其 Android ABI") }
         if !missingFiles.isEmpty { parts.append("缺少 \(missingFiles.joined(separator: ", "))") }
-        if !missingDependencies.isEmpty { parts.append("另有 \(missingDependencies.count) 個未提供的相依庫") }
+        if !missingDependencies.isEmpty { parts.append(profile == .legacy ? "提示：另有 \(missingDependencies.count) 個未提供的相依庫（非靜態阻礙）" : "另有 \(missingDependencies.count) 個未提供的相依庫") }
         if !missingEntryPoints.isEmpty { parts.append("缺少 \(missingEntryPoints.count) 個必要 ADI 入口") }
         if !unhandledImports.isEmpty { parts.append("\(unhandledImports.count) 個外部符號尚無明確實作") }
-        if !fallbackFunctionImports.isEmpty { parts.append("SideStore 相容 stub（回傳0），未驗證登入：\(fallbackFunctionImports.count) 個未知函式") }
+        if !fallbackFunctionImports.isEmpty { parts.append("SideStore 相容函式 stub（回傳0；非實際 ABI 實作，未驗證登入）：\(fallbackFunctionImports.count) 個") }
+        if !fallbackDataImports.isEmpty { parts.append("SideStore 相容資料 placeholder（256-byte zero-filled；非實際 ABI 實作，未驗證登入）：\(fallbackDataImports.count) 個") }
+        if !unsupportedSymbolImports.isEmpty { parts.append("含尚未支援的 ELF 符號類型：\(unsupportedSymbolImports.count) 個") }
         if !blockedDataImports.isEmpty { parts.append("\(blockedDataImports.count) 個資料/TLS 外部符號無法安全 stub") }
         if !unsupportedRelocations.isEmpty { parts.append("\(unsupportedRelocations.count) 種重定位尚未支援") }
         if !unsupportedDynamicTags.isEmpty { parts.append("含尚未支援的動態連結格式") }
+        if hasThreadLocalSegments { parts.append("含尚未支援的 PT_TLS 執行緒區段") }
         if !mismatchedSONAMEs.isEmpty { parts.append("函式庫內部名稱與檔名不符，請勿改名混用") }
         if parts.isEmpty { parts.append("靜態檢查未發現已知阻礙，但不代表實際登入已驗證") }
         return parts.joined(separator: "；") + "。未啟動本機引擎，遠端預設不變。"
@@ -143,14 +149,21 @@ struct ADILibraryCompatibility: Equatable, Sendable {
     static func inspect(profile: ADILibraryProfile, metadata: [String: ADIELFMetadata]) -> Self {
         let provided = Set(metadata.keys)
         let exports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.exportedSymbols) }
-        let imports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.undefinedStrongSymbols) }
         let functionImports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.undefinedFunctionSymbols) }
         let dataImports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.undefinedDataSymbols) }
+        let tlsImports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.undefinedTLSSymbols) }
+        let unsupportedImports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.undefinedUnsupportedSymbols) }
+        // Include weak imports: SideStore routes them through the same fallback.
+        let imports = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.undefinedStrongSymbols) }
+            .union(functionImports).union(dataImports).union(tlsImports).union(unsupportedImports)
+        let functionVsDataConflicts = functionImports.intersection(dataImports).filter { !isSideStoreDataName($0) }
+        let unsafeImports = tlsImports.union(unsupportedImports).union(functionVsDataConflicts)
         let needed = metadata.values.reduce(into: Set<String>()) { $0.formUnion($1.needed) }
         let relocations = metadata.values.reduce(into: Set<UInt32>()) { $0.formUnion($1.relocationTypes) }
         let dynamicTags = metadata.values.reduce(into: Set<UInt64>()) { $0.formUnion($1.unsupportedDynamicTags) }
         // Match vm_resolve_symbol's existing __ndk1 -> __1 lookup, not a new shim.
         let unresolved = imports.filter { name in
+            if unsafeImports.contains(name) { return true }
             if exports.contains(name) { return false }
             if handledImports.contains(name) && functionImports.contains(name) &&
                 !dataImports.contains(name) && !isSideStoreDataName(name) { return false }
@@ -159,8 +172,9 @@ struct ADILibraryCompatibility: Equatable, Sendable {
             else if let range = converted.range(of: "__ndk1") { converted.replaceSubrange(range, with: "__1") }
             return !exports.contains(converted)
         }
-        let fallback = unresolved.filter { functionImports.contains($0) && !dataImports.contains($0) && !isSideStoreDataName($0) }
-        let blockedData = unresolved.filter { !fallback.contains($0) }
+        let fallback = unresolved.filter { !unsafeImports.contains($0) && functionImports.contains($0) && !dataImports.contains($0) && !isSideStoreDataName($0) }
+        let fallbackData = unresolved.filter { !unsafeImports.contains($0) && (dataImports.contains($0) || isSideStoreDataName($0)) }
+        let blockedData = unresolved.filter { !fallback.contains($0) && !fallbackData.contains($0) }
         let mismatches = metadata.compactMap { name, value -> String? in
             // SONAME is optional in ELF; reject an explicit mismatch, not its absence.
             guard let soname = value.soname, soname != name else { return nil }
@@ -170,9 +184,9 @@ struct ADILibraryCompatibility: Equatable, Sendable {
                     missingFiles: Set(profile.filenames).subtracting(provided).sorted(),
                     missingDependencies: needed.subtracting(provided).subtracting(systemLibraries).sorted(),
                     missingEntryPoints: requiredEntryPoints.subtracting(exports).sorted(),
-                    unhandledImports: unresolved.sorted(), fallbackFunctionImports: fallback.sorted(), blockedDataImports: blockedData.sorted(),
+                    unhandledImports: unresolved.sorted(), fallbackFunctionImports: fallback.sorted(), fallbackDataImports: fallbackData.sorted(), unsupportedSymbolImports: unresolved.filter { unsupportedImports.contains($0) }.sorted(), blockedDataImports: blockedData.sorted(),
                     unsupportedRelocations: relocations.subtracting([0, 257, 1025, 1026, 1027]).sorted(),
-                    unsupportedDynamicTags: dynamicTags.sorted(), mismatchedSONAMEs: mismatches.sorted())
+                    unsupportedDynamicTags: dynamicTags.sorted(), hasThreadLocalSegments: metadata.values.contains { $0.hasThreadLocalSegment }, mismatchedSONAMEs: mismatches.sorted())
     }
 
     static let maximumFileSize = 64 * 1024 * 1024

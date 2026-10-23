@@ -379,83 +379,47 @@ enum KeychainHelper {
         check(FakeAnisetteKitControl.resetCount >= 2, "local engine not reset after import and reset")
         print("PASS: local reset preserves session, Apple ID, remote identity/blob, certificate, mode and libraries")
 
-        let incompatibleDir = fixtureDir.appendingPathComponent("incompatible-legacy")
-        try FileManager.default.createDirectory(at: incompatibleDir, withIntermediateDirectories: true)
-        let incompatibleFiles = try ADILibraryProfile.legacy.filenames.map { name in
-            let url = incompatibleDir.appendingPathComponent(name)
+        let unsafeDir = fixtureDir.appendingPathComponent("unsafe-legacy-tls")
+        try FileManager.default.createDirectory(at: unsafeDir, withIntermediateDirectories: true)
+        let unsafeFiles = try ADILibraryProfile.legacy.filenames.map { name in
+            let url = unsafeDir.appendingPathComponent(name)
             try ADIElfFixture.make(soname: name,
-                needed: ["libmediaplatform.so", "libCoreFoundation.so", "libc++_shared.so"],
                 exports: name == "libstoreservicescore.so" ? ADILibraryCompatibility.requiredEntryPoints.sorted() : [],
-                imports: ["CFRelease", "pthread_create"]).write(to: url)
+                imports: name == "libCoreADI.so" ? ["sidestore_unsupported_tls"] : [],
+                symbolTypes: name == "libCoreADI.so" ? ["sidestore_unsupported_tls": 6] : [:]).write(to: url)
             return url
         }
-        // An auto-downloaded incompatible set is diagnostic only: never create identity/provider state.
         try FileManager.default.removeItem(at: libraryDirectory)
-        UserDefaults.standard.set(true, forKey: EiliODASourceConfiguration.automaticAcquisitionKey)
-        let autoBadService = EiliAnisetteService(staging: { _ in incompatibleFiles })
-        FakeAnisetteKitControl.reset()
-        let identityBeforeAutoBad = KeychainHelper.load(forKey: "eilistore.anisette.local.identifier")
-        let blobBeforeAutoBad = KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")
-        let autoBadRemoteCalls = await manager.calls
-        do { _ = try await autoBadService.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("auto-on incompatible libraries reached provider") }
-        catch EiliAnisetteError.incompatibleLibraries {}
-        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "auto-on incompatible staged set touched provider")
-        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == identityBeforeAutoBad && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == blobBeforeAutoBad, "auto-on incompatible staged set created identity")
-        check(!FileManager.default.fileExists(atPath: provisioning.path), "auto-on incompatible staged set created provisioning")
-        check(await manager.calls == autoBadRemoteCalls, "auto-on incompatible staged set fell back remote")
-        UserDefaults.standard.set(false, forKey: EiliODASourceConfiguration.automaticAcquisitionKey)
-        try await svc.importLibraries(elfFiles)
-        FakeAnisetteKitControl.reset()
         let legacyMode = EiliAnisetteMode.selected
         let legacySessionMode = EiliAnisetteMode.savedSessionMode
-        let resetsBeforeRejectedLegacy = FakeAnisetteKitControl.resetCount
-        let savedLegacyBytes = try ADILibraryProfile.legacy.filenames.map { try Data(contentsOf: libraryDirectory.appendingPathComponent($0)) }
-        // Both manual import and downloaded staging must preserve a usable cache.
-        do { _ = try await svc.importLibraries(incompatibleFiles); fatalError("incompatible legacy replaced valid cache") }
-        catch EiliAnisetteError.incompatibleLibraries(let reason) { check(reason.contains("保留"), "missing preservation message") }
-        let badSources = incompatibleFiles
-        do {
-            _ = try await svc.downloadLibraries(using: { directory in
-                try badSources.map { source in
-                    let target = directory.appendingPathComponent(source.lastPathComponent)
-                    try FileManager.default.copyItem(at: source, to: target)
-                    return target
-                }
-            })
-            fatalError("incompatible download replaced valid cache")
-        } catch EiliAnisetteError.incompatibleLibraries {}
-        for (index, name) in ADILibraryProfile.legacy.filenames.enumerated() {
-            check(try Data(contentsOf: libraryDirectory.appendingPathComponent(name)) == savedLegacyBytes[index], "preflight damaged valid library")
-        }
-        check(await svc.localLibraryStatus() == .present, "rejected import changed installed status")
-        check(FakeAnisetteKitControl.resetCount == resetsBeforeRejectedLegacy, "rejected import reset engine")
-        // Diagnose previously imported incomplete sets, and retain manual diagnostic
-        // import when no preflight-passing cache is present.
-        try FileManager.default.removeItem(at: libraryDirectory)
-        let badStatus = try await svc.importLibraries(incompatibleFiles)
-        if case .incompatible = badStatus {} else { fatalError("incomplete legacy marked runnable") }
+        let remoteBeforeUnsafe = await manager.calls
         FakeAnisetteKitControl.reset()
-        let remoteBeforeLegacyBlock = await manager.calls
-        let resetsBeforeLegacyBlock = FakeAnisetteKitControl.resetCount
-        if case .incompatible(let reason) = await svc.localLibraryStatus() {
-            check(reason.contains("相依庫") && reason.contains("外部符號"), "legacy blockers not explained")
-        } else { fatalError("stored incomplete legacy bypassed preflight") }
-        do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("incomplete legacy executed") }
+        let unsafeIdentity = KeychainHelper.load(forKey: "eilistore.anisette.local.identifier")
+        let unsafeBlob = KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")
+        let unsafeImported = try await svc.importLibraries(unsafeFiles)
+        if case .incompatible = unsafeImported {} else { fatalError("TLS legacy fixture marked runnable") }
+        do { _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice); fatalError("TLS-blocked legacy executed") }
         catch EiliAnisetteError.incompatibleLibraries {}
-        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == resetsBeforeLegacyBlock, "blocked legacy touched engine")
-        check(await manager.calls == remoteBeforeLegacyBlock, "legacy block silently fell back to remote")
-        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == nil && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == nil, "blocked legacy created identity")
-        check(!FileManager.default.fileExists(atPath: provisioning.path), "blocked legacy created provisioning directory")
-        check(EiliAnisetteMode.selected == legacyMode && EiliAnisetteMode.savedSessionMode == legacySessionMode, "legacy preflight changed modes")
-        for (key, value) in protectedLoginValues { check(KeychainHelper.load(forKey: key) == value, "legacy preflight changed protected login data") }
+        if case .incompatible = await svc.localLibraryStatus() {} else { fatalError("TLS blocker missing from status") }
+        check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "TLS-blocked legacy touched provider")
+        check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == unsafeIdentity && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == unsafeBlob, "TLS-blocked legacy mutated identity")
+        check(await manager.calls == remoteBeforeUnsafe && !FileManager.default.fileExists(atPath: provisioning.path), "TLS block fell back remotely or created provisioning")
+        check(EiliAnisetteMode.selected == legacyMode && EiliAnisetteMode.savedSessionMode == legacySessionMode, "TLS preflight changed modes")
+        for (key, value) in protectedLoginValues { check(KeychainHelper.load(forKey: key) == value, "TLS preflight changed protected login data") }
         try await svc.importLibraries(elfFiles)
         check(await svc.localLibraryStatus() == .present, "compatible legacy restore blocked")
+        // A newly incompatible set must not replace the restored usable cache.
+        let resetBeforeUnsafeReplacement = FakeAnisetteKitControl.resetCount
+        do { _ = try await svc.importLibraries(unsafeFiles); fatalError("TLS replaced usable cache") }
+        catch EiliAnisetteError.incompatibleLibraries {}
+        check(FakeAnisetteKitControl.resetCount == resetBeforeUnsafeReplacement, "unsafe replacement reset engine")
+        check(await svc.localLibraryStatus() == .present, "unsafe replacement damaged usable cache")
         // Header-correct but structurally incomplete metadata must not replace it.
-        for url in incompatibleFiles { try Data(validCore.prefix(128)).write(to: url) }
-        do { _ = try await svc.importLibraries(incompatibleFiles); fatalError("header-only legacy accepted") }
+        for url in unsafeFiles { try Data(validCore.prefix(128)).write(to: url) }
+        do { _ = try await svc.importLibraries(unsafeFiles); fatalError("header-only legacy accepted") }
         catch EiliAnisetteError.invalidLibraries {}
         check(await svc.localLibraryStatus() == .present, "malformed import damaged cache")
-        print("PASS: legacy dependency/symbol preflight, manual diagnostics, valid-cache preservation, no VM/identity/fallback/session changes")
+        print("PASS: unsupported TLS remains a preflight blocker without VM/provider/identity mutation")
 
         // Unknown functions use the requested SideStore compatibility path, without
         // making the read-only status operation execute a VM or create an identity.
@@ -464,32 +428,35 @@ enum KeychainHelper {
         let fallbackFiles = try ADILibraryProfile.legacy.filenames.map { name in
             let target = fallbackDir.appendingPathComponent(name)
             try ADIElfFixture.make(soname: name,
+                needed: name == "libCoreADI.so" ? ["libmediaplatform.so", "libCoreFoundation.so", "libc++_shared.so"] : [],
                 exports: name == "libstoreservicescore.so" ? ADILibraryCompatibility.requiredEntryPoints.sorted() : [],
-                imports: name == "libCoreADI.so" ? ["sidestore_missing_function"] : []).write(to: target)
+                imports: name == "libCoreADI.so" ? ["sidestore_missing_function", "ordinary_missing_object"] : [],
+                symbolTypes: name == "libCoreADI.so" ? ["ordinary_missing_object": 1] : [:]).write(to: target)
             return target
         }
         FakeAnisetteKitControl.reset()
         let identityBeforeFallback = KeychainHelper.load(forKey: "eilistore.anisette.local.identifier")
         let blobBeforeFallback = KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob")
         let fallbackStatus = try await svc.importLibraries(fallbackFiles)
-        check(fallbackStatus == .present, "function-only fallback was blocked")
+        check(fallbackStatus == .present, "function/data fallback was blocked")
         let fallbackReport = try ADILibraryCompatibility.read(directory: libraryDirectory, profile: .legacy)
-        check(fallbackReport.fallbackFunctionImports == ["sidestore_missing_function"] && fallbackReport.blockedDataImports.isEmpty, "function fallback diagnostics lost")
+        check(fallbackReport.fallbackFunctionImports == ["sidestore_missing_function"] && fallbackReport.fallbackDataImports == ["ordinary_missing_object"] && fallbackReport.blockedDataImports.isEmpty, "function/data fallback diagnostics lost")
+        check(fallbackReport.missingDependencies == ["libCoreFoundation.so", "libc++_shared.so", "libmediaplatform.so"] && !fallbackReport.hasStaticBlockers, "missing dependencies must remain informational")
         let resetCountBeforeFallbackStatus = FakeAnisetteKitControl.resetCount
         check(await svc.localLibraryStatus() == .present, "read-only fallback status blocked")
         check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0 && FakeAnisetteKitControl.resetCount == resetCountBeforeFallbackStatus, "fallback status touched engine")
         check(KeychainHelper.load(forKey: "eilistore.anisette.local.identifier") == identityBeforeFallback && KeychainHelper.load(forKey: "eilistore.anisette.local.adiblob") == blobBeforeFallback, "fallback status created identity")
-        for type: UInt8 in [1, 6] {
+        for type: UInt8 in [3, 6, 10] {
             try ADIElfFixture.make(soname: "libCoreADI.so", imports: ["sidestore_missing_nonfunction"],
                 symbolTypes: ["sidestore_missing_nonfunction": type]).write(to: fallbackFiles[0])
-            do { _ = try await svc.importLibraries(fallbackFiles); fatalError("data/TLS import replaced usable fallback cache") }
+            do { _ = try await svc.importLibraries(fallbackFiles); fatalError("unsafe symbol replaced usable fallback cache") }
             catch EiliAnisetteError.incompatibleLibraries {}
-            check(await svc.localLibraryStatus() == .present, "data/TLS rejection damaged usable fallback cache")
+            check(await svc.localLibraryStatus() == .present, "unsafe symbol rejection damaged usable fallback cache")
         }
         check(EiliAnisetteMode.selected == legacyMode && EiliAnisetteMode.savedSessionMode == legacySessionMode, "fallback preflight changed mode")
         for (key, value) in protectedLoginValues { check(KeychainHelper.load(forKey: key) == value, "fallback preflight changed protected data") }
         try await svc.importLibraries(elfFiles)
-        print("PASS: SideStore function-stub preflight, data/TLS rejection, read-only VM/identity isolation (not login verification)")
+        print("PASS: SideStore function/data placeholders, informational missing dependencies, unsafe TLS rejection, read-only VM/identity isolation (placeholders are not ABI implementations or login verification)")
 
 
         let modernDir = FileManager.default.temporaryDirectory.appendingPathComponent("anisette-modern-\(UUID().uuidString)")

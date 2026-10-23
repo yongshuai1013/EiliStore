@@ -96,7 +96,11 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         mode = (SOURCES / "AnisetteModeSection.swift").read_text()
         self.assertIn('.task { await model.refreshLibraryStatus() }', mode)
         self.assertIn('Text("遠端（預設）")', mode)
-        self.assertIn("尚未支援其 Android ABI，不能用於本機登入", mode)
+        self.assertIn("新版五庫仍只供離線診斷，不能用於本機登入", mode)
+        self.assertIn("未知函式回傳 0", mode)
+        self.assertIn("256 位元組零填充占位", mode)
+        self.assertIn("真正 TLS、不安全 ELF 與缺少必要入口仍會阻擋", mode)
+        self.assertIn("檢查通過不代表來源可信、安全、已授權或登入成功", mode)
 
     def test_oda_management_has_explicit_consent_and_read_only_status(self):
         mode = (SOURCES / "AnisetteModeSection.swift").read_text()

@@ -13,7 +13,7 @@ import Foundation
             imports: ["func", "none", "object", "tls"],
             symbolTypes: ["func": 2, "none": 0, "object": 1, "tls": 6]))
         precondition(typed.undefinedFunctionSymbols == ["func", "none"])
-        precondition(typed.undefinedDataSymbols == ["object", "tls"])
+        precondition(typed.undefinedDataSymbols == ["object"] && typed.undefinedTLSSymbols == ["tls"])
         precondition(parsed.relocationTypes == [1,1027])
         precondition(parsed.unsupportedDynamicTags == [0x6000000f,36])
         for name in ["../evil.so","path/libevil.so","bad\\evil.so"] {
