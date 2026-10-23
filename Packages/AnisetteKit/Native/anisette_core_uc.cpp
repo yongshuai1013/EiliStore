@@ -70,21 +70,40 @@ static bool read_guest_bytes(EmulatorVM *vm, uint64_t pointer_slot,
     return true;
 }
 
+static std::string diagnostic_error_json(const std::string &error, const char *phase,
+                                         bool has_native_code = false, int32_t native_code = 0) {
+    std::stringstream ss;
+    ss << "{\"error\":\"";
+    for (char c : error) {
+        if (c == '\\' || c == '"') ss << '\\' << c;
+        else if (c == '\n') ss << "\\n";
+        else if (c == '\r') ss << "\\r";
+        else if (static_cast<unsigned char>(c) >= 0x20) ss << c;
+    }
+    ss << "\",\"diagnostic_phase\":\"" << phase << "\"";
+    if (has_native_code) ss << ",\"native_code\":" << native_code;
+    ss << "}";
+    return ss.str();
+}
+
 static bool setup_vm_and_adi(
     EmulatorVM *&vm,
     const char *lib_dir,
     const char *provisioning_dir,
     const uint8_t *identifier,
     std::string &out_uuid_prov_dir,
-    std::string &out_err
+    std::string &out_err,
+    const char **out_phase, bool &out_has_native_code, int32_t &out_native_code
 ) {
+    out_has_native_code = false;
+    out_native_code = 0;
     if (!lib_dir) {
-        out_err = "Library directory path is null.";
+        *out_phase = "arguments"; out_err = "Library directory path is null.";
         return false;
     }
     struct stat st;
     if (stat(lib_dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        out_err = std::string("Provided library path is not a valid directory: ") + lib_dir;
+        *out_phase = "libraryLoad"; out_err = "Provided library path is not a valid directory";
         return false;
     }
 
@@ -92,7 +111,7 @@ static bool setup_vm_and_adi(
     // must never be treated as a working Android ABI for a libstoreapi set.
     std::string modern_entry = std::string(lib_dir) + "/libstoreapi.so";
     if (stat(modern_entry.c_str(), &st) == 0) {
-        out_err = "The libstoreapi library set requires an Android ABI adapter that this build does not implement. "
+        *out_phase = "libraryLoad"; out_err = "The libstoreapi library set requires an Android ABI adapter that this build does not implement. "
                   "Use remote mode or compatible legacy libraries; do not rename libstoreapi.so.";
         return false;
     }
@@ -111,14 +130,13 @@ static bool setup_vm_and_adi(
     if (!g_shared_vm) {
         g_shared_vm = new (std::nothrow) EmulatorVM();
         if (!g_shared_vm) {
-            out_err = "Failed to allocate VM.";
+            *out_phase = "vmAllocation"; out_err = "Failed to allocate VM.";
             return false;
         }
     }
     vm = g_shared_vm;
     if (!vm->uc || vm->initialization_error != UC_ERR_OK) {
-        out_err = std::string("Failed to initialize Unicorn VM: ") +
-                  uc_strerror(vm->initialization_error);
+        *out_phase = "vmInitialization"; out_err = "Failed to initialize Unicorn VM";
         return false;
     }
 
@@ -130,19 +148,23 @@ static bool setup_vm_and_adi(
 
         if (!load_library_to_vm(vm, ssc_path, kADISymbols.lib_ssc) ||
             !load_library_to_vm(vm, coreadi_path, kADISymbols.lib_core_adi)) {
-            out_err = "Failed to load libraries into VM";
+            *out_phase = "libraryLoad"; out_err = "Failed to load libraries into VM";
             return false;
         }
 
         relocate_all_vm_libraries(vm);
-        if (!vm->execution_error.empty() || !run_library_constructors(vm)) {
-            out_err = "Library constructors failed in VM";
+        if (!vm->execution_error.empty()) {
+            *out_phase = "libraryRelocation"; out_err = "Library relocation failed in VM";
+            return false;
+        }
+        if (!run_library_constructors(vm)) {
+            *out_phase = "libraryConstructors"; out_err = "Library constructors failed in VM";
             return false;
         }
 
         uint64_t load_lib_ptr = get_vm_symbol_address(vm, kADISymbols.load_library);
         if (!load_lib_ptr) {
-            out_err = "Required ADI setup symbol missing in VM";
+            *out_phase = "loadLibrarySymbol"; out_err = "Required ADI setup symbol missing in VM";
             return false;
         }
 
@@ -152,7 +174,9 @@ static bool setup_vm_and_adi(
         int32_t load_res = run_vm_procedure(vm, load_lib_ptr, {lib_path_vm, 0});
         LOG_UC("[AnisetteKit - UC] Step 1 result: %d\n", load_res);
         if (load_res != 0) {
-            out_err = "ADILoadLibraryWithPath failed: " + std::to_string(load_res);
+            out_has_native_code = true;
+            out_native_code = load_res;
+            *out_phase = "loadLibrary"; out_err = "ADILoadLibraryWithPath failed: " + std::to_string(load_res);
             return false;
         }
         g_libraries_initialized = true;
@@ -162,11 +186,11 @@ static bool setup_vm_and_adi(
     out_uuid_prov_dir = std::string(provisioning_dir) + "/" + uuid;
     const bool created_provisioning_dir = mkdir(out_uuid_prov_dir.c_str(), 0755) == 0;
     if (!created_provisioning_dir && errno != EEXIST) {
-        out_err = "Failed to create provisioning directory";
+        *out_phase = "provisioningDirectory"; out_err = "Failed to create provisioning directory";
         return false;
     }
     if (stat(out_uuid_prov_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
-        out_err = "Provisioning path is not a directory";
+        *out_phase = "provisioningDirectory"; out_err = "Provisioning path is not a directory";
         return false;
     }
 
@@ -175,7 +199,7 @@ static bool setup_vm_and_adi(
     if (created_provisioning_dir || out_uuid_prov_dir != g_current_prov_path) {
         uint64_t set_prov_ptr = get_vm_symbol_address(vm, kADISymbols.set_provisioning_path);
         if (!set_prov_ptr) {
-            out_err = "Symbol ADISetProvisioningPath missing in VM";
+            *out_phase = "setProvisioningPathSymbol"; out_err = "Symbol ADISetProvisioningPath missing in VM";
             return false;
         }
         uint64_t prov_path_vm = vm->write_string(out_uuid_prov_dir.c_str());
@@ -184,7 +208,9 @@ static bool setup_vm_and_adi(
         int32_t prov_res = run_vm_procedure(vm, set_prov_ptr, {prov_path_vm});
         LOG_UC("[AnisetteKit - UC] Step 2 result: %d\n", prov_res);
         if (prov_res != 0) {
-            out_err = "ADISetProvisioningPath failed: " + std::to_string(prov_res);
+            out_has_native_code = true;
+            out_native_code = prov_res;
+            *out_phase = "setProvisioningPath"; out_err = "ADISetProvisioningPath failed: " + std::to_string(prov_res);
             return false;
         }
         g_current_prov_path = out_uuid_prov_dir;
@@ -194,7 +220,7 @@ static bool setup_vm_and_adi(
     if (android_id != g_current_android_id) {
         uint64_t set_id_ptr = get_vm_symbol_address(vm, kADISymbols.set_android_id);
         if (!set_id_ptr) {
-            out_err = "Symbol ADISetAndroidID missing in VM";
+            *out_phase = "setAndroidIDSymbol"; out_err = "Symbol ADISetAndroidID missing in VM";
             return false;
         }
         uint64_t android_id_vm = vm->write_string(android_id.c_str());
@@ -203,7 +229,9 @@ static bool setup_vm_and_adi(
         int32_t id_res = run_vm_procedure(vm, set_id_ptr, {android_id_vm, (uint64_t)android_id.length()});
         LOG_UC("[AnisetteKit - UC] Step 3 result: %d\n", id_res);
         if (id_res != 0) {
-            out_err = "ADISetAndroidID failed: " + std::to_string(id_res);
+            out_has_native_code = true;
+            out_native_code = id_res;
+            *out_phase = "setAndroidID"; out_err = "ADISetAndroidID failed: " + std::to_string(id_res);
             return false;
         }
         g_current_android_id = android_id;
@@ -233,10 +261,10 @@ static int32_t get_anisette_headers_uc_impl(
 
     EmulatorVM *vm = nullptr;
     std::string uuid_prov_dir, err;
-    if (!setup_vm_and_adi(vm, lib_dir, provisioning_dir, identifier, uuid_prov_dir, err)) {
-        std::stringstream ss;
-        ss << "{\"error\":\"" << err << "\"}";
-        *out_json = strdup(ss.str().c_str());
+    const char *diagnostic_phase = "libraryLoad";
+    bool has_native_code = false; int32_t native_code = 0;
+    if (!setup_vm_and_adi(vm, lib_dir, provisioning_dir, identifier, uuid_prov_dir, err, &diagnostic_phase, has_native_code, native_code)) {
+        *out_json = strdup(diagnostic_error_json(err, diagnostic_phase, has_native_code, native_code).c_str());
         return ANISETTE_ERR_LOADER_FAILED;
     }
 
@@ -319,16 +347,16 @@ static int32_t start_provision_uc_impl(
 
     EmulatorVM *vm = nullptr;
     std::string uuid_prov_dir, err;
-    if (!setup_vm_and_adi(vm, lib_dir, provisioning_dir, identifier, uuid_prov_dir, err)) {
-        std::stringstream ss;
-        ss << "{\"error\":\"" << err << "\"}";
-        *out_json = strdup(ss.str().c_str());
+    const char *diagnostic_phase = "libraryLoad";
+    bool has_native_code = false; int32_t native_code = 0;
+    if (!setup_vm_and_adi(vm, lib_dir, provisioning_dir, identifier, uuid_prov_dir, err, &diagnostic_phase, has_native_code, native_code)) {
+        *out_json = strdup(diagnostic_error_json(err, diagnostic_phase, has_native_code, native_code).c_str());
         return ANISETTE_ERR_LOADER_FAILED;
     }
 
     uint64_t prov_start_ptr = get_vm_symbol_address(vm, kADISymbols.provisioning_start);
     if (!prov_start_ptr) {
-        *out_json = strdup("{\"error\":\"Symbol ADIProvisioningStart missing\"}");
+        *out_json = strdup(diagnostic_error_json("Symbol ADIProvisioningStart missing", "provisionStartSymbol").c_str());
         return ANISETTE_ERR_SYMBOL_MISSING;
     }
 
@@ -352,9 +380,8 @@ static int32_t start_provision_uc_impl(
     if (res != 0) {
         rmdir(uuid_prov_dir.c_str());
         std::stringstream ss;
-        ss << "{\"error\":\"ADIProvisioningStart failed ("
-           << get_anisette_error_description(res) << "): " << res << "\"}";
-        *out_json = strdup(ss.str().c_str());
+        ss << "ADIProvisioningStart failed (" << get_anisette_error_description(res) << "): " << res;
+        *out_json = strdup(diagnostic_error_json(ss.str(), "provisionStart", true, res).c_str());
         return res;
     }
 
@@ -362,13 +389,13 @@ static int32_t start_provision_uc_impl(
     uint32_t session = 0;
 
     if (uc_mem_read(vm->uc, session_ptr, &session, sizeof(session)) != UC_ERR_OK) {
-        *out_json = strdup("{\"error\":\"Incomplete provisioning response\"}");
+        *out_json = strdup(diagnostic_error_json("Incomplete provisioning response", "provisionStartOutput").c_str());
         return ANISETTE_ERR_READ_FILE_FAILED;
     }
 
     uint8_t *cpim_data = nullptr;
     if (!read_guest_bytes(vm, cpim_ptr, cpim_len_ptr, &cpim_data, &final_cpim_len)) {
-        *out_json = strdup("{\"error\":\"Incomplete or invalid CPIM response\"}");
+        *out_json = strdup(diagnostic_error_json("Incomplete or invalid CPIM response", "provisionStartOutput").c_str());
         return ANISETTE_ERR_READ_FILE_FAILED;
     }
     std::unique_ptr<uint8_t[]> cpim_owner(cpim_data);
@@ -402,10 +429,10 @@ static int32_t end_provision_uc_impl(
 
     EmulatorVM *vm = nullptr;
     std::string uuid_prov_dir, err;
-    if (!setup_vm_and_adi(vm, lib_dir, provisioning_dir, identifier, uuid_prov_dir, err)) {
-        std::stringstream ss;
-        ss << "{\"error\":\"" << err << "\"}";
-        *out_json = strdup(ss.str().c_str());
+    const char *diagnostic_phase = "libraryLoad";
+    bool has_native_code = false; int32_t native_code = 0;
+    if (!setup_vm_and_adi(vm, lib_dir, provisioning_dir, identifier, uuid_prov_dir, err, &diagnostic_phase, has_native_code, native_code)) {
+        *out_json = strdup(diagnostic_error_json(err, diagnostic_phase, has_native_code, native_code).c_str());
         return ANISETTE_ERR_LOADER_FAILED;
     }
 
@@ -511,7 +538,11 @@ int32_t start_provision_uc(const char *l, const char *p, const uint8_t *i,
     const uint8_t *s, uint32_t n, char **out) {
     if (out) *out = nullptr;
     try { return start_provision_uc_impl(l, p, i, s, n, out); }
-    catch (...) { return ANISETTE_ERR_LOADER_FAILED; }
+    catch (...) {
+        // No C++ allocation/formatting here: the original exception may be bad_alloc.
+        if (out) *out = strdup("{\"error\":\"C++ exception\",\"diagnostic_phase\":\"exception\"}");
+        return ANISETTE_ERR_LOADER_FAILED;
+    }
 }
 int32_t end_provision_uc(const char *l, const char *p, const uint8_t *i, uint32_t session,
     const uint8_t *ptm, uint32_t pn, const uint8_t *tk, uint32_t tn, char **out) {

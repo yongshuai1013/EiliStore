@@ -6,6 +6,17 @@ public enum AnisetteProviderStage: String, Sendable {
     case provisionEndStarted, provisionEndReturned
 }
 
+public struct AnisetteProviderDiagnostic: Sendable {
+    public enum Operation: String, Sendable { case headers, provisionStart, provisionEnd }
+    public enum Result: String, Sendable { case boundaryReturned, parsed, nilResponse, invalidJSON, invalidResponse, providerError }
+    public enum Phase: String, Sendable { case loadLibrary }
+    public let operation: Operation
+    public let result: Result
+    public let phase: Phase?
+    public let code: Int32
+    public let nativeCode: Int32?
+}
+
 public struct AnisetteRequestHeaders: Sendable {
     public var rawHeaders: [String: String]
     public init(rawHeaders: [String: String]) { self.rawHeaders = rawHeaders }
@@ -49,12 +60,18 @@ public enum FakeAnisetteKitControl {
     public static var initializations: Int { lock.lock(); defer { lock.unlock() }; return _initializations }
     static func didInitialize() { lock.lock(); defer { lock.unlock() }; _initializations += 1 }
     static func didReset() { lock.lock(); defer { lock.unlock() }; _resets += 1 }
+    static var throwsError: Bool { lock.lock(); defer { lock.unlock() }; return _throws }
 }
 public enum FakeAnisetteError: Error { case expected }
 public enum AnisetteKitLogging { public static func setLogging(_ enabled: Bool) {} }
 public struct UnicornAnisetteDataProvider: Sendable {
     let onStage: (@Sendable (AnisetteProviderStage) -> Void)?
-    public init(onStage: (@Sendable (AnisetteProviderStage) -> Void)? = nil) { self.onStage = onStage }
+    let onDiagnostic: (@Sendable (AnisetteProviderDiagnostic) -> Void)?
+    public init(onStage: (@Sendable (AnisetteProviderStage) -> Void)? = nil,
+                onDiagnostic: (@Sendable (AnisetteProviderDiagnostic) -> Void)? = nil) {
+        self.onStage = onStage
+        self.onDiagnostic = onDiagnostic
+    }
 }
 public final class AnisetteClient: @unchecked Sendable {
     private let provider: UnicornAnisetteDataProvider
@@ -64,6 +81,13 @@ public final class AnisetteClient: @unchecked Sendable {
         provider.onStage?(.headersStarted)
         provider.onStage?(.headersReturned)
         provider.onStage?(.provisionStartStarted)
+        if FakeAnisetteKitControl.throwsError {
+            provider.onDiagnostic?(.init(operation: .provisionStart, result: .boundaryReturned, phase: nil, code: -2, nativeCode: nil))
+            provider.onDiagnostic?(.init(operation: .provisionStart, result: .providerError, phase: .loadLibrary, code: -2, nativeCode: -42))
+            return try await FakeAnisetteKitControl.run(identifier: identifier, blob: existing, headers: headers?.rawHeaders ?? [:])
+        }
+        provider.onDiagnostic?(.init(operation: .provisionStart, result: .boundaryReturned, phase: nil, code: 0, nativeCode: nil))
+        provider.onDiagnostic?(.init(operation: .provisionStart, result: .parsed, phase: nil, code: 0, nativeCode: nil))
         provider.onStage?(.provisionStartReturned)
         provider.onStage?(.provisionEndStarted)
         provider.onStage?(.provisionEndReturned)

@@ -1,6 +1,7 @@
 import Foundation
 
-/// Fixed vocabulary only: never pass credentials, headers, URLs, errors or provider payloads here.
+/// Fixed vocabulary and numeric status only: never pass credentials, headers, URLs,
+/// free-form errors or provider payloads here.
 /// This is a last-known-stage journal, NOT a crash handler or proof of an OS termination reason.
 final class EiliLoginDiagnostics: @unchecked Sendable {
     static let shared = EiliLoginDiagnostics()
@@ -15,11 +16,34 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
         case nativeHeadersStarted, nativeHeadersReturned
         case nativeProvisionStartStarted, nativeProvisionStartReturned
         case nativeProvisionEndStarted, nativeProvisionEndReturned
+        case nativeBoundaryReturned, nativeResponseParsed, nativeResponseFailed
         case anisetteReady, authenticationStarted, verificationWaiting
         case authenticationReturned, sessionSaving
     }
     enum Outcome: String, Codable { case unfinished, succeeded, failed, cancelled }
-    struct Entry: Codable { let stage: Stage; let date: Date }
+    struct NativeDetail: Codable, Sendable {
+        enum Operation: String, Codable, Sendable { case headers, provisionStart, provisionEnd }
+        enum Result: String, Codable, Sendable {
+            case boundaryReturned, parsed, nilResponse, invalidJSON, invalidResponse, providerError
+        }
+        enum Phase: String, Codable, Sendable {
+            case arguments, vmAllocation, vmInitialization, libraryLoad, libraryRelocation
+            case libraryConstructors, loadLibrarySymbol, loadLibrary, provisioningDirectory
+            case setProvisioningPathSymbol, setProvisioningPath, setAndroidIDSymbol, setAndroidID
+            case provisionStartSymbol, provisionStart, provisionStartOutput, exception
+        }
+        let operation: Operation
+        let result: Result
+        let phase: Phase?
+        let code: Int32
+        let nativeCode: Int32?
+    }
+    struct Entry: Codable {
+        let stage: Stage
+        let date: Date
+        // Optional keeps existing v2 journals readable without migrating or deleting them.
+        var native: NativeDetail? = nil
+    }
     struct Attempt: Codable {
         let id: UUID
         let mode: String
@@ -83,12 +107,34 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
             guard let id else { return }
             store.record(stage, for: id)
         }
+
+        func record(native: NativeDetail) {
+            lock.lock(); defer { lock.unlock() }
+            guard let id else { return }
+            store.record(native: native, for: id)
+        }
     }
 
     func record(_ stage: Stage, for id: UUID) {
         lock.lock(); defer { lock.unlock() }
         guard journal.current?.id == id, journal.current?.outcome == .unfinished else { return }
         journal.current?.entries.append(Entry(stage: stage, date: Date()))
+        if let count = journal.current?.entries.count, count > 48 {
+            journal.current?.entries.removeFirst(count - 48)
+        }
+        persist()
+    }
+
+    func record(native: NativeDetail, for id: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        guard journal.current?.id == id, journal.current?.outcome == .unfinished else { return }
+        let stage: Stage
+        switch native.result {
+        case .boundaryReturned: stage = .nativeBoundaryReturned
+        case .parsed: stage = .nativeResponseParsed
+        default: stage = .nativeResponseFailed
+        }
+        journal.current?.entries.append(Entry(stage: stage, date: Date(), native: native))
         if let count = journal.current?.entries.count, count > 48 {
             journal.current?.entries.removeFirst(count - 48)
         }
@@ -110,13 +156,23 @@ final class EiliLoginDiagnostics: @unchecked Sendable {
 
     func report() -> String {
         lock.lock(); defer { lock.unlock() }
-        var lines = ["EiliStore 登入階段診斷 v2", "僅記錄階段、時間、模式及版本；不含帳號、密碼、驗證碼、Session 或 Anisette 內容。", "未完成不等於已確認閃退；也可能是強制關閉或系統終止。"]
+        var lines = ["EiliStore 登入階段診斷 v3", "僅記錄固定階段、數字狀態碼、時間、模式及版本；不含帳號、密碼、驗證碼、Session 或 Anisette 內容。", "未完成不等於已確認閃退；也可能是強制關閉或系統終止。", "bridge 為 C 邊界回傳碼；native 為 VM 呼叫回傳碼，不一定是 Apple 錯誤碼。"]
         if writeFailed { lines.append("注意：診斷寫入失敗，重開後的紀錄可能不完整。") }
         let formatter = ISO8601DateFormatter()
         for (label, attempt) in [("最近一次", journal.current), ("前一次", journal.previous)] {
             guard let attempt else { continue }
             lines += ["", "\(label)：\(attempt.outcome.rawValue)", "模式：\(attempt.mode)；App：\(attempt.build)；系統：\(attempt.os)"]
-            lines += attempt.entries.map { "\(formatter.string(from: $0.date)) \($0.stage.rawValue)" }
+            lines += attempt.entries.map { entry in
+                var line = "\(formatter.string(from: entry.date)) \(entry.stage.rawValue)"
+                if let native = entry.native {
+                    line += " op=\(native.operation.rawValue) result=\(native.result.rawValue) bridge=\(native.code)"
+                    if let phase = native.phase { line += " phase=\(phase.rawValue)" }
+                    if let code = native.nativeCode {
+                        line += " native=\(code) (0x\(String(UInt32(bitPattern: code), radix: 16)))"
+                    }
+                }
+                return line
+            }
         }
         if journal.current == nil { lines.append("尚無登入階段紀錄。") }
         return lines.joined(separator: "\n")

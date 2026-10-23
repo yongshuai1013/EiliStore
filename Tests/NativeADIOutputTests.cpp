@@ -59,6 +59,14 @@ void prepare_initialized_vm(const std::string &provdir, const uint8_t id[16]) {
     g_current_android_id = get_android_id_string(id);
 }
 
+void test_diagnostic_json_escaping() {
+    // A path-like error containing both characters must remain valid JSON.
+    const std::string json = diagnostic_error_json("bad library path: /tmp/a\\\"b", "libraryLoad");
+    const std::string expected = "{\"error\":\"bad library path: /tmp/a" +
+        std::string(3, '\\') + "\"b\",\"diagnostic_phase\":\"libraryLoad\"}";
+    assert(json == expected);
+}
+
 void test_read_guest_bytes() {
     EmulatorVM vm;
     assert(vm.uc != nullptr && vm.initialization_error == UC_ERR_OK);
@@ -211,6 +219,17 @@ void test_synthetic_otp_and_file_io() {
     inject_symbol(g_shared_vm, kADISymbols.provisioning_start, failing);
     assert(start_provision_uc(libs.c_str(), prov.c_str(), id, ptm, sizeof ptm, &json) == 1);
     assert(json && std::strstr(json, "ADIProvisioningStart failed") && !std::strstr(json, "cpim_base64"));
+    assert(std::strstr(json, "\"diagnostic_phase\":\"provisionStart\""));
+    assert(std::strstr(json, "\"native_code\":1"));
+    free_c_string(json); json = nullptr;
+
+    // A setup failure returns loader -2, but must retain the guest's distinct
+    // return value rather than falsely presenting -2 as the ADI return code.
+    g_current_android_id.clear();
+    inject_symbol(g_shared_vm, kADISymbols.set_android_id, failing);
+    assert(start_provision_uc(libs.c_str(), prov.c_str(), id, ptm, sizeof ptm, &json) == ANISETTE_ERR_LOADER_FAILED);
+    assert(json && std::strstr(json, "\"diagnostic_phase\":\"setAndroidID\""));
+    assert(std::strstr(json, "\"native_code\":1"));
     free_c_string(json); json = nullptr;
     reset_synthetic_vm();
 
@@ -248,6 +267,7 @@ void test_recreated_provisioning_directory() {
 
 int main() {
     test_read_guest_bytes();
+    test_diagnostic_json_escaping();
     test_capi_invalid_and_oversize();
     test_synthetic_otp_and_file_io();
     test_recreated_provisioning_directory();

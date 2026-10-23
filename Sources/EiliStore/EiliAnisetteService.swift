@@ -232,6 +232,14 @@ actor EiliAnisetteService {
                     case .provisionEndStarted: diagnostics.record(.nativeProvisionEndStarted)
                     case .provisionEndReturned: diagnostics.record(.nativeProvisionEndReturned)
                     }
+                }, onDiagnostic: { [diagnostics = localDiagnostics] event in
+                    // Re-allowlist at the persistence boundary. Never bridge free-form
+                    // provider errors, paths, JSON, or identity/provisioning data.
+                    guard let operation = EiliLoginDiagnostics.NativeDetail.Operation(rawValue: event.operation.rawValue),
+                          let result = EiliLoginDiagnostics.NativeDetail.Result(rawValue: event.result.rawValue) else { return }
+                    diagnostics.record(native: .init(operation: operation, result: result,
+                        phase: event.phase.flatMap { EiliLoginDiagnostics.NativeDetail.Phase(rawValue: $0.rawValue) },
+                        code: event.code, nativeCode: event.nativeCode))
                 }), libraryDirectoryResolver: { directory })
         }
         guard let client = localClient else { throw EiliAnisetteError.missingLibraries }

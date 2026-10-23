@@ -79,6 +79,35 @@ import Glibc
         relay.bind(nil)
         relay.record(.nativeProvisionEndStarted)
         precondition(!store.report().contains("nativeProvisionEndStarted"))
+        let native = EiliLoginDiagnostics.NativeDetail(operation: .provisionStart,
+            result: .providerError, phase: .loadLibrary, code: -2, nativeCode: -42)
+        relay.record(native: native)
+        precondition(!store.report().contains("nativeResponseFailed"))
+        relay.bind(first) // completed/stale attempt must not receive numeric diagnostics
+        relay.record(native: native)
+        precondition(!store.report().contains("nativeResponseFailed"))
+        relay.bind(second)
+        relay.record(native: .init(operation: .provisionStart, result: .boundaryReturned,
+            phase: nil, code: -2, nativeCode: nil))
+        relay.record(native: native)
+        store.finish(.failed, for: second)
+        let nativeReport = EiliLoginDiagnostics(file: file).report()
+        precondition(nativeReport.contains("診斷 v3"))
+        precondition(nativeReport.contains("nativeBoundaryReturned op=provisionStart result=boundaryReturned bridge=-2"))
+        precondition(nativeReport.contains("nativeResponseFailed op=provisionStart result=providerError bridge=-2 phase=loadLibrary native=-42 (0xffffffd6)"))
+        relay.record(native: .init(operation: .headers, result: .invalidJSON, phase: nil, code: -5, nativeCode: nil))
+        precondition(!store.report().contains("result=invalidJSON"))
+        // An actual v2 shape has no optional native key, and must remain readable.
+        var v2Journal = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+        for key in ["current", "previous"] {
+            if var attempt = v2Journal[key] as? [String: Any], let entries = attempt["entries"] as? [[String: Any]] {
+                attempt["entries"] = entries.filter { $0["native"] == nil }
+                v2Journal[key] = attempt
+            }
+        }
+        try JSONSerialization.data(withJSONObject: v2Journal).write(to: file)
+        let v2Report = EiliLoginDiagnostics(file: file).report()
+        precondition(v2Report.contains("nativeProvisionStartStarted") && v2Report.contains("最近一次：failed"))
         EiliLoginDiagnostics.record(.authenticationStarted, for: nil)
         print("EiliLoginDiagnosticsTests: PASS (abrupt exit/reopen, bounded storage, stale writes, outcomes, I/O failure, corrupt data, explicit ID/relay/detached Task)")
     }

@@ -308,9 +308,20 @@ enum KeychainHelper {
         let previousStages = reportSections[1]
         check(nativeStages.allSatisfy { latestStages.contains($0) }, "cached provider native stages missing from second attempt")
         check(nativeStages.allSatisfy { previousStages.contains($0) }, "cached provider native stages missing from first attempt")
+        check(latestStages.contains("nativeBoundaryReturned op=provisionStart result=boundaryReturned bridge=0"), "native boundary return missing")
+        check(latestStages.contains("nativeResponseParsed op=provisionStart result=parsed bridge=0"), "parsed result missing")
         let nilAttemptBefore = diagnosticReport
         _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .remote, diagnosticAttempt: nil)
         check(EiliLoginDiagnostics.shared.report() == nilAttemptBefore, "nil fetch polluted existing diagnostics")
+        let failedNativeAttempt = EiliLoginDiagnostics.shared.begin(onDevice: true)
+        FakeAnisetteKitControl.configure(blob: nil, throwsError: true)
+        do {
+            _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .onDevice, diagnosticAttempt: failedNativeAttempt)
+            fatalError("synthetic native error was swallowed")
+        } catch FakeAnisetteError.expected {}
+        let failedNativeReport = EiliLoginDiagnostics.shared.report().components(separatedBy: "前一次：")[0]
+        check(failedNativeReport.contains("nativeResponseFailed op=provisionStart result=providerError bridge=-2 phase=loadLibrary native=-42 (0xffffffd6)"), "safe numeric native detail lost")
+        check(!failedNativeReport.contains("nativeProvisionStartReturned"), "failed parse falsely reported successful return")
         KeychainHelper.save(Data(), forKey: "eilistore.anisette.local.adiblob")
         FakeAnisetteKitControl.reset(); FakeAnisetteKitControl.configure(blob: Data(), routingInfo: "v3")
         _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice)

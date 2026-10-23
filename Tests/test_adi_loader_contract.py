@@ -51,6 +51,30 @@ class ADILoaderContractTests(unittest.TestCase):
         self.assertIn('return false;', gate)
         self.assertIn('does not implement', gate)
 
+    def test_start_provision_diagnostic_schema_is_allowlisted(self):
+        native = (ROOT / 'Packages/AnisetteKit/Native/anisette_core_uc.cpp').read_text()
+        phases = set(re.findall(r'diagnostic_error_json\([^;]*?,\s*"([A-Za-z]+)"', native))
+        allowed = {
+            'arguments', 'vmAllocation', 'vmInitialization', 'libraryLoad',
+            'libraryConstructors', 'libraryRelocation', 'loadLibrarySymbol', 'loadLibrary',
+            'provisioningDirectory', 'setProvisioningPathSymbol', 'setProvisioningPath',
+            'setAndroidIDSymbol', 'setAndroidID', 'provisionStartSymbol',
+            'provisionStart', 'provisionStartOutput', 'exception',
+        }
+        self.assertTrue(phases)
+        self.assertLessEqual(phases, allowed)
+        self.assertIn('diagnostic_phase', native)
+        self.assertIn('diagnostic_error_json(ss.str(), "provisionStart", true, res)', native)
+        self.assertIn('int32_t res = run_vm_procedure(vm, prov_start_ptr', native)
+        self.assertNotIn('"native_code":-1000', native)
+        start = native.split('static int32_t start_provision_uc_impl', 1)[1].split('static int32_t end_provision_uc_impl', 1)[0]
+        for phase in ('provisionStartSymbol', 'provisionStart', 'provisionStartOutput'):
+            self.assertIn('"' + phase + '"', start)
+        wrapper = native.split('int32_t start_provision_uc(', 1)[1].split('int32_t end_provision_uc(', 1)[0]
+        self.assertIn('C++ exception', wrapper)
+        self.assertIn(r'\"diagnostic_phase\":\"exception\"', wrapper)
+        self.assertNotIn('diagnostic_error_json(', wrapper)
+
     def test_data_name_heuristics_match_native_loader(self):
         native = (ROOT / 'Packages/AnisetteKit/Native/Loader/elf_loader_emulator.cpp').read_text()
         names = native.split('static bool guest_data_symbol_name', 1)[1].split('const AndroidSystemProperties', 1)[0]
