@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 private enum AnisetteConfigEditorMode: String, CaseIterable, Identifiable {
@@ -39,6 +40,17 @@ struct AnisetteClientConfigurationView: View {
     @State private var message: String?
     @State private var isError = false
     @State private var isBusy = false
+
+    // Remote Server Sync (mirrors SideStore's AnisetteDataView): only shown
+    // in remote mode, i.e. when the On-Device Anisette switch is off.
+    @AppStorage(EiliAnisetteMode.preferenceKey) private var anisetteModeRawValue = EiliAnisetteMode.remote.rawValue
+    @State private var showingServerSync = false
+    @State private var isCopiedServer = false
+    @State private var isFetchingServer = false
+    @State private var serverHeaders: [String: String] = [:]
+    @State private var serverHeadersJSON: String = "{}"
+
+    private static let serverHeadersDefaultsKey = "eilistore.anisette.serverHeadersJSON"
 
     private var modeSelection: Binding<AnisetteConfigEditorMode> {
         Binding(get: { mode }, set: { changeMode(to: $0) })
@@ -125,6 +137,76 @@ struct AnisetteClientConfigurationView: View {
                     .font(.caption).foregroundColor(.secondary)
             }
 
+            if isRemoteMode {
+                Section("REMOTE SERVER SYNC") {
+                    DisclosureGroup(isExpanded: $showingServerSync) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("Server: \(activeServerHost)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Button {
+                                    UIPasteboard.general.string = serverHeadersJSON
+                                    withAnimation { isCopiedServer = true }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                        withAnimation { isCopiedServer = false }
+                                    }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: isCopiedServer ? "checkmark" : "doc.on.doc")
+                                        Text(isCopiedServer ? "Copied" : "Copy")
+                                    }
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundColor(isCopiedServer ? .green : .accentColor)
+                                }
+                                .buttonStyle(.borderless)
+                            }
+
+                            ScrollView(.horizontal, showsIndicators: true) {
+                                Text(serverHeadersJSON)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .padding(10)
+                            }
+
+                            Button {
+                                saveAsOverrides()
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    Label("Save as Overrides", systemImage: "square.and.arrow.down.on.square")
+                                        .font(.system(size: 15, weight: .bold))
+                                    Spacer()
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(serverHeadersJSON == "{}" || serverHeadersJSON.isEmpty || !isLoaded || isBusy)
+                            .accessibilityIdentifier("client-config-remote-sync-save")
+                        }
+                        .padding(.top, 8)
+                    } label: {
+                        HStack {
+                            Label("Remote Server Sync", systemImage: "network")
+                            Spacer()
+                            Button {
+                                fetchFreshFromServer()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.clockwise")
+                                    Text("Fetch")
+                                }
+                                .font(.footnote.weight(.semibold))
+                                .foregroundColor(.accentColor)
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(isFetchingServer || isBusy)
+                            .accessibilityIdentifier("client-config-remote-sync-fetch")
+                        }
+                    }
+                    .accessibilityIdentifier("client-config-remote-sync")
+                }
+            }
+
             Section("注意事項") {
                 Text("九項設定對遠端與 OnDevice 模式皆有效。儲存後於下一次登入或 Anisette 請求生效；空白代表沿用 provider/default。")
                 Text("身份欄位不會更改 provisioningUUID 或 ADI 資料。自訂值可能導致 Apple 拒絕請求，請謹慎修改。")
@@ -183,6 +265,7 @@ struct AnisetteClientConfigurationView: View {
 
     private func load() {
         guard !isLoaded, !isBusy else { return }
+        restoreServerHeaders()
         isBusy = true
         Task {
             do {
@@ -198,6 +281,102 @@ struct AnisetteClientConfigurationView: View {
                 showError("無法載入設定。為避免覆寫未知資料，儲存與匯入已停用；可嘗試重設。")
             }
         }
+    }
+
+    private var isRemoteMode: Bool {
+        EiliAnisetteMode(rawValue: anisetteModeRawValue) != .onDevice
+    }
+
+    private var activeServerHost: String {
+        URL(string: AnisetteServerManager.shared.selectedServer.url)?.host ?? "Active Server"
+    }
+
+    private func restoreServerHeaders() {
+        guard let text = UserDefaults.standard.string(forKey: Self.serverHeadersDefaultsKey),
+              let data = text.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return }
+        serverHeaders = dict
+        serverHeadersJSON = Self.prettyJSON(dict)
+    }
+
+    /// Mirrors SideStore's fetchFreshFromServer(): GET <active server>/v3/client_info
+    /// and persist the returned headers for display. The timeout is 30s instead of
+    /// SideStore's 10s because the user's private server cold-starts on Render.
+    private func fetchFreshFromServer() {
+        guard !isFetchingServer else { return }
+        let base = AnisetteServerManager.shared.selectedServer.url
+        guard let baseURL = URL(string: base) else {
+            showError("目前的 Anisette 伺服器 URL 無效，無法抓取。")
+            return
+        }
+        let clientInfoURL = baseURL.appendingPathComponent("v3").appendingPathComponent("client_info")
+        isFetchingServer = true
+        Task {
+            defer { isFetchingServer = false }
+            do {
+                var request = URLRequest(url: clientInfoURL)
+                request.timeoutInterval = 30
+                let (data, _) = try await URLSession.shared.data(for: request)
+                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: String] else {
+                    showError("伺服器回應不是有效的 JSON。")
+                    return
+                }
+                serverHeaders = json
+                serverHeadersJSON = Self.prettyJSON(json)
+                if let encoded = try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]),
+                   let text = String(data: encoded, encoding: .utf8) {
+                    UserDefaults.standard.set(text, forKey: Self.serverHeadersDefaultsKey)
+                }
+                withAnimation { showingServerSync = true }
+                showSuccess("已從伺服器抓取設定（\(baseURL.host ?? "")）。")
+            } catch {
+                showError("抓取失敗：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Mirrors SideStore's loadServerHeadersIntoOverrides(): map the fetched
+    /// headers onto the override fields (the configuration's alias-aware JSON
+    /// decoding resolves client_info/user_agent/etc.) and save immediately.
+    private func saveAsOverrides() {
+        guard isLoaded, !isBusy, !serverHeaders.isEmpty else { return }
+        do {
+            let data = try JSONSerialization.data(withJSONObject: serverHeaders, options: [.sortedKeys])
+            let fetched = try EiliAnisetteClientConfiguration.decodeJSON(data)
+            var merged = draft
+            if !fetched.clientInfo.isEmpty { merged.clientInfo = fetched.clientInfo }
+            if !fetched.userAgent.isEmpty { merged.userAgent = fetched.userAgent }
+            if !fetched.customDeviceID.isEmpty { merged.customDeviceID = fetched.customDeviceID }
+            if !fetched.customLocalUserID.isEmpty { merged.customLocalUserID = fetched.customLocalUserID }
+            if !fetched.customSerialNumber.isEmpty { merged.customSerialNumber = fetched.customSerialNumber }
+            if !fetched.customRoutingInfo.isEmpty { merged.customRoutingInfo = fetched.customRoutingInfo }
+            if !fetched.customLocale.isEmpty { merged.customLocale = fetched.customLocale }
+            if !fetched.customTimeZone.isEmpty { merged.customTimeZone = fetched.customTimeZone }
+            if !fetched.customXcodeVersion.isEmpty { merged.customXcodeVersion = fetched.customXcodeVersion }
+            let value = try merged.validated()
+            isBusy = true
+            Task {
+                do {
+                    try await EiliAnisetteClientConfigurationStore.shared.save(value)
+                    draft = value
+                    rawJSON = Self.jsonText(value) ?? rawJSON
+                    isDirty = false
+                    isBusy = false
+                    showSuccess("已把伺服器資料存入覆寫設定；下次登入或 Anisette 請求生效。")
+                } catch {
+                    isBusy = false
+                    showError("無法儲存設定。請稍後重試。")
+                }
+            }
+        } catch {
+            showError("伺服器資料無法轉成覆寫設定，請檢查內容後再試。")
+        }
+    }
+
+    private static func prettyJSON(_ dict: [String: String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+              let text = String(data: data, encoding: .utf8) else { return "{}" }
+        return text
     }
 
     private func changeMode(to newMode: AnisetteConfigEditorMode) {
