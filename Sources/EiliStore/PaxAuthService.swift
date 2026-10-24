@@ -98,7 +98,17 @@ public final class PaxAuthService {
         let clientConfiguration = try await EiliAnisetteClientConfigurationStore.shared.load()
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         EiliLoginDiagnostics.record(.configurationReady, for: diagnosticAttempt)
-        codeProvider.log(anisetteMode == .onDevice ? "步驟 1/3：生成本地 anisette（ODA）…" : "步驟 1/3：向遠端伺服器取得 anisette…")
+        if anisetteMode == .onDevice {
+            codeProvider.log("步驟 1/3：生成本地 anisette（ODA）…")
+        } else {
+            // 把實際設定印進日誌：選中的伺服器與自動輪換狀態。輪換關閉時
+            // 選中即所用；開啟時實際應答者以下一行 anisette 就緒的
+            // MD-M／RINFO 指紋為準。
+            let selectedServer = AnisetteServerManager.shared.selectedServer
+            let serverHost = selectedServer.nsURL?.host ?? selectedServer.url
+            let rotationState = AnisetteServerManager.shared.autoRotationEnabled ? "開" : "關"
+            codeProvider.log("步驟 1/3：向遠端伺服器取得 anisette（已選：\(selectedServer.name) · \(serverHost)，自動輪換：\(rotationState)）…")
+        }
         
         let anisetteData = try await EiliAnisetteService.shared.fetch(
             remoteIdentifier: identifier,
