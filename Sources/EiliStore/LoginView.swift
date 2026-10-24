@@ -21,6 +21,11 @@ struct LoginView: View {
     @State private var availablePhones: [TrustedPhoneNumber] = []
     @State private var preferredMethod: TwoFactorDeliveryMode = .sms
     @State private var debugLog = ""
+    @AppStorage(EiliAnisetteMode.preferenceKey) private var anisetteModeRawValue = EiliAnisetteMode.remote.rawValue
+
+    private var isOnDeviceMode: Bool {
+        EiliAnisetteMode(rawValue: anisetteModeRawValue) == .onDevice
+    }
 
     private func log(_ message: String) {
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
@@ -73,16 +78,20 @@ struct LoginView: View {
             }
 
             Section(footer: Text("VPN 外置：請確保外部 VPN 已連接（10.7.0.1 可達）")) {
-                NavigationLink(destination: AnisetteServerView()) {
-                    HStack {
-                        Text("Anisette 伺服器")
-                        Spacer()
-                        Text(AnisetteServerManager.shared.selectedServer.name)
-                            .foregroundColor(.gray)
-                            .font(.caption)
+                // Mirrors SideStore: in On-Device Anisette mode the remote
+                // server selection is not used, so the row is hidden.
+                if !isOnDeviceMode {
+                    NavigationLink(destination: AnisetteServerView()) {
+                        HStack {
+                            Text("Anisette 伺服器")
+                            Spacer()
+                            Text(AnisetteServerManager.shared.selectedServer.name)
+                                .foregroundColor(.gray)
+                                .font(.caption)
+                        }
                     }
+                    .disabled(isLoading)
                 }
-                .disabled(isLoading)
                 Button("Reset Anisette（清除本地數據）") {
                     PaxAuthService.shared.resetAnisette()
                     log("已清除 Anisette 本地數據")

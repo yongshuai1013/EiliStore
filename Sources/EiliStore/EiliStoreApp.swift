@@ -916,6 +916,11 @@ struct SignInstallView: View {
 struct SettingsView: View {
     @State private var appleID = ""
     @State private var isLoggedIn = false
+    @AppStorage(EiliAnisetteMode.preferenceKey) private var anisetteModeRawValue = EiliAnisetteMode.remote.rawValue
+
+    private var isOnDeviceMode: Bool {
+        EiliAnisetteMode(rawValue: anisetteModeRawValue) == .onDevice
+    }
     
     var body: some View {
         NavigationView {
@@ -962,8 +967,12 @@ struct SettingsView: View {
                 }
                 
                 Section(header: Text("調試")) {
-                    NavigationLink(destination: AnisetteServerView()) {
-                        Text("Anisette 伺服器")
+                    // Mirrors SideStore's SettingsViewController: the
+                    // Anisette Servers row only exists in remote mode.
+                    if !isOnDeviceMode {
+                        NavigationLink(destination: AnisetteServerView()) {
+                            Text("Anisette 伺服器")
+                        }
                     }
                     NavigationLink(destination: ConnectionConfigView()) {
                         Text("連接配置")
