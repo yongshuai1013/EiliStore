@@ -88,6 +88,7 @@ public final class PaxAuthService {
     private func performLogin(appleID: String, password: String, codeProvider: TwoFACodeProvider, diagnosticAttempt: UUID) async throws -> Bool {
         defer { codeProvider.cancel() }
         EiliLoginDiagnostics.record(.loginStarted, for: diagnosticAttempt)
+        codeProvider.log("開始登入：\(appleID)")
         try Task.checkCancellation()
         // 1. 拿 anisette（穩定身份）
         let identifier = resolveIdentifier()
@@ -97,6 +98,7 @@ public final class PaxAuthService {
         let clientConfiguration = try await EiliAnisetteClientConfigurationStore.shared.load()
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         EiliLoginDiagnostics.record(.configurationReady, for: diagnosticAttempt)
+        codeProvider.log(anisetteMode == .onDevice ? "步驟 1/3：生成本地 anisette（ODA）…" : "步驟 1/3：向遠端伺服器取得 anisette…")
         
         let anisetteData = try await EiliAnisetteService.shared.fetch(
             remoteIdentifier: identifier,
@@ -108,6 +110,7 @@ public final class PaxAuthService {
         )
         
         EiliLoginDiagnostics.record(.anisetteReady, for: diagnosticAttempt)
+        codeProvider.log("anisette 就緒：MD=\(anisetteData.oneTimePassword.prefix(10))… MD-M=\(anisetteData.machineID.prefix(10))… RINFO=\(anisetteData.routingInfo)")
         try Task.checkCancellation()
         guard !codeProvider.isCancelled else { throw CancellationError() }
 
@@ -145,6 +148,7 @@ public final class PaxAuthService {
         }
 
         EiliLoginDiagnostics.record(.authenticationStarted, for: diagnosticAttempt)
+        codeProvider.log("步驟 2/3：向 Apple 登入（SRP）…")
         let session = try await portal.authenticate(
             appleID: appleID,
             password: password,

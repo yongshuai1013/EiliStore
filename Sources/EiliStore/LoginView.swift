@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import SideSign
 
 // MARK: - 登入（未登入時從設定頁進入）
@@ -124,6 +125,8 @@ struct LoginView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxHeight: 200)
+                    Button("複製日誌") { UIPasteboard.general.string = debugLog }
+                        .font(.caption)
                     Button("清除日誌") { debugLog = "" }
                         .font(.caption)
                 }
@@ -169,6 +172,7 @@ struct LoginView: View {
 
     private func doLogin() {
         guard !isLoading else { return }
+        let loginStartedAt = Date()
         let diagnosticAttempt = EiliLoginDiagnostics.shared.begin(onDevice: EiliAnisetteMode.selected == .onDevice)
         activeDiagnosticAttempt = diagnosticAttempt
         EiliLoginDiagnostics.record(.providerCreating, for: diagnosticAttempt)
@@ -228,7 +232,6 @@ struct LoginView: View {
                 // A cancelled/disappeared view must not enter the auth service.
                 try Task.checkCancellation()
                 guard codeProvider === provider else { return }
-                log("開始登入")
                 EiliLoginDiagnostics.record(.authServiceCalling, for: diagnosticAttempt)
                 let success = try await PaxAuthService.shared.login(
                     appleID: appleID,
@@ -248,7 +251,8 @@ struct LoginView: View {
                 guard codeProvider === provider else { return }
                 let message = PaxAuthService.loginErrorMessage(for: error)
                 errorMessage = message
-                log(message)
+                log("❌ 登入失敗（耗時 \(Int(Date().timeIntervalSince(loginStartedAt))) 秒）：\(message)")
+                log("錯誤詳情：\(String(describing: error))")
             }
         }
         EiliLoginDiagnostics.record(.loginTaskCreated, for: diagnosticAttempt)
