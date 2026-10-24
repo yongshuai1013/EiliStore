@@ -369,6 +369,7 @@ class AppManager: ObservableObject {
     ///   - onlyBundleId: 指定只刷新一個已安裝 App；nil 時維持批次刷新
     func refreshAll(includeExternal: Bool = false, onlyNeedingRefresh: Bool = false, onlyBundleId: String? = nil) async {
         var failCount = 0
+        var refreshedNames: [String] = []
         let appsToConsider = onlyNeedingRefresh ? appsNeedingRefresh : installedApps
         let toRefresh = onlyBundleId.map { bundleId in
             appsToConsider.filter { $0.bundleId == bundleId }
@@ -422,6 +423,7 @@ class AppManager: ObservableObject {
             refreshTitle = "刷新失敗"
             isRefreshError = true
             refreshProgress = "獲取 Team 失敗"
+            EiliNotificationService.shared.notifyRefreshFailed(reason: "獲取 Team 失敗")
             return
         }
         guard let team = teams.first else {
@@ -429,6 +431,7 @@ class AppManager: ObservableObject {
             refreshTitle = "刷新失敗"
             isRefreshError = true
             refreshProgress = "沒有可用的 Team"
+            EiliNotificationService.shared.notifyRefreshFailed(reason: "沒有可用的 Team")
             return
         }
         AppLogger.shared.log("使用 Team: \(team.name)")
@@ -492,6 +495,7 @@ class AppManager: ObservableObject {
                        let installedIndex = installedApps.firstIndex(where: { $0.id == app.id }) {
                         installedApps[installedIndex].expiresDate = profile.expirationDate
                         save()
+                        refreshedNames.append(app.name)
                         let days = Calendar.current.dateComponents([.day], from: Date(), to: profile.expirationDate).day ?? 0
                         AppLogger.shared.log("  ✅ \(app.name) profile 有效期更新為 \(days) 天")
                     }
@@ -520,6 +524,7 @@ class AppManager: ObservableObject {
                 try await misagent.installProfile(profile.data)
                 self.externalExpiry[bid] = profile.expirationDate
                 saveExternalMetadata()
+                refreshedNames.append(externalNames[bid] ?? bid)
                 let days = Calendar.current.dateComponents([.day], from: Date(), to: profile.expirationDate).day ?? 0
                 AppLogger.shared.log("外部刷新成功 \(bid)，profile 有效期 \(days) 天")
                 refreshFraction = 1.0
@@ -540,11 +545,14 @@ class AppManager: ObservableObject {
             refreshProgress = "刷新完成"
         }
         AppLogger.shared.log("全部刷新完成")
+        EiliNotificationService.shared.notifyRefreshFinished(refreshedNames: refreshedNames, failCount: failCount)
+        rescheduleExpirationWarnings()
     }
     
     /// 只刷新外部 App（不碰列表）
     func refreshExternalOnly() async {
         var failCount = 0
+        var refreshedNames: [String] = []
         let bids = externalBundleIds
         guard !bids.isEmpty else { return }
         
@@ -567,12 +575,14 @@ class AppManager: ObservableObject {
             refreshTitle = "刷新失敗"
             isRefreshError = true
             refreshProgress = "獲取 Team 失敗"
+            EiliNotificationService.shared.notifyRefreshFailed(reason: "獲取 Team 失敗")
             return
         }
         guard let team = teams.first else {
             refreshTitle = "刷新失敗"
             isRefreshError = true
             refreshProgress = "沒有可用的 Team"
+            EiliNotificationService.shared.notifyRefreshFailed(reason: "沒有可用的 Team")
             return
         }
         
@@ -611,6 +621,7 @@ class AppManager: ObservableObject {
                 try await misagent.installProfile(profile.data)
                 externalExpiry[bid] = profile.expirationDate
                 saveExternalMetadata()
+                refreshedNames.append(externalNames[bid] ?? bid)
                 let days = Calendar.current.dateComponents([.day], from: Date(), to: profile.expirationDate).day ?? 0
                 AppLogger.shared.log("外部刷新成功 \(bid)，profile 有效期 \(days) 天")
                 refreshFraction = 1.0
@@ -631,6 +642,21 @@ class AppManager: ObservableObject {
             refreshProgress = "刷新完成"
         }
         AppLogger.shared.log("外部刷新完成")
+        EiliNotificationService.shared.notifyRefreshFinished(refreshedNames: refreshedNames, failCount: failCount)
+        rescheduleExpirationWarnings()
+    }
+
+    /// 依目前記錄的效期，為所有追蹤中的 App 重排到期前提醒（本地通知）。
+    private func rescheduleExpirationWarnings() {
+        var apps: [EiliNotificationService.ExpiringApp] = installedApps.map {
+            (name: $0.name, bundleId: $0.bundleId, expirationDate: $0.expiresDate)
+        }
+        for bid in externalBundleIds {
+            if let expiry = externalExpiry[bid] {
+                apps.append((name: externalNames[bid] ?? bid, bundleId: bid, expirationDate: expiry))
+            }
+        }
+        EiliNotificationService.shared.scheduleExpirationWarningsForAll(apps: apps)
     }
 
     /// 讀出已保存 IPA 的主 App 與巢狀 App/appex Bundle IDs；失敗時至少刷新主 App。
@@ -727,6 +753,8 @@ class AppManager: ObservableObject {
         } else {
             AppLogger.shared.log("所有 App 簽名有效，無需刷新")
         }
+        // 啟動時依現有效期補排到期提醒（比照 SideStore 啟動對自己的排程）。
+        rescheduleExpirationWarnings()
     }
     
     /// 確保 EiliStore 自己在 App 列表裡（用於自刷新）
