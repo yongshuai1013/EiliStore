@@ -44,7 +44,6 @@ struct AnisetteClientConfigurationView: View {
     // Remote Server Sync (mirrors SideStore's AnisetteDataView): only shown
     // in remote mode, i.e. when the On-Device Anisette switch is off.
     @AppStorage(EiliAnisetteMode.preferenceKey) private var anisetteModeRawValue = EiliAnisetteMode.remote.rawValue
-    @State private var showingServerSync = false
     @State private var isCopiedServer = false
     @State private var isFetchingServer = false
     @State private var serverHeaders: [String: String] = [:]
@@ -138,53 +137,15 @@ struct AnisetteClientConfigurationView: View {
             }
 
             if isRemoteMode {
+                // NOTE: SideStore's original page is a ScrollView where a
+                // DisclosureGroup is stable; this page is a SwiftUI Form, and
+                // on iOS 15 a DisclosureGroup inside a Form loses its expanded
+                // state whenever the form re-renders (e.g. when the fetch
+                // finishes and the message section appears), which made the
+                // sync panel collapse right after tapping Fetch. The sync
+                // content is therefore shown directly expanded instead.
                 Section("REMOTE SERVER SYNC") {
-                    DisclosureGroup(isExpanded: $showingServerSync) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text("Server: \(activeServerHost)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Button {
-                                    UIPasteboard.general.string = serverHeadersJSON
-                                    withAnimation { isCopiedServer = true }
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                        withAnimation { isCopiedServer = false }
-                                    }
-                                } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: isCopiedServer ? "checkmark" : "doc.on.doc")
-                                        Text(isCopiedServer ? "Copied" : "Copy")
-                                    }
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundColor(isCopiedServer ? .green : .accentColor)
-                                }
-                                .buttonStyle(.borderless)
-                            }
-
-                            ScrollView(.horizontal, showsIndicators: true) {
-                                Text(serverHeadersJSON)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .padding(10)
-                            }
-
-                            Button {
-                                saveAsOverrides()
-                            } label: {
-                                HStack {
-                                    Spacer()
-                                    Label("Save as Overrides", systemImage: "square.and.arrow.down.on.square")
-                                        .font(.system(size: 15, weight: .bold))
-                                    Spacer()
-                                }
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(serverHeadersJSON == "{}" || serverHeadersJSON.isEmpty || !isLoaded || isBusy)
-                            .accessibilityIdentifier("client-config-remote-sync-save")
-                        }
-                        .padding(.top, 8)
-                    } label: {
+                    VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             Label("Remote Server Sync", systemImage: "network")
                             Spacer()
@@ -202,7 +163,50 @@ struct AnisetteClientConfigurationView: View {
                             .disabled(isFetchingServer || isBusy)
                             .accessibilityIdentifier("client-config-remote-sync-fetch")
                         }
+
+                        HStack {
+                            Text("Server: \(activeServerHost)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button {
+                                UIPasteboard.general.string = serverHeadersJSON
+                                withAnimation { isCopiedServer = true }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                    withAnimation { isCopiedServer = false }
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: isCopiedServer ? "checkmark" : "doc.on.doc")
+                                    Text(isCopiedServer ? "Copied" : "Copy")
+                                }
+                                .font(.footnote.weight(.semibold))
+                                .foregroundColor(isCopiedServer ? .green : .accentColor)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+
+                        ScrollView(.horizontal, showsIndicators: true) {
+                            Text(serverHeadersJSON)
+                                .font(.system(size: 11, design: .monospaced))
+                                .padding(10)
+                        }
+
+                        Button {
+                            saveAsOverrides()
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Label("Save as Overrides", systemImage: "square.and.arrow.down.on.square")
+                                    .font(.system(size: 15, weight: .bold))
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(serverHeadersJSON == "{}" || serverHeadersJSON.isEmpty || !isLoaded || isBusy)
+                        .accessibilityIdentifier("client-config-remote-sync-save")
                     }
+                    .padding(.top, 8)
                     .accessibilityIdentifier("client-config-remote-sync")
                 }
             }
@@ -327,7 +331,6 @@ struct AnisetteClientConfigurationView: View {
                    let text = String(data: encoded, encoding: .utf8) {
                     UserDefaults.standard.set(text, forKey: Self.serverHeadersDefaultsKey)
                 }
-                withAnimation { showingServerSync = true }
                 showSuccess("已從伺服器抓取設定（\(baseURL.host ?? "")）。")
             } catch {
                 showError("抓取失敗：\(error.localizedDescription)")
