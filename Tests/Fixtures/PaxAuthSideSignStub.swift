@@ -2,7 +2,13 @@ import Foundation
 
 public struct AnisetteData: Sendable, Equatable {
     public var machineID: String
-    public init(machineID: String = "test-machine") { self.machineID = machineID }
+    public var oneTimePassword: String
+    public var routingInfo: String
+    public init(machineID: String = "test-machine", oneTimePassword: String = "test-otp", routingInfo: String = "17106176") {
+        self.machineID = machineID
+        self.oneTimePassword = oneTimePassword
+        self.routingInfo = routingInfo
+    }
 }
 public struct TrustedPhoneNumber: Sendable { public init() {} }
 public enum TwoFactorDeliveryMode: Sendable { case sms, voice, trustedDevice }
