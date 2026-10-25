@@ -428,13 +428,20 @@ struct MyAppsView: View {
             }
             .task {
                 // App 啟動時檢查是否需要自動刷新
+                // 延後 2 秒：先讓第一個畫面出來再跑，避免冷啟動那幾秒主執行緒太忙、畫面卡住甚至黑屏。
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled else { return }
                 await manager.checkAndAutoRefresh()
             }
             .onChange(of: scenePhase) { phase in
                 // 回到前景時比照啟動重跑一次檢查與同步，免得資料停在舊狀態、要重開 App 才更新。
+                // 同樣延後 2 秒，先讓畫面穩下來再跑。
                 guard phase == .active else { return }
-                manager.refreshAppIDsRemaining()
-                Task { await manager.checkAndAutoRefresh() }
+                Task {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    manager.refreshAppIDsRemaining()
+                    await manager.checkAndAutoRefresh()
+                }
             }
             .overlay(alignment: .bottom) {
                 if showRefreshToast {
