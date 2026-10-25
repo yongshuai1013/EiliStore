@@ -138,6 +138,18 @@ enum KeychainHelper {
         check(beforeInvalidCalls == afterInvalidCalls, "invalid config triggered remote traffic")
         print("PASS: remote client overrides, provider headers, reset/defaults and generated identity isolation")
 
+        // A stored blob minted by another server is rejected with -45061:
+        // the service must drop it and retry once with no blob (fresh
+        // provisioning), then persist the newly minted blob.
+        await manager.reset()
+        await manager.setResponseForTests(data: nil, blob: responseBlob)
+        await manager.setFailoverErrorOnceForTests(NotProvisionedError())
+        _ = try await svc.fetch(remoteIdentifier: id, remoteBlob: blob, servers: urls, mode: .remote)
+        let healCalls = await manager.calls
+        check(healCalls == 2, "not-provisioned blob did not trigger exactly one fresh retry")
+        check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == responseBlob, "healed remote blob save")
+        await manager.reset()
+
         await manager.reset()
         if !EiliAnisetteMode.localBuildAvailable {
             check(await svc.localLibraryStatus() == .engineUnavailable, "disabled engine status")

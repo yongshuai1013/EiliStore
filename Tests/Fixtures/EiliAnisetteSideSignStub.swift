@@ -18,6 +18,13 @@ public struct AnisetteData: Sendable, Equatable {
     }
 }
 
+/// Mirrors the real provider's surface for a -45061 rejection, whose
+/// payload the service matches on the error text.
+public struct NotProvisionedError: Error, CustomStringConvertible {
+    public init() {}
+    public var description: String { "badServerResponse(statusCode: -1, payload: \"not provisioned for this server (-45061); reprovision required\")" }
+}
+
 public actor AnisetteDataManager {
     public static let shared = AnisetteDataManager()
     public var calls = 0
@@ -37,8 +44,9 @@ public actor AnisetteDataManager {
     public var odaResponse: (AnisetteData, Data?)?
     public var odaError: Error?
     public var odaDelay: UInt64 = 0
+    public var failoverErrorOnce: Error?
     public init() {}
-    public func reset() { calls = 0; lastServers = []; lastIdentifier = nil; lastBlob = nil; lastHeaders = [:]; response = nil; delay = 0; active = 0; maxConcurrentForTests = 0; odaCalls = 0; lastMode = nil; lastODAIdentifier = nil; lastODABlob = nil; lastODAHeaders = [:]; odaResponse = nil; odaError = nil; odaDelay = 0 }
+    public func reset() { calls = 0; lastServers = []; lastIdentifier = nil; lastBlob = nil; lastHeaders = [:]; response = nil; delay = 0; active = 0; maxConcurrentForTests = 0; odaCalls = 0; lastMode = nil; lastODAIdentifier = nil; lastODABlob = nil; lastODAHeaders = [:]; odaResponse = nil; odaError = nil; odaDelay = 0; failoverErrorOnce = nil }
     public func setODAResponseForTests(data: AnisetteData?, blob: Data?) { if let data { odaResponse = (data, blob) } else { odaResponse = (AnisetteData(machineID: "m", oneTimePassword: "otp", localUserID: "lu", routingInfo: "r", deviceID: "dev", serialNumber: "s", clientInfo: "ci", userAgent: "ua", clientTime: "t", locale: "en", timeZone: "UTC"), blob) } }
     public func setODAErrorForTests(_ error: Error?) { odaError = error }
     public func setODADelayForTests(_ value: UInt64) { odaDelay = value }
@@ -56,6 +64,7 @@ public actor AnisetteDataManager {
     public func setResponseForTests(data: AnisetteData?, blob: Data?) { if let data { response = (data, blob) } else { response = (AnisetteData(machineID: "m", oneTimePassword: "otp", localUserID: "lu", routingInfo: "r", deviceID: "dev", serialNumber: "s", clientInfo: "ci", userAgent: "ua", clientTime: "t", locale: "en", timeZone: "UTC"), blob) } }
     public func fetchAnisetteDataWithFailover(servers: [URL], identifier: UUID, existingAdiBlob: Data?, headers: AnisetteRequestHeaders? = nil, onSuccess: (@Sendable (URL) -> Void)? = nil) async throws -> (AnisetteData, Data?) {
         calls += 1; active += 1; maxConcurrentForTests = max(maxConcurrentForTests, active); lastServers = servers; lastIdentifier = identifier; lastBlob = existingAdiBlob
+        if let failoverErrorOnce { self.failoverErrorOnce = nil; throw failoverErrorOnce }
         if let first = servers.first { onSuccess?(first) }
         lastHeaders = headers?.rawHeaders ?? [:]
         defer { active -= 1 }
@@ -63,4 +72,8 @@ public actor AnisetteDataManager {
         if let response { return response }
         return (AnisetteData(machineID: "m", oneTimePassword: "otp", localUserID: "lu", routingInfo: "r", deviceID: "dev", serialNumber: "s", clientInfo: "ci", userAgent: "ua", clientTime: "t", locale: "en", timeZone: "UTC"), nil)
     }
+}
+
+extension AnisetteDataManager {
+    public func setFailoverErrorOnceForTests(_ error: Error?) { failoverErrorOnce = error }
 }

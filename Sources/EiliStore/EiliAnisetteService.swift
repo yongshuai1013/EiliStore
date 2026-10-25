@@ -165,10 +165,30 @@ actor EiliAnisetteService {
             EiliLoginDiagnostics.record(.remoteRequestStarted, for: diagnosticAttempt)
             lastRemoteResponderURL = nil
             let responderBox = RemoteResponderBox()
-            let (data, blob) = try await SideSign.AnisetteDataManager.shared.fetchAnisetteDataWithFailover(
-                servers: urls, identifier: remoteIdentifier, existingAdiBlob: remoteBlob,
-                headers: .init(rawHeaders: configuration.requestHeaderOverrides),
-                onSuccess: { responderBox.url = $0 })
+            let requestHeaders = SideSign.AnisetteRequestHeaders(rawHeaders: configuration.requestHeaderOverrides)
+            func attempt(_ blob: Data?) async throws -> (SideSign.AnisetteData, Data?) {
+                try await SideSign.AnisetteDataManager.shared.fetchAnisetteDataWithFailover(
+                    servers: urls, identifier: remoteIdentifier, existingAdiBlob: blob,
+                    headers: requestHeaders,
+                    onSuccess: { responderBox.url = $0 })
+            }
+            let data: SideSign.AnisetteData
+            let blob: Data?
+            do {
+                (data, blob) = try await attempt(remoteBlob)
+            } catch {
+                // The stored blob is shared across servers, but a blob is
+                // provisioned per (server, identifier): after a server
+                // switch it belongs to the previous server and this one
+                // rejects it with -45061 ("not provisioned for this
+                // server"). Drop the poisoned blob and retry once with
+                // none, which runs the provisioning flow and mints a
+                // blob bound to this server.
+                guard let stale = remoteBlob, !stale.isEmpty, Self.isNotProvisioned(error) else { throw error }
+                KeychainHelper.delete(forKey: "paxstore.anisette.adiblob")
+                responderBox.url = nil
+                (data, blob) = try await attempt(nil)
+            }
             lastRemoteResponderURL = responderBox.url
             EiliLoginDiagnostics.record(.remoteRequestReturned, for: diagnosticAttempt)
             try Task.checkCancellation()
@@ -179,6 +199,14 @@ actor EiliAnisetteService {
         case .onDevice:
             return try await fetchLocal(configuration: configuration, diagnosticAttempt: diagnosticAttempt)
         }
+    }
+
+    /// Whether an anisette failure is the server rejecting our stored ADI
+    /// blob as provisioned elsewhere (-45061). The provider surfaces the
+    /// server's message as an opaque payload, so match on the error text.
+    private static func isNotProvisioned(_ error: Error) -> Bool {
+        let text = String(describing: error)
+        return text.contains("-45061") || text.contains("not provisioned for this server")
     }
 
     /// On-device path: SideSign's AnisetteDataManager in remoteODA mode — the
