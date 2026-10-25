@@ -142,29 +142,19 @@ struct AnisetteClientConfigurationView: View {
             }
 
             if EiliAnisetteMode.selected == .remote {
-                Section {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "network")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundColor(.purple)
-                                .frame(width: 40, height: 40)
-                                .background(Color.purple.opacity(0.12))
-                                .clipShape(Circle())
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Remote Server Sync")
-                                    .font(.headline)
-                                Text("同步所選伺服器的 Client Info")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
+                Section("REMOTE SERVER SYNC") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Button {
+                                withAnimation { isRemoteSyncExpanded.toggle() }
+                            } label: {
+                                Label("Remote Server Sync", systemImage: "network")
+                                    .foregroundColor(.primary)
                             }
-
-                            Spacer(minLength: 4)
-
-                            // SideStore's Fetch is a capsule pill; here it uses
-                            // EiliStore's own accent theme instead of purple.
+                            .buttonStyle(.plain)
+                            Spacer()
+                            // SideStore's original layout: a small capsule Fetch
+                            // pill in the title row, in EiliStore's accent theme.
                             Button(action: fetchRemoteServerConfiguration) {
                                 if isFetchingRemote {
                                     ProgressView()
@@ -184,95 +174,75 @@ struct AnisetteClientConfigurationView: View {
                             .background(Capsule().fill(Color.accentColor.opacity(0.12)))
                             .disabled(!isLoaded || isBusy)
                             .accessibilityIdentifier("anisette-remote-sync-fetch")
-
                             Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    isRemoteSyncExpanded.toggle()
-                                }
+                                withAnimation { isRemoteSyncExpanded.toggle() }
                             } label: {
-                                Image(systemName: isRemoteSyncExpanded ? "chevron.up" : "chevron.down")
+                                Image(systemName: "chevron.right")
                                     .font(.caption.weight(.semibold))
                                     .foregroundColor(.secondary)
-                                    .frame(width: 28, height: 36)
+                                    .rotationEffect(.degrees(isRemoteSyncExpanded ? 90 : 0))
+                                    .frame(width: 28, height: 30)
                                     .contentShape(Rectangle())
                             }
-                            .buttonStyle(PlainButtonStyle())
-                            .accessibilityLabel(isRemoteSyncExpanded ? "收合遠端同步" : "展開遠端同步")
+                            .buttonStyle(.plain)
                             .accessibilityIdentifier("anisette-remote-sync-toggle")
                         }
 
                         if isRemoteSyncExpanded {
-                            Divider()
-
-                            HStack(spacing: 8) {
+                            HStack {
                                 Text(remoteServerDescription)
-                                    .font(.subheadline.weight(.medium))
+                                    .font(.caption)
                                     .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.8)
-                                Spacer(minLength: 4)
+                                Spacer()
                                 Button {
                                     UIPasteboard.general.string = remoteServerHeadersJSON
-                                    withAnimation(.easeInOut(duration: 0.2)) { isCopiedRemoteHeaders = true }
+                                    withAnimation { isCopiedRemoteHeaders = true }
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                        withAnimation(.easeInOut(duration: 0.2)) { isCopiedRemoteHeaders = false }
+                                        withAnimation { isCopiedRemoteHeaders = false }
                                     }
                                 } label: {
-                                    Label(isCopiedRemoteHeaders ? "已複製" : "複製", systemImage: isCopiedRemoteHeaders ? "checkmark" : "doc.on.doc")
-                                        .font(.footnote.weight(.semibold))
+                                    HStack(spacing: 4) {
+                                        Image(systemName: isCopiedRemoteHeaders ? "checkmark" : "doc.on.doc")
+                                        Text(isCopiedRemoteHeaders ? "已複製" : "複製")
+                                    }
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundColor(isCopiedRemoteHeaders ? .green : .accentColor)
                                 }
-                                .buttonStyle(PlainButtonStyle())
-                                .foregroundColor(.purple)
+                                .buttonStyle(.borderless)
                                 .accessibilityIdentifier("anisette-remote-sync-copy")
                             }
 
                             ScrollView(.horizontal, showsIndicators: true) {
                                 Text(remoteServerHeadersJSON)
-                                    .font(.system(.footnote, design: .monospaced))
-                                    .fixedSize(horizontal: true, vertical: true)
-                                    .frame(maxHeight: .infinity, alignment: .leading)
-                                    .padding(12)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .padding(10)
                             }
-                            .frame(maxWidth: .infinity, minHeight: 76, maxHeight: 144, alignment: .leading)
-                            .background(Color.primary.opacity(0.06))
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.purple.opacity(0.12), lineWidth: 1))
                             .accessibilityIdentifier("anisette-remote-sync-headers")
 
                             if let remoteSyncNotice {
                                 Label(remoteSyncNotice, systemImage: remoteSyncNoticeIsError ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                                    .font(.footnote.weight(.medium))
+                                    .font(.footnote)
                                     .foregroundColor(remoteSyncNoticeIsError ? .red : .green)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(10)
-                                    .background((remoteSyncNoticeIsError ? Color.red : Color.green).opacity(0.1))
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                     .accessibilityIdentifier("anisette-remote-sync-notice")
                             }
 
                             Button(action: saveFetchedServerHeadersAsOverrides) {
-                                Label("儲存為覆寫", systemImage: "square.and.arrow.down.on.square")
-                                    .font(.body.weight(.semibold))
-                                    .frame(maxWidth: .infinity, minHeight: 48)
+                                HStack {
+                                    Spacer()
+                                    Label("儲存為覆寫", systemImage: "square.and.arrow.down.on.square")
+                                        .font(.system(size: 15, weight: .bold))
+                                    Spacer()
+                                }
                             }
-                            .buttonStyle(BorderedProminentButtonStyle())
-                            .tint(.purple)
+                            .buttonStyle(.borderless)
                             .disabled(!isLoaded || isBusy || remoteServerHeaders.isEmpty)
                             .accessibilityIdentifier("anisette-remote-sync-save-overrides")
                         }
                     }
-                    .padding(16)
-                    .background(Color(UIColor.secondarySystemGroupedBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.purple.opacity(0.14), lineWidth: 1))
-                    .accessibilityIdentifier("anisette-remote-server-sync-card")
+                    .padding(.top, 8)
                     .animation(.easeInOut(duration: 0.2), value: isFetchingRemote)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                } header: {
-                    Text("REMOTE SERVER SYNC")
+                    .accessibilityIdentifier("anisette-remote-server-sync")
                 }
-                .textCase(nil)
             }
 
             Section("注意事項") {

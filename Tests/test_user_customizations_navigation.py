@@ -196,17 +196,19 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         self.assertIn("timeoutInterval: 10", sync)
         self.assertIn("data.count <= 65_536", sync)
 
-    def test_remote_sync_uses_sidestore_style_card_and_separate_controls(self):
+    def test_remote_sync_uses_original_layout_and_separate_controls(self):
         view = (SOURCES / "AnisetteClientConfigurationView.swift").read_text()
         remote = view.split("if EiliAnisetteMode.selected == .remote {", 1)[1].split('Section("注意事項")', 1)[0]
-        self.assertIn('accessibilityIdentifier("anisette-remote-server-sync-card")', remote)
+        self.assertIn('Section("REMOTE SERVER SYNC")', remote)
         self.assertIn('Button(action: fetchRemoteServerConfiguration)', remote)
         self.assertIn('accessibilityIdentifier("anisette-remote-sync-fetch")', remote)
         self.assertIn('accessibilityIdentifier("anisette-remote-sync-toggle")', remote)
         self.assertIn("isRemoteSyncExpanded.toggle()", remote)
-        self.assertIn("RoundedRectangle(cornerRadius: 22", remote)
+        self.assertIn("Capsule()", remote)
         self.assertIn('accessibilityIdentifier("anisette-remote-sync-save-overrides")', remote)
         self.assertNotIn("DisclosureGroup", remote)
+        self.assertNotIn("anisette-remote-server-sync-card", remote)
+        self.assertNotIn(".tint(.purple)", remote)
 
     def test_login_server_catalog_refresh_does_not_reset_navigation_or_selection(self):
         server = (SOURCES / "AnisetteServerView.swift").read_text()
