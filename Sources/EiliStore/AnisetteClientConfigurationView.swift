@@ -156,25 +156,23 @@ struct AnisetteClientConfigurationView: View {
                             }
                             .buttonStyle(.plain)
                             Spacer()
-                            // SideStore's original layout: a small capsule Fetch
-                            // pill in the title row, in EiliStore's accent theme.
+                            // The first design's compact borderless refresh
+                            // button (icon + text, accent color); the capsule
+                            // pill took too much room in the title row.
                             Button(action: fetchRemoteServerConfiguration) {
-                                if isFetchingRemote {
-                                    ProgressView()
-                                        .scaleEffect(0.85)
-                                        .frame(minWidth: 44, minHeight: 30)
-                                } else {
-                                    Label("刷新", systemImage: "arrow.clockwise")
-                                        .font(.footnote.weight(.semibold))
-                                        .frame(minHeight: 30)
+                                HStack(spacing: 4) {
+                                    if isFetchingRemote {
+                                        ProgressView()
+                                            .scaleEffect(0.8)
+                                    } else {
+                                        Image(systemName: "arrow.clockwise")
+                                    }
+                                    Text(isFetchingRemote ? "刷新中" : "刷新")
                                 }
+                                .font(.footnote.weight(.semibold))
+                                .foregroundColor(.accentColor)
                             }
                             .buttonStyle(.borderless)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 2)
-                            .foregroundColor(.accentColor)
-                            .tint(.accentColor)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.12)))
                             .disabled(!isLoaded || isBusy)
                             .accessibilityIdentifier("anisette-remote-sync-fetch")
                             Button {
