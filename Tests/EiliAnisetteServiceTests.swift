@@ -396,7 +396,7 @@ enum KeychainHelper {
         check(KeychainHelper.load(forKey: "paxstore.anisette.adiblob") == remoteBlobBeforeLocal, "remote switch unexpectedly replaced response blob")
         UserDefaults.standard.set("onDevice", forKey: EiliAnisetteMode.preferenceKey)
         await manager.reset()
-        await manager.setODADelayForTests(100_000_000)
+        await manager.setODADelayForTests(2_000_000_000)
         await manager.setODAResponseForTests(data: nil, blob: Data([0x44]))
         let cancelledLocal = Task { try await svc.fetch(remoteIdentifier: id, remoteBlob: nil, servers: urls, mode: .onDevice) }
         try await Task.sleep(nanoseconds: 20_000_000); cancelledLocal.cancel()
