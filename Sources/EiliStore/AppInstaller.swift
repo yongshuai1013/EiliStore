@@ -33,15 +33,23 @@ public class AppInstaller {
         RustFFILock.shared.isTransferActive = true
         defer { RustFFILock.shared.isTransferActive = false }
 
+        // 進度節流：上傳回調以 64KB／每文件為單位高頻觸發，每次都送主執行緒更新 UI 與寫日誌，
+        // 大包上傳時會把主執行緒塞滿（畫面卡頓，嚴重時被 watchdog 強殺）。只在百分比變化時才往外送。
+        let progressGate = ProgressGate()
+        let reportProgress: (String, Int) -> Void = { message, percent in
+            guard progressGate.shouldEmit(percent: percent) else { return }
+            progress(message, percent)
+        }
+
         let storedMode = UserDefaults.standard.string(forKey: Self.installationModeDefaultsKey)
         let selectedMode = mode ?? storedMode.flatMap { AppInstallationMode(rawValue: $0) } ?? .ipa
 
-        progress("檢查 VPN 連線...", 0)
+        reportProgress("檢查 VPN 連線...", 0)
         let vpnOK = await VPNConnectionChecker.shared.checkConnection()
         guard vpnOK else { throw InstallerError.vpnNotConnected }
         let host = VPNConnectionChecker.shared.effectiveGatewayHost
 
-        progress("讀取配對檔...", 5)
+        reportProgress("讀取配對檔...", 5)
         guard let pairingURL = findPairingFile() else { throw InstallerError.noPairingFile }
 
         var extractionDirectory: URL?
@@ -67,7 +75,7 @@ public class AppInstaller {
             packageType = .ipa
 
         case .appBundle:
-            progress("解壓 IPA...", 10)
+            reportProgress("解壓 IPA...", 10)
             let tempDir = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -111,16 +119,16 @@ public class AppInstaller {
                 if let remoteStagingDirectory {
                     try await afc.makeDirectory(remoteStagingDirectory)
                 }
-                progress("上傳整包 IPA...", 15)
+                reportProgress("上傳整包 IPA...", 15)
                 try await afc.uploadFile(localURL: localPackageURL, remotePath: remoteUploadPath) { sent, total in
                     let fraction = total > 0 ? Double(sent) / Double(total) : 1
                     let percent = min(75, 15 + Int(fraction * 60))
                     let sentMB = Double(sent) / 1_048_576
                     let totalMB = Double(total) / 1_048_576
-                    progress(String(format: "上傳 IPA：%.1f / %.1f MB", sentMB, totalMB), percent)
+                    reportProgress(String(format: "上傳 IPA：%.1f / %.1f MB", sentMB, totalMB), percent)
                 }
             case .appBundle:
-                try await uploadAppBundle(at: localPackageURL, remotePath: remoteUploadPath, using: afc, progress: progress)
+                try await uploadAppBundle(at: localPackageURL, remotePath: remoteUploadPath, using: afc, progress: reportProgress)
             }
             afc.disconnect()
         } catch {
@@ -128,12 +136,12 @@ public class AppInstaller {
             throw InstallerError.afcFailed("上傳失敗: \(error.localizedDescription)")
         }
 
-        progress("安裝...", 80)
+        reportProgress("安裝...", 80)
         let installer = RustInstallationProxy(host: host, pairingFileURL: pairingURL)
         do {
             try await installer.connect()
             try await installer.install(packagePath: remotePackagePath, packageType: packageType) { message, percent in
-                progress(message, percent)
+                reportProgress(message, percent)
             }
             installer.disconnect()
         } catch {
@@ -141,7 +149,7 @@ public class AppInstaller {
             throw InstallerError.afcFailed("安裝失敗: \(error.localizedDescription)")
         }
 
-        progress("安裝完成", 100)
+        reportProgress("安裝完成", 100)
     }
 
     private func uploadAppBundle(
@@ -206,6 +214,20 @@ public class AppInstaller {
 
     private func findPairingFile() -> URL? {
         PairingFileStore.shared.selectedPairingFileURL()
+    }
+}
+
+/// 執行緒安全的進度節流器：只放行百分比有變化的回報。
+private final class ProgressGate {
+    private let lock = NSLock()
+    private var lastPercent = -1
+
+    func shouldEmit(percent: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard percent != lastPercent else { return false }
+        lastPercent = percent
+        return true
     }
 }
 
