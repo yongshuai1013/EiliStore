@@ -81,6 +81,7 @@ struct MyAppsView: View {
     @State private var iconChangeTargetBundleId: String?
     @State private var showRefreshToast = false
     @State private var refreshToastGeneration = UUID()
+    @Environment(\.scenePhase) private var scenePhase
 
     private enum HomeSheet: String, Identifiable {
         case appIDSelection
@@ -428,6 +429,12 @@ struct MyAppsView: View {
             .task {
                 // App 啟動時檢查是否需要自動刷新
                 await manager.checkAndAutoRefresh()
+            }
+            .onChange(of: scenePhase) { phase in
+                // 回到前景時比照啟動重跑一次檢查與同步，免得資料停在舊狀態、要重開 App 才更新。
+                guard phase == .active else { return }
+                manager.refreshAppIDsRemaining()
+                Task { await manager.checkAndAutoRefresh() }
             }
             .overlay(alignment: .bottom) {
                 if showRefreshToast {
