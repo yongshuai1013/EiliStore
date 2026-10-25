@@ -49,6 +49,8 @@ struct AnisetteClientConfigurationView: View {
     @State private var remoteSyncNotice: String?
     @State private var remoteSyncNoticeIsError = false
     @State private var isCopiedRemoteHeaders = false
+    @State private var showSyncToast = false
+    @State private var syncToastGeneration = UUID()
 
     private var modeSelection: Binding<AnisetteConfigEditorMode> {
         Binding(get: { mode }, set: { changeMode(to: $0) })
@@ -150,6 +152,7 @@ struct AnisetteClientConfigurationView: View {
                             } label: {
                                 Label("Remote Server Sync", systemImage: "network")
                                     .foregroundColor(.primary)
+                                    .lineLimit(1)
                             }
                             .buttonStyle(.plain)
                             Spacer()
@@ -219,13 +222,6 @@ struct AnisetteClientConfigurationView: View {
                             }
                             .accessibilityIdentifier("anisette-remote-sync-headers")
 
-                            if let remoteSyncNotice {
-                                Label(remoteSyncNotice, systemImage: remoteSyncNoticeIsError ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                                    .font(.footnote)
-                                    .foregroundColor(remoteSyncNoticeIsError ? .red : .green)
-                                    .accessibilityIdentifier("anisette-remote-sync-notice")
-                            }
-
                             Button(action: saveFetchedServerHeadersAsOverrides) {
                                 HStack {
                                     Spacer()
@@ -258,6 +254,28 @@ struct AnisetteClientConfigurationView: View {
         .disabled(isBusy)
         .navigationTitle("Client Config")
         .onAppear { load() }
+        .overlay(alignment: .bottom) {
+            if showSyncToast, let remoteSyncNotice {
+                HStack(spacing: 10) {
+                    Image(systemName: remoteSyncNoticeIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    Text(remoteSyncNotice)
+                        .lineLimit(2)
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Capsule().fill(remoteSyncNoticeIsError ? Color.red : Color.teal))
+                .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 14)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("anisette-remote-sync-notice")
+            }
+        }
+        .onChange(of: remoteSyncNotice) { _ in showSyncToastIfNeeded() }
         .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json], allowsMultipleSelection: false, onCompletion: importResult)
         .fileExporter(isPresented: $isExporting, document: exportDocument, contentType: .json, defaultFilename: "anisette-client-config", onCompletion: exportResult)
         .confirmationDialog("重設用戶自定義？", isPresented: $showResetConfirmation, titleVisibility: .visible) {
@@ -320,6 +338,22 @@ struct AnisetteClientConfigurationView: View {
         }
     }
 
+    private func showSyncToastIfNeeded() {
+        guard remoteSyncNotice != nil else { return }
+        let generation = UUID()
+        syncToastGeneration = generation
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            showSyncToast = true
+        }
+        let duration: TimeInterval = remoteSyncNoticeIsError ? 8 : 4
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            guard self.syncToastGeneration == generation else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
+                self.showSyncToast = false
+            }
+        }
+    }
+
     private func fetchRemoteServerConfiguration() {
         guard isLoaded, !isBusy else { return }
         isBusy = true
@@ -337,7 +371,7 @@ struct AnisetteClientConfigurationView: View {
                     throw EiliAnisetteRemoteServerSync.SyncError.unsupportedServerURL
                 }
                 let headers = try await EiliAnisetteRemoteServerSync.fetchHeaders(from: serverURL)
-                let data = try JSONSerialization.data(withJSONObject: headers, options: [.prettyPrinted, .sortedKeys])
+                let data = try JSONSerialization.data(withJSONObject: headers, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
                 guard let text = String(data: data, encoding: .utf8) else {
                     throw EiliAnisetteRemoteServerSync.SyncError.invalidResponse
                 }

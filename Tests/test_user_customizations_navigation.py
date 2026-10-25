@@ -191,6 +191,8 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
                          "ProgressView()", "remoteSyncNotice", "remoteServerHeadersJSON",
                          "anisette-remote-sync-save-overrides", "mergingServerHeaders"]:
             self.assertIn(contract, view)
+        self.assertIn("Capsule().fill(remoteSyncNoticeIsError ? Color.red : Color.teal)", view)
+        self.assertIn("showSyncToastIfNeeded()", view)
         self.assertIn('appendingPathComponent("v3"', sync)
         self.assertIn('appendingPathComponent("client_info"', sync)
         self.assertIn("timeoutInterval: 10", sync)
