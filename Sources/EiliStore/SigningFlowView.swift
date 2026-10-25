@@ -226,7 +226,7 @@ struct SigningFlowView: View {
                 )
                 log("  App ID: \(appID.name)")
                 
-                let profile = try await signingService.provisioningProfile(for: appID, team: team)
+                let profile = try await signingService.signingProvisioningProfile(for: appID, team: team)
                 profiles.append(profile)
                 log("  Profile 已下載 (\(profile.data.count) bytes)")
             }

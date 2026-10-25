@@ -163,6 +163,12 @@ extension PaxSigningService {
             session: session
         )
     }
+
+    /// 簽名流程使用（SideStore 方法）：與刷新相同，直接下載 Apple 的 team profile。
+    /// 不建立手動命名的 profile，因此不會撞 duplicate(35)，也不受手動 profile 清單盲區影響。
+    public func signingProvisioningProfile(for appID: SideSign.AppID, team: SideSign.Team) async throws -> SideSign.ProvisioningProfile {
+        try await refreshProvisioningProfile(for: appID, team: team)
+    }
     
     /// 註冊設備
     public func registerDevice(udid: String, name: String, for team: SideSign.Team) async throws -> SideSign.Device {
