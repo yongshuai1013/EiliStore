@@ -163,19 +163,25 @@ struct AnisetteClientConfigurationView: View {
 
                             Spacer(minLength: 4)
 
+                            // SideStore's Fetch is a capsule pill; here it uses
+                            // EiliStore's own accent theme instead of purple.
                             Button(action: fetchRemoteServerConfiguration) {
                                 if isFetchingRemote {
                                     ProgressView()
                                         .scaleEffect(0.85)
-                                        .frame(minWidth: 44, minHeight: 36)
+                                        .frame(minWidth: 44, minHeight: 30)
                                 } else {
                                     Label("刷新", systemImage: "arrow.clockwise")
                                         .font(.footnote.weight(.semibold))
-                                        .frame(minHeight: 36)
+                                        .frame(minHeight: 30)
                                 }
                             }
-                            .buttonStyle(BorderedButtonStyle())
-                            .tint(.purple)
+                            .buttonStyle(.borderless)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 2)
+                            .foregroundColor(.accentColor)
+                            .tint(.accentColor)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.12)))
                             .disabled(!isLoaded || isBusy)
                             .accessibilityIdentifier("anisette-remote-sync-fetch")
 
