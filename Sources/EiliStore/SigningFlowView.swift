@@ -214,17 +214,36 @@ struct SigningFlowView: View {
                 registeredIdentifiers: registeredAppIDs.map(\.bundleIdentifier)
             )
             log("Bundle IDs: \(bundleIDs.joined(separator: ", "))")
+
+            // 讀各目標（主 App 與副程式）宣告的 App Groups，下載 profile 前先同步到 App ID，
+            // 否則 profile 缺 application-groups，簽出的 App 進不了共享容器（比照 SideStore）。
+            var declaredGroupsByBundleID: [String: [String]] = [:]
+            if let appBundle = SideSign.AppBundle(fileURL: appURL) {
+                for target in [appBundle] + Array(appBundle.appExtensions) {
+                    let fromEntitlements = target.entitlements["com.apple.security.application-groups"] as? [String]
+                    let fromProfile = target.profileEntitlements?["com.apple.security.application-groups"] as? [String]
+                    let groups = fromEntitlements ?? fromProfile ?? []
+                    if !groups.isEmpty {
+                        declaredGroupsByBundleID[target.bundleIdentifier] = groups
+                    }
+                }
+            }
             
             // 為每個 Bundle ID 找／建 App ID，下載 profile
             var profiles: [SideSign.ProvisioningProfile] = []
             for bundleID in bundleIDs {
                 log("處理 \(bundleID)...")
-                let appID = try await signingService.findOrCreateAppID(
+                var appID = try await signingService.findOrCreateAppID(
                     bundleIdentifier: bundleID,
                     name: bundleID,
                     for: team
                 )
                 log("  App ID: \(appID.name)")
+                
+                if let declaredGroups = declaredGroupsByBundleID[bundleID], !declaredGroups.isEmpty {
+                    appID = try await signingService.syncAppGroups(for: appID, declaredGroups: declaredGroups, team: team)
+                    log("  App Groups 已同步: \(declaredGroups.joined(separator: ", "))")
+                }
                 
                 let profile = try await signingService.signingProvisioningProfile(for: appID, team: team)
                 profiles.append(profile)

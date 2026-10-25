@@ -51,6 +51,48 @@ extension PaxSigningService {
         return try await portal.assignAppGroups(groups, to: appID, team: team, session: session)
     }
     
+    /// 比照 SideStore 的 updateAppGroups：下載 profile 前，先把目標宣告的 App Groups
+    /// 對齊到 App ID（調整 ID、啟用功能、建立並指派群組），否則下載回來的 profile
+    /// 缺 application-groups，簽出的 App 進不了 App Group 共享容器
+    /// （例：LC+SS 合體版裡的 SideStore 會直接拒絕啟動）。
+    public func syncAppGroups(for appID: SideSign.AppID, declaredGroups: [String], team: SideSign.Team) async throws -> SideSign.AppID {
+        let valid = declaredGroups.filter { !$0.contains("$(") }
+        guard !valid.isEmpty else { return appID }
+        let (_, session) = try await sessionWithFreshAnisette()
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
+        
+        // SideStore 規則：群組 ID 補上 .<teamID> 後綴（已帶後綴的不重複加）
+        let adjusted = Array(Set(valid.map { group -> String in
+            group.hasSuffix("." + team.identifier) ? group : group + "." + team.identifier
+        })).sorted()
+        
+        // 啟用 App Groups 功能（與既有 features 合併，不覆蓋）
+        var updatedAppID = appID
+        if appID.features[SideSign.Feature.appGroups] != "true" {
+            var modified = appID.copy()
+            var features = modified.features
+            features[SideSign.Feature.appGroups] = "true"
+            modified.features = features
+            updatedAppID = try await portal.updateAppID(modified, team: team, session: session)
+        }
+        
+        // 找／建群組並指派
+        var groups: [SideSign.AppGroup] = []
+        let existing = try await portal.fetchAppGroups(for: team, session: session)
+        for groupIdentifier in adjusted {
+            if let found = existing.first(where: { $0.identifier == groupIdentifier }) {
+                groups.append(found)
+            } else {
+                let name = "EiliStore " + groupIdentifier.replacingOccurrences(of: ".", with: " ")
+                groups.append(try await portal.addAppGroup(name: name, groupIdentifier: groupIdentifier, team: team, session: session))
+            }
+        }
+        
+        let assigned = try await portal.assignAppGroups(groups, to: updatedAppID, team: team, session: session)
+        AppLogger.shared.log("App Groups 已同步 \(appID.bundleIdentifier): \(adjusted.joined(separator: ", "))")
+        return assigned
+    }
+    
     /// 獲取 provisioning profile（查找或創建，然後下載）
     public func provisioningProfile(for appID: SideSign.AppID, team: SideSign.Team) async throws -> SideSign.ProvisioningProfile {
         let (_, session) = try await sessionWithFreshAnisette()
