@@ -217,7 +217,8 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         server = (SOURCES / "AnisetteServerView.swift").read_text()
         login = (SOURCES / "LoginView.swift").read_text()
         refresh = server.split("private func refreshCatalog()", 1)[1].split("\n    }", 1)[0]
-        self.assertIn("NavigationLink(destination: AnisetteServerView(), isActive: $showingAnisetteServers)", login)
+        self.assertIn("NavigationLink(destination: AnisetteServerView())", login)
+        self.assertNotIn("isActive: $showingAnisetteServers", login)
         self.assertNotIn(".constant(refreshError != nil)", server)
         self.assertIn("get: { refreshError != nil }", server)
         self.assertIn("Task { @MainActor in", refresh)

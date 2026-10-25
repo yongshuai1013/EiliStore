@@ -120,7 +120,12 @@ public final class PaxAuthService {
         )
         
         EiliLoginDiagnostics.record(.anisetteReady, for: diagnosticAttempt)
-        codeProvider.log("anisette 就緒：MD=\(anisetteData.oneTimePassword.prefix(10))… MD-M=\(anisetteData.machineID.prefix(10))… RINFO=\(anisetteData.routingInfo)")
+        var readyLine = "anisette 就緒：MD=\(anisetteData.oneTimePassword.prefix(10))… MD-M=\(anisetteData.machineID.prefix(10))… RINFO=\(anisetteData.routingInfo)"
+        if anisetteMode != .onDevice, let responder = await EiliAnisetteService.shared.lastRemoteResponderURL {
+            let responderName = AnisetteServerManager.shared.serverName(for: responder) ?? responder.host ?? responder.absoluteString
+            readyLine += "（實際應答：\(responderName) · \(responder.host ?? responder.absoluteString)）"
+        }
+        codeProvider.log(readyLine)
         try Task.checkCancellation()
         guard !codeProvider.isCancelled else { throw CancellationError() }
 

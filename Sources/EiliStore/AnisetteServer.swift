@@ -162,6 +162,12 @@ public final class AnisetteServerManager {
         UserDefaults.standard.set(server.id, forKey: selectedKey)
     }
     
+    /// For the login log: display name for a server URL (nil when unknown,
+    /// callers fall back to the host).
+    public func serverName(for url: URL) -> String? {
+        allServers.first(where: { $0.nsURL == url })?.name
+    }
+    
     // MARK: - 自訂
     
     public func addCustom(name: String, url: String) {
@@ -207,7 +213,18 @@ public final class AnisetteServerManager {
     /// 登入時用的 server 列表（自動輪換開→按優先順序全部可見的；關→只用選中的）
     public func serversForLogin() -> [URL] {
         if autoRotationEnabled {
-            return visibleServers.compactMap { $0.nsURL }
+            // The user's selected server is always tried first; rotation
+            // only provides fallbacks after it. (Failover previously walked
+            // the catalog in list order, so the selection was ignored and
+            // an early-listed server answered instead.)
+            let visible = visibleServers
+            var ordered = visible
+            let selected = selectedServer
+            if let idx = visible.firstIndex(where: { $0.id == selected.id }) {
+                ordered.remove(at: idx)
+                ordered.insert(visible[idx], at: 0)
+            }
+            return ordered.compactMap { $0.nsURL }
         } else {
             guard let url = selectedServer.nsURL else { return [] }
             return [url]

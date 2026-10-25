@@ -54,8 +54,9 @@ public actor AnisetteDataManager {
     }
     public func setDelayForTests(_ value: UInt64) { delay = value }
     public func setResponseForTests(data: AnisetteData?, blob: Data?) { if let data { response = (data, blob) } else { response = (AnisetteData(machineID: "m", oneTimePassword: "otp", localUserID: "lu", routingInfo: "r", deviceID: "dev", serialNumber: "s", clientInfo: "ci", userAgent: "ua", clientTime: "t", locale: "en", timeZone: "UTC"), blob) } }
-    public func fetchAnisetteDataWithFailover(servers: [URL], identifier: UUID, existingAdiBlob: Data?, headers: AnisetteRequestHeaders? = nil) async throws -> (AnisetteData, Data?) {
+    public func fetchAnisetteDataWithFailover(servers: [URL], identifier: UUID, existingAdiBlob: Data?, headers: AnisetteRequestHeaders? = nil, onSuccess: (@Sendable (URL) -> Void)? = nil) async throws -> (AnisetteData, Data?) {
         calls += 1; active += 1; maxConcurrentForTests = max(maxConcurrentForTests, active); lastServers = servers; lastIdentifier = identifier; lastBlob = existingAdiBlob
+        if let first = servers.first { onSuccess?(first) }
         lastHeaders = headers?.rawHeaders ?? [:]
         defer { active -= 1 }
         if delay > 0 { try await Task.sleep(nanoseconds: delay) }

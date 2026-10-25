@@ -80,8 +80,16 @@ enum EiliAnisetteError: LocalizedError {
     }
 }
 
+/// The failover API reports the answering server through an @Sendable
+/// onSuccess closure; this box carries the URL back into the actor.
+private final class RemoteResponderBox: @unchecked Sendable { var url: URL? }
+
 actor EiliAnisetteService {
     static let shared = EiliAnisetteService()
+    
+    /// The server that actually answered the most recent remote fetch
+    /// (named in the login log, so nobody has to guess from fingerprints).
+    private(set) var lastRemoteResponderURL: URL?
     private static let localIdentifierKey = "eilistore.anisette.local.identifier"
     private static let localBlobKey = "eilistore.anisette.local.adiblob"
     private static let localRoutingInfoKey = "eilistore.anisette.local.routinginfo"
@@ -155,9 +163,13 @@ actor EiliAnisetteService {
         case .remote:
             let urls = servers.isEmpty ? [URL(string: "https://ani.sidestore.zip")!] : servers
             EiliLoginDiagnostics.record(.remoteRequestStarted, for: diagnosticAttempt)
+            lastRemoteResponderURL = nil
+            let responderBox = RemoteResponderBox()
             let (data, blob) = try await SideSign.AnisetteDataManager.shared.fetchAnisetteDataWithFailover(
                 servers: urls, identifier: remoteIdentifier, existingAdiBlob: remoteBlob,
-                headers: .init(rawHeaders: configuration.requestHeaderOverrides))
+                headers: .init(rawHeaders: configuration.requestHeaderOverrides),
+                onSuccess: { responderBox.url = $0 })
+            lastRemoteResponderURL = responderBox.url
             EiliLoginDiagnostics.record(.remoteRequestReturned, for: diagnosticAttempt)
             try Task.checkCancellation()
             if let blob { KeychainHelper.save(blob, forKey: "paxstore.anisette.adiblob") }

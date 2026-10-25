@@ -7,11 +7,12 @@ actor EiliAnisetteClientConfigurationStore { static let shared = EiliAnisetteCli
 actor EiliSideSignClientConfigurationStore { static let shared = EiliSideSignClientConfigurationStore(); func makePortal() async throws -> SideSign.DeveloperPortal { .init() } }
 enum EiliAnisetteError: Error { case unavailable }
 struct AnisetteServer { let name: String; let url: String; var nsURL: URL? { URL(string: url) } }
-final class AnisetteServerManager { static let shared = AnisetteServerManager(); var selectedServer: AnisetteServer { AnisetteServer(name: "Test Server", url: "https://example.com") }; var autoRotationEnabled: Bool { false }; func serversForLogin() -> [URL] { [] } }
+final class AnisetteServerManager { static let shared = AnisetteServerManager(); var selectedServer: AnisetteServer { AnisetteServer(name: "Test Server", url: "https://example.com") }; var autoRotationEnabled: Bool { false }; func serversForLogin() -> [URL] { [] }; func serverName(for url: URL) -> String? { nil } }
 final class EiliAnisetteService {
     static let shared = EiliAnisetteService()
     var calls = 0; var failure = false; var onFetch: (() -> Void)?
     var lastDiagnosticAttempt: UUID?
+    var lastRemoteResponderURL: URL?
     func fetch(remoteIdentifier: UUID, remoteBlob: Data?, servers: [URL], mode: EiliAnisetteMode, configuration: EiliAnisetteClientConfiguration, diagnosticAttempt: UUID? = nil) async throws -> SideSign.AnisetteData {
         lastDiagnosticAttempt = diagnosticAttempt
         calls += 1; onFetch?(); if failure { throw EiliAnisetteError.unavailable }; return .init(machineID: "anisette-snapshot")
