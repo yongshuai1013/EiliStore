@@ -41,19 +41,23 @@ struct AnisetteClientConfigurationView: View {
     @State private var isError = false
     @State private var isBusy = false
 
-    // Remote Server Sync (mirrors SideStore's AnisetteDataView): only shown
-    // in remote mode, i.e. when the On-Device Anisette switch is off.
-    @AppStorage(EiliAnisetteMode.preferenceKey) private var anisetteModeRawValue = EiliAnisetteMode.remote.rawValue
-    @State private var isCopiedServer = false
-    @State private var isFetchingServer = false
-    @State private var serverHeaders: [String: String] = [:]
-    @State private var serverHeadersJSON: String = "{}"
-    @State private var syncExpanded = false
-
-    private static let serverHeadersDefaultsKey = "eilistore.anisette.serverHeadersJSON"
+    @State private var isFetchingRemote = false
+    @State private var isRemoteSyncExpanded = false
+    @State private var remoteServerHeaders: [String: String] = [:]
+    @State private var remoteServerHeadersJSON = "{}"
+    @State private var remoteServerHost: String?
+    @State private var remoteSyncNotice: String?
+    @State private var remoteSyncNoticeIsError = false
+    @State private var isCopiedRemoteHeaders = false
 
     private var modeSelection: Binding<AnisetteConfigEditorMode> {
         Binding(get: { mode }, set: { changeMode(to: $0) })
+    }
+
+
+    private var remoteServerDescription: String {
+        let server = AnisetteServerManager.shared.selectedServer
+        return "Server: \(remoteServerHost ?? server.nsURL?.host ?? server.name)"
     }
 
     private var rawBinding: Binding<String> {
@@ -137,93 +141,132 @@ struct AnisetteClientConfigurationView: View {
                     .font(.caption).foregroundColor(.secondary)
             }
 
-            if isRemoteMode {
-                // NOTE: SideStore's original page is a ScrollView where a
-                // DisclosureGroup is stable; this page is a SwiftUI Form, and
-                // on iOS 15 a DisclosureGroup inside a Form loses its expanded
-                // state whenever the form re-renders, which made the whole
-                // page pop back after tapping Fetch. The disclosure below is
-                // therefore driven by explicit view state instead of a
-                // DisclosureGroup; a successful fetch expands it.
-                Section("REMOTE SERVER SYNC") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Button {
-                                withAnimation { syncExpanded.toggle() }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Label("Remote Server Sync", systemImage: "network")
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundColor(.secondary)
-                                        .rotationEffect(.degrees(syncExpanded ? 90 : 0))
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("client-config-remote-sync-toggle")
-                            Spacer()
-                            Button {
-                                fetchFreshFromServer()
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "arrow.clockwise")
-                                    Text("Fetch")
-                                }
-                                .font(.footnote.weight(.semibold))
-                                .foregroundColor(.accentColor)
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(isFetchingServer || isBusy)
-                            .accessibilityIdentifier("client-config-remote-sync-fetch")
-                        }
+            if EiliAnisetteMode.selected == .remote {
+                Section {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "network")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundColor(.purple)
+                                .frame(width: 40, height: 40)
+                                .background(Color.purple.opacity(0.12))
+                                .clipShape(Circle())
 
-                        if syncExpanded {
-                        HStack {
-                            Text("Server: \(activeServerHost)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Spacer()
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Remote Server Sync")
+                                    .font(.headline)
+                                Text("同步所選伺服器的 Client Info")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+
+                            Spacer(minLength: 4)
+
+                            Button(action: fetchRemoteServerConfiguration) {
+                                if isFetchingRemote {
+                                    ProgressView()
+                                        .scaleEffect(0.85)
+                                        .frame(minWidth: 44, minHeight: 36)
+                                } else {
+                                    Label("刷新", systemImage: "arrow.clockwise")
+                                        .font(.footnote.weight(.semibold))
+                                        .frame(minHeight: 36)
+                                }
+                            }
+                            .buttonStyle(BorderedButtonStyle())
+                            .tint(.purple)
+                            .disabled(!isLoaded || isBusy)
+                            .accessibilityIdentifier("anisette-remote-sync-fetch")
+
                             Button {
-                                UIPasteboard.general.string = serverHeadersJSON
-                                withAnimation { isCopiedServer = true }
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                    withAnimation { isCopiedServer = false }
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    isRemoteSyncExpanded.toggle()
                                 }
                             } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: isCopiedServer ? "checkmark" : "doc.on.doc")
-                                    Text(isCopiedServer ? "Copied" : "Copy")
+                                Image(systemName: isRemoteSyncExpanded ? "chevron.up" : "chevron.down")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 28, height: 36)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .accessibilityLabel(isRemoteSyncExpanded ? "收合遠端同步" : "展開遠端同步")
+                            .accessibilityIdentifier("anisette-remote-sync-toggle")
+                        }
+
+                        if isRemoteSyncExpanded {
+                            Divider()
+
+                            HStack(spacing: 8) {
+                                Text(remoteServerDescription)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                Spacer(minLength: 4)
+                                Button {
+                                    UIPasteboard.general.string = remoteServerHeadersJSON
+                                    withAnimation(.easeInOut(duration: 0.2)) { isCopiedRemoteHeaders = true }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                        withAnimation(.easeInOut(duration: 0.2)) { isCopiedRemoteHeaders = false }
+                                    }
+                                } label: {
+                                    Label(isCopiedRemoteHeaders ? "已複製" : "複製", systemImage: isCopiedRemoteHeaders ? "checkmark" : "doc.on.doc")
+                                        .font(.footnote.weight(.semibold))
                                 }
-                                .font(.footnote.weight(.semibold))
-                                .foregroundColor(isCopiedServer ? .green : .accentColor)
+                                .buttonStyle(PlainButtonStyle())
+                                .foregroundColor(.purple)
+                                .accessibilityIdentifier("anisette-remote-sync-copy")
                             }
-                            .buttonStyle(.borderless)
-                        }
 
-                        ScrollView(.horizontal, showsIndicators: true) {
-                            Text(serverHeadersJSON)
-                                .font(.system(size: 11, design: .monospaced))
-                                .padding(10)
-                        }
-
-                        Button {
-                            saveAsOverrides()
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Label("Save as Overrides", systemImage: "square.and.arrow.down.on.square")
-                                    .font(.system(size: 15, weight: .bold))
-                                Spacer()
+                            ScrollView(.horizontal, showsIndicators: true) {
+                                Text(remoteServerHeadersJSON)
+                                    .font(.system(.footnote, design: .monospaced))
+                                    .fixedSize(horizontal: true, vertical: true)
+                                    .frame(maxHeight: .infinity, alignment: .leading)
+                                    .padding(12)
                             }
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(serverHeadersJSON == "{}" || serverHeadersJSON.isEmpty || !isLoaded || isBusy)
-                        .accessibilityIdentifier("client-config-remote-sync-save")
+                            .frame(maxWidth: .infinity, minHeight: 76, maxHeight: 144, alignment: .leading)
+                            .background(Color.primary.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.purple.opacity(0.12), lineWidth: 1))
+                            .accessibilityIdentifier("anisette-remote-sync-headers")
+
+                            if let remoteSyncNotice {
+                                Label(remoteSyncNotice, systemImage: remoteSyncNoticeIsError ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundColor(remoteSyncNoticeIsError ? .red : .green)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(10)
+                                    .background((remoteSyncNoticeIsError ? Color.red : Color.green).opacity(0.1))
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .accessibilityIdentifier("anisette-remote-sync-notice")
+                            }
+
+                            Button(action: saveFetchedServerHeadersAsOverrides) {
+                                Label("儲存為覆寫", systemImage: "square.and.arrow.down.on.square")
+                                    .font(.body.weight(.semibold))
+                                    .frame(maxWidth: .infinity, minHeight: 48)
+                            }
+                            .buttonStyle(BorderedProminentButtonStyle())
+                            .tint(.purple)
+                            .disabled(!isLoaded || isBusy || remoteServerHeaders.isEmpty)
+                            .accessibilityIdentifier("anisette-remote-sync-save-overrides")
                         }
                     }
-                    .padding(.top, 8)
-                    .accessibilityIdentifier("client-config-remote-sync")
+                    .padding(16)
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.purple.opacity(0.14), lineWidth: 1))
+                    .accessibilityIdentifier("anisette-remote-server-sync-card")
+                    .animation(.easeInOut(duration: 0.2), value: isFetchingRemote)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                } header: {
+                    Text("REMOTE SERVER SYNC")
                 }
+                .textCase(nil)
             }
 
             Section("注意事項") {
@@ -284,7 +327,6 @@ struct AnisetteClientConfigurationView: View {
 
     private func load() {
         guard !isLoaded, !isBusy else { return }
-        restoreServerHeaders()
         isBusy = true
         Task {
             do {
@@ -302,100 +344,75 @@ struct AnisetteClientConfigurationView: View {
         }
     }
 
-    private var isRemoteMode: Bool {
-        EiliAnisetteMode(rawValue: anisetteModeRawValue) != .onDevice
-    }
-
-    private var activeServerHost: String {
-        URL(string: AnisetteServerManager.shared.selectedServer.url)?.host ?? "Active Server"
-    }
-
-    private func restoreServerHeaders() {
-        guard let text = UserDefaults.standard.string(forKey: Self.serverHeadersDefaultsKey),
-              let data = text.data(using: .utf8),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return }
-        serverHeaders = dict
-        serverHeadersJSON = Self.prettyJSON(dict)
-    }
-
-    /// Mirrors SideStore's fetchFreshFromServer(): GET <active server>/v3/client_info
-    /// and persist the returned headers for display. The timeout is 30s instead of
-    /// SideStore's 10s because the user's private server cold-starts on Render.
-    private func fetchFreshFromServer() {
-        guard !isFetchingServer else { return }
-        let base = AnisetteServerManager.shared.selectedServer.url
-        guard let baseURL = URL(string: base) else {
-            showError("目前的 Anisette 伺服器 URL 無效，無法抓取。")
-            return
-        }
-        let clientInfoURL = baseURL.appendingPathComponent("v3").appendingPathComponent("client_info")
-        isFetchingServer = true
+    private func fetchRemoteServerConfiguration() {
+        guard isLoaded, !isBusy else { return }
+        isBusy = true
+        isFetchingRemote = true
+        remoteSyncNotice = nil
+        message = nil
         Task {
-            defer { isFetchingServer = false }
+            defer {
+                isFetchingRemote = false
+                isBusy = false
+            }
             do {
-                var request = URLRequest(url: clientInfoURL)
-                request.timeoutInterval = 30
-                let (data, _) = try await URLSession.shared.data(for: request)
-                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: String] else {
-                    showError("伺服器回應不是有效的 JSON。")
-                    return
+                let server = AnisetteServerManager.shared.selectedServer
+                guard let serverURL = server.nsURL else {
+                    throw EiliAnisetteRemoteServerSync.SyncError.unsupportedServerURL
                 }
-                serverHeaders = json
-                serverHeadersJSON = Self.prettyJSON(json)
-                syncExpanded = true
-                if let encoded = try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]),
-                   let text = String(data: encoded, encoding: .utf8) {
-                    UserDefaults.standard.set(text, forKey: Self.serverHeadersDefaultsKey)
+                let headers = try await EiliAnisetteRemoteServerSync.fetchHeaders(from: serverURL)
+                let data = try JSONSerialization.data(withJSONObject: headers, options: [.prettyPrinted, .sortedKeys])
+                guard let text = String(data: data, encoding: .utf8) else {
+                    throw EiliAnisetteRemoteServerSync.SyncError.invalidResponse
                 }
-                showSuccess("已從伺服器抓取設定（\(baseURL.host ?? "")）。")
+                remoteServerHeaders = headers
+                remoteServerHeadersJSON = text
+                remoteServerHost = serverURL.host
+                remoteSyncNotice = "已成功取得伺服器設定。"
+                remoteSyncNoticeIsError = false
+                withAnimation(.easeInOut(duration: 0.2)) { isRemoteSyncExpanded = true }
             } catch {
-                showError("抓取失敗：\(error.localizedDescription)")
+                remoteSyncNotice = "刷新失敗：\(error.localizedDescription)"
+                remoteSyncNoticeIsError = true
             }
         }
     }
 
-    /// Mirrors SideStore's loadServerHeadersIntoOverrides(): map the fetched
-    /// headers onto the override fields (the configuration's alias-aware JSON
-    /// decoding resolves client_info/user_agent/etc.) and save immediately.
-    private func saveAsOverrides() {
-        guard isLoaded, !isBusy, !serverHeaders.isEmpty else { return }
+    private func saveFetchedServerHeadersAsOverrides() {
+        guard isLoaded, !isBusy, !remoteServerHeaders.isEmpty else { return }
         do {
-            let data = try JSONSerialization.data(withJSONObject: serverHeaders, options: [.sortedKeys])
-            let fetched = try EiliAnisetteClientConfiguration.decodeJSON(data)
-            var merged = draft
-            if !fetched.clientInfo.isEmpty { merged.clientInfo = fetched.clientInfo }
-            if !fetched.userAgent.isEmpty { merged.userAgent = fetched.userAgent }
-            if !fetched.customDeviceID.isEmpty { merged.customDeviceID = fetched.customDeviceID }
-            if !fetched.customLocalUserID.isEmpty { merged.customLocalUserID = fetched.customLocalUserID }
-            if !fetched.customSerialNumber.isEmpty { merged.customSerialNumber = fetched.customSerialNumber }
-            if !fetched.customRoutingInfo.isEmpty { merged.customRoutingInfo = fetched.customRoutingInfo }
-            if !fetched.customLocale.isEmpty { merged.customLocale = fetched.customLocale }
-            if !fetched.customTimeZone.isEmpty { merged.customTimeZone = fetched.customTimeZone }
-            if !fetched.customXcodeVersion.isEmpty { merged.customXcodeVersion = fetched.customXcodeVersion }
-            let value = try merged.validated()
+            let current: EiliAnisetteClientConfiguration
+            if mode == .rawJSON {
+                current = try EiliAnisetteClientConfiguration.decodeJSON(Data(rawJSON.utf8))
+            } else {
+                current = try draft.validated()
+            }
+            let updated = try current.mergingServerHeaders(remoteServerHeaders)
+            guard updated != current else {
+                remoteSyncNotice = "回應中沒有可套用的 Anisette 設定欄位。"
+                remoteSyncNoticeIsError = true
+                return
+            }
             isBusy = true
             Task {
                 do {
-                    try await EiliAnisetteClientConfigurationStore.shared.save(value)
-                    draft = value
-                    rawJSON = Self.jsonText(value) ?? rawJSON
+                    try await EiliAnisetteClientConfigurationStore.shared.save(updated)
+                    draft = updated
+                    rawJSON = Self.jsonText(updated) ?? rawJSON
                     isDirty = false
+                    remoteSyncNotice = "伺服器設定已儲存為覆寫。"
+                    remoteSyncNoticeIsError = false
                     isBusy = false
-                    showSuccess("已把伺服器資料存入覆寫設定；下次登入或 Anisette 請求生效。")
                 } catch {
                     isBusy = false
-                    showError("無法儲存設定。請稍後重試。")
+                    remoteSyncNotice = "無法儲存伺服器設定覆寫。請稍後重試。"
+                    remoteSyncNoticeIsError = true
                 }
             }
         } catch {
-            showError("伺服器資料無法轉成覆寫設定，請檢查內容後再試。")
+            remoteSyncNotice = "伺服器設定無法套用：\(error.localizedDescription)"
+            remoteSyncNoticeIsError = true
         }
-    }
-
-    private static func prettyJSON(_ dict: [String: String]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
-              let text = String(data: data, encoding: .utf8) else { return "{}" }
-        return text
     }
 
     private func changeMode(to newMode: AnisetteConfigEditorMode) {

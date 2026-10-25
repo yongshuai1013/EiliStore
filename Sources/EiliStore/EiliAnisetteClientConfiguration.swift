@@ -91,6 +91,18 @@ public struct EiliAnisetteClientConfiguration: Equatable, Sendable, Codable {
         return try Self(clientInfo: values[0], userAgent: values[1], customDeviceID: values[2], customLocalUserID: values[3], customSerialNumber: values[4], customRoutingInfo: values[5], customLocale: values[6], customTimeZone: values[7], customXcodeVersion: values[8]).validated()
     }
 
+    public func mergingServerHeaders(_ headers: [String: String]) throws -> Self {
+        var values = [clientInfo, userAgent, customDeviceID, customLocalUserID, customSerialNumber, customRoutingInfo, customLocale, customTimeZone, customXcodeVersion]
+        for index in Self.aliases.indices {
+            let matches = Self.aliases[index].compactMap { alias in
+                headers.first { $0.key.caseInsensitiveCompare(alias) == .orderedSame }?.value
+            }
+            guard Set(matches).count <= 1 else { throw ConfigError.conflictingAliases }
+            if let value = matches.first { values[index] = value }
+        }
+        return try Self(clientInfo: values[0], userAgent: values[1], customDeviceID: values[2], customLocalUserID: values[3], customSerialNumber: values[4], customRoutingInfo: values[5], customLocale: values[6], customTimeZone: values[7], customXcodeVersion: values[8]).validated()
+    }
+
     public func encodedJSON() throws -> Data {
         let valid = try validated()
         let object: [String: String] = ["clientInfo": valid.clientInfo, "userAgent": valid.userAgent, "customDeviceID": valid.customDeviceID, "customLocalUserID": valid.customLocalUserID, "customSerialNumber": valid.customSerialNumber, "customRoutingInfo": valid.customRoutingInfo, "customLocale": valid.customLocale, "customTimeZone": valid.customTimeZone, "customXcodeVersion": valid.customXcodeVersion]

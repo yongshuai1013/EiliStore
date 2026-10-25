@@ -180,8 +180,45 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
     def test_client_configuration_contract_suites_run_in_ci(self):
         workflow = (ROOT / ".github/workflows/build.yml").read_text()
         for script in ["run-anisette-client-config-tests.sh", "run-sidesign-client-config-tests.sh",
-                       "run-developer-portal-service-tests.sh"]:
+                       "run-developer-portal-service-tests.sh", "run-anisette-remote-sync-tests.sh"]:
             self.assertIn(f"bash Tests/{script}", workflow)
+
+    def test_anisette_remote_server_sync_is_remote_only_and_saves_explicitly(self):
+        view = (SOURCES / "AnisetteClientConfigurationView.swift").read_text()
+        sync = (SOURCES / "EiliAnisetteRemoteServerSync.swift").read_text()
+        self.assertIn("if EiliAnisetteMode.selected == .remote", view)
+        for contract in ["anisette-remote-sync-fetch", "isFetchingRemote",
+                         "ProgressView()", "remoteSyncNotice", "remoteServerHeadersJSON",
+                         "anisette-remote-sync-save-overrides", "mergingServerHeaders"]:
+            self.assertIn(contract, view)
+        self.assertIn('appendingPathComponent("v3"', sync)
+        self.assertIn('appendingPathComponent("client_info"', sync)
+        self.assertIn("timeoutInterval: 10", sync)
+        self.assertIn("data.count <= 65_536", sync)
+
+    def test_remote_sync_uses_sidestore_style_card_and_separate_controls(self):
+        view = (SOURCES / "AnisetteClientConfigurationView.swift").read_text()
+        remote = view.split("if EiliAnisetteMode.selected == .remote {", 1)[1].split('Section("注意事項")', 1)[0]
+        self.assertIn('accessibilityIdentifier("anisette-remote-server-sync-card")', remote)
+        self.assertIn('Button(action: fetchRemoteServerConfiguration)', remote)
+        self.assertIn('accessibilityIdentifier("anisette-remote-sync-fetch")', remote)
+        self.assertIn('accessibilityIdentifier("anisette-remote-sync-toggle")', remote)
+        self.assertIn("isRemoteSyncExpanded.toggle()", remote)
+        self.assertIn("RoundedRectangle(cornerRadius: 22", remote)
+        self.assertIn('accessibilityIdentifier("anisette-remote-sync-save-overrides")', remote)
+        self.assertNotIn("DisclosureGroup", remote)
+
+    def test_login_server_catalog_refresh_does_not_reset_navigation_or_selection(self):
+        server = (SOURCES / "AnisetteServerView.swift").read_text()
+        login = (SOURCES / "LoginView.swift").read_text()
+        refresh = server.split("private func refreshCatalog()", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("NavigationLink(destination: AnisetteServerView(), isActive: $showingAnisetteServers)", login)
+        self.assertNotIn(".constant(refreshError != nil)", server)
+        self.assertIn("get: { refreshError != nil }", server)
+        self.assertIn("Task { @MainActor in", refresh)
+        self.assertIn("servers = manager.allServers", refresh)
+        self.assertNotIn("selectedID =", refresh)
+        self.assertNotIn("refresh()", refresh)
 
 
 if __name__ == "__main__":

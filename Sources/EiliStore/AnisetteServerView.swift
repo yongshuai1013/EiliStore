@@ -80,6 +80,7 @@ struct AnisetteServerView: View {
                     }
                 }
                 .disabled(isRefreshing)
+                .accessibilityIdentifier("anisette-server-refresh")
                 Button(action: { showingAdd = true }) {
                     Image(systemName: "plus")
                 }
@@ -126,7 +127,10 @@ struct AnisetteServerView: View {
         } message: {
             Text("修改後點右上角刷新按鈕重新抓取")
         }
-        .alert("刷新失敗", isPresented: .constant(refreshError != nil)) {
+        .alert("刷新失敗", isPresented: Binding(
+            get: { refreshError != nil },
+            set: { if !$0 { refreshError = nil } }
+        )) {
             Button("好") { refreshError = nil }
         } message: {
             Text(refreshError ?? "")
@@ -213,20 +217,19 @@ struct AnisetteServerView: View {
     }
     
     private func refreshCatalog() {
+        guard !isRefreshing else { return }
         isRefreshing = true
         refreshError = nil
-        Task {
+        Task { @MainActor in
             do {
                 try await manager.refreshCatalog()
-                await MainActor.run {
-                    isRefreshing = false
-                    refresh()
-                }
+                // Catalog refresh changes the rows, not the selected server or
+                // the parent LoginView's navigation state.
+                servers = manager.allServers
+                isRefreshing = false
             } catch {
-                await MainActor.run {
-                    isRefreshing = false
-                    refreshError = error.localizedDescription
-                }
+                isRefreshing = false
+                refreshError = error.localizedDescription
             }
         }
     }
