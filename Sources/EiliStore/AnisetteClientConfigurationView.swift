@@ -48,6 +48,7 @@ struct AnisetteClientConfigurationView: View {
     @State private var isFetchingServer = false
     @State private var serverHeaders: [String: String] = [:]
     @State private var serverHeadersJSON: String = "{}"
+    @State private var syncExpanded = false
 
     private static let serverHeadersDefaultsKey = "eilistore.anisette.serverHeadersJSON"
 
@@ -140,14 +141,26 @@ struct AnisetteClientConfigurationView: View {
                 // NOTE: SideStore's original page is a ScrollView where a
                 // DisclosureGroup is stable; this page is a SwiftUI Form, and
                 // on iOS 15 a DisclosureGroup inside a Form loses its expanded
-                // state whenever the form re-renders (e.g. when the fetch
-                // finishes and the message section appears), which made the
-                // sync panel collapse right after tapping Fetch. The sync
-                // content is therefore shown directly expanded instead.
+                // state whenever the form re-renders, which made the whole
+                // page pop back after tapping Fetch. The disclosure below is
+                // therefore driven by explicit view state instead of a
+                // DisclosureGroup; a successful fetch expands it.
                 Section("REMOTE SERVER SYNC") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Label("Remote Server Sync", systemImage: "network")
+                            Button {
+                                withAnimation { syncExpanded.toggle() }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Label("Remote Server Sync", systemImage: "network")
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundColor(.secondary)
+                                        .rotationEffect(.degrees(syncExpanded ? 90 : 0))
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("client-config-remote-sync-toggle")
                             Spacer()
                             Button {
                                 fetchFreshFromServer()
@@ -164,6 +177,7 @@ struct AnisetteClientConfigurationView: View {
                             .accessibilityIdentifier("client-config-remote-sync-fetch")
                         }
 
+                        if syncExpanded {
                         HStack {
                             Text("Server: \(activeServerHost)")
                                 .font(.caption)
@@ -205,6 +219,7 @@ struct AnisetteClientConfigurationView: View {
                         .buttonStyle(.borderless)
                         .disabled(serverHeadersJSON == "{}" || serverHeadersJSON.isEmpty || !isLoaded || isBusy)
                         .accessibilityIdentifier("client-config-remote-sync-save")
+                        }
                     }
                     .padding(.top, 8)
                     .accessibilityIdentifier("client-config-remote-sync")
@@ -327,6 +342,7 @@ struct AnisetteClientConfigurationView: View {
                 }
                 serverHeaders = json
                 serverHeadersJSON = Self.prettyJSON(json)
+                syncExpanded = true
                 if let encoded = try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]),
                    let text = String(data: encoded, encoding: .utf8) {
                     UserDefaults.standard.set(text, forKey: Self.serverHeadersDefaultsKey)

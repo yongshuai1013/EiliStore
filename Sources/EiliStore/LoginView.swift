@@ -22,6 +22,7 @@ struct LoginView: View {
     @State private var preferredMethod: TwoFactorDeliveryMode = .sms
     @State private var debugLog = ""
     @AppStorage(EiliAnisetteMode.preferenceKey) private var anisetteModeRawValue = EiliAnisetteMode.remote.rawValue
+    @State private var showingAnisetteServers = false
 
     private var isOnDeviceMode: Bool {
         EiliAnisetteMode(rawValue: anisetteModeRawValue) == .onDevice
@@ -81,7 +82,7 @@ struct LoginView: View {
                 // Mirrors SideStore: in On-Device Anisette mode the remote
                 // server selection is not used, so the row is hidden.
                 if !isOnDeviceMode {
-                    NavigationLink(destination: AnisetteServerView()) {
+                    NavigationLink(destination: AnisetteServerView(), isActive: $showingAnisetteServers) {
                         HStack {
                             Text("Anisette 伺服器")
                             Spacer()
