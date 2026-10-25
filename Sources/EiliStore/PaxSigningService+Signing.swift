@@ -90,33 +90,63 @@ extension PaxSigningService {
                 AppLogger.shared.log("profile 無 ID，跳過: \(p.name ?? "")")
             }
         }
-        // 重新拉取列表確認清乾淨了
+        // 重新拉取列表確認（清不乾淨也不硬擋，交給下方 create 的 duplicate 恢復處理）
         let existing2 = try await portal.listProvisioningProfiles(for: team, session: session)
         let stillDup = existing2.filter { $0.name == profileName }
         if !stillDup.isEmpty {
-            throw SigningError.profileFailed("Apple 端仍有重複 profile '\(profileName)'，請到 developer.apple.com 手動刪除後重試")
+            AppLogger.shared.log("警告: 清理後仍有 \(stillDup.count) 份同名 profile，繼續嘗試創建（失敗會走 duplicate 恢復）")
         }
-        
+
         // 需要證書 ID 來創建 profile
         let certs = try await portal.fetchCertificates(for: team, session: session)
         guard let cert = certs.first, let certID = cert.identifier else {
             throw SigningError.certificateFailed("沒有可用證書")
         }
-        
+
         var deviceIDs = try await portal.fetchDevices(for: team, session: session).compactMap { $0.deviceID }
         if deviceIDs.isEmpty {
             // 沒有設備，拋出明確錯誤（需要用戶提供 UDID 註冊）
             throw SigningError.profileFailed("團隊沒有註冊的設備，請先在下方輸入設備 UDID 註冊")
         }
-        
-        let newProfile = try await portal.createProvisioningProfile(
-            name: "EiliStore \(appID.bundleIdentifier)",
-            appID: appID,
-            certificateIDs: [certID],
-            deviceIDs: deviceIDs,
-            team: team,
-            session: session
-        )
+
+        func isDuplicateError(_ error: Error) -> Bool {
+            let text = error.localizedDescription + " " + String(describing: error)
+            return text.contains("Multiple profiles") || text.contains("(35)") || text.localizedCaseInsensitiveContains("duplicate")
+        }
+        func createProfile(name: String) async throws -> SideSign.ProvisioningProfile {
+            try await portal.createProvisioningProfile(
+                name: name,
+                appID: appID,
+                certificateIDs: [certID],
+                deviceIDs: deviceIDs,
+                team: team,
+                session: session
+            )
+        }
+        let newProfile: SideSign.ProvisioningProfile
+        do {
+            newProfile = try await createProfile(name: profileName)
+        } catch {
+            guard isDuplicateError(error) else { throw error }
+            AppLogger.shared.log("創建撞 duplicate(35)，重新拉清單強力清理後重試: \(profileName)")
+            let latest = try await portal.listProvisioningProfiles(for: team, session: session)
+            for p in latest where p.name == profileName || (p.name?.hasPrefix(profileName) ?? false) || p.bundleIdentifier == appID.bundleIdentifier {
+                if let pid = p.identifier {
+                    try? await portal.deleteProvisioningProfile(profileID: pid, team: team, session: session)
+                }
+            }
+            do {
+                newProfile = try await createProfile(name: profileName)
+            } catch {
+                guard isDuplicateError(error) else { throw error }
+                // 清單看不到的殘留同名 profile：換上帶時間戳的唯一名，保證能建出來
+                let stamp = DateFormatter()
+                stamp.dateFormat = "MMddHHmmss"
+                let fallbackName = "\(profileName) \(stamp.string(from: Date()))"
+                AppLogger.shared.log("同名仍撞，改用唯一名稱創建: \(fallbackName)")
+                newProfile = try await createProfile(name: fallbackName)
+            }
+        }
         guard let newProfileID = newProfile.identifier else { throw SigningError.profileFailed("新 Profile 缺少 ID") }
         return try await portal.downloadProvisioningProfile(profileID: newProfileID, team: team, session: session)
     }
