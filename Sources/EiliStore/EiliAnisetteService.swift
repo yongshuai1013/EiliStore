@@ -165,11 +165,10 @@ actor EiliAnisetteService {
             EiliLoginDiagnostics.record(.remoteRequestStarted, for: diagnosticAttempt)
             lastRemoteResponderURL = nil
             let responderBox = RemoteResponderBox()
-            let requestHeaders = SideSign.AnisetteRequestHeaders(rawHeaders: configuration.requestHeaderOverrides)
             func attempt(_ blob: Data?) async throws -> (SideSign.AnisetteData, Data?) {
                 try await SideSign.AnisetteDataManager.shared.fetchAnisetteDataWithFailover(
                     servers: urls, identifier: remoteIdentifier, existingAdiBlob: blob,
-                    headers: requestHeaders,
+                    headers: .init(rawHeaders: configuration.requestHeaderOverrides),
                     onSuccess: { responderBox.url = $0 })
             }
             let data: SideSign.AnisetteData

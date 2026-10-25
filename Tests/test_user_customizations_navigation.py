@@ -151,7 +151,7 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         service = (SOURCES / "EiliAnisetteService.swift").read_text()
         # Local requests merge persisted routing info into a copy of the overrides;
         # only the remote provider still receives the original dictionary directly.
-        self.assertEqual(service.count("AnisetteRequestHeaders(rawHeaders: configuration.requestHeaderOverrides)"), 1)
+        self.assertEqual(service.count("headers: .init(rawHeaders: configuration.requestHeaderOverrides)"), 1)
         self.assertEqual(service.count("fetchAnisetteDataWithFailover("), 1)
         self.assertIn("existingAdiBlob: blob", service)
         self.assertIn("Self.isNotProvisioned(error)", service)
