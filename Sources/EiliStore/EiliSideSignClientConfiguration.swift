@@ -58,4 +58,10 @@ public actor EiliSideSignClientConfigurationStore {
     }
     public func reset() throws { do { if FileManager.default.fileExists(atPath:fileURL.path) { try FileManager.default.removeItem(at:fileURL) } } catch { throw EiliSideSignClientConfiguration.ConfigError.storageFailure } }
     public func makePortal() throws -> SideSign.DeveloperPortal { SideSign.DeveloperPortal(customHeaders:try load().resolvedHeaders()) }
+    /// Headers for a GSA login: identity fields the user has not
+    /// explicitly overridden follow the anisette identity that will
+    /// actually be presented, so the declared client matches the ADI
+    /// that minted the anisette data. The Xcode version follows the
+    /// value isideload's working login sends.
+    public func resolvedLoginHeaders(anisetteClientInfo: String, anisetteUserAgent: String) throws -> SideSignHeaders { let config = try load(); var headers = try config.resolvedHeaders(); if config.grandSlam.clientInfo.isEmpty, !anisetteClientInfo.isEmpty { headers.grandSlam.clientInfo = anisetteClientInfo }; if config.grandSlam.userAgent.isEmpty, !anisetteUserAgent.isEmpty { headers.grandSlam.userAgent = anisetteUserAgent }; if config.grandSlam.xcodeVersion.isEmpty { headers.grandSlam.xcodeVersion = "27.0 (27A5218g)" }; return headers }
 }

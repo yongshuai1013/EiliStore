@@ -170,14 +170,21 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         self.assertNotIn("resetLocalAnisetteEngine", service)
 
     def test_sidesign_headers_are_snapshotted_for_all_production_operations(self):
-        for name in ["PaxAuthService.swift", "PaxSigningService.swift",
+        for name in ["PaxSigningService.swift",
                      "PaxSigningService+Signing.swift", "PaxSigningService+AppIDs.swift",
                      "DeveloperPortalService.swift"]:
             source = (SOURCES / name).read_text()
             self.assertNotIn("SideSign.DeveloperPortal.shared", source)
             self.assertIn("EiliSideSignClientConfigurationStore.shared.makePortal()", source)
+        auth = (SOURCES / "PaxAuthService.swift").read_text()
+        self.assertNotIn("SideSign.DeveloperPortal.shared", auth)
+        # Login builds its portal after the anisette fetch so the GSA
+        # identity can follow the anisette identity (see store method).
+        self.assertIn("EiliSideSignClientConfigurationStore.shared.resolvedLoginHeaders(", auth)
+        self.assertIn("SideSign.DeveloperPortal(customHeaders: loginHeaders)", auth)
         config = (SOURCES / "EiliSideSignClientConfiguration.swift").read_text()
         self.assertIn("SideSign.DeveloperPortal(customHeaders:try load().resolvedHeaders())", config)
+        self.assertIn("func resolvedLoginHeaders(anisetteClientInfo:", config)
         self.assertNotIn("DeveloperPortal.shared", config)
 
     def test_client_configuration_contract_suites_run_in_ci(self):

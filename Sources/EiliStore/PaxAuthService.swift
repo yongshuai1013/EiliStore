@@ -96,7 +96,6 @@ public final class PaxAuthService {
         let anisetteMode = EiliAnisetteMode.selected
         EiliLoginDiagnostics.record(.configurationLoading, for: diagnosticAttempt)
         let clientConfiguration = try await EiliAnisetteClientConfigurationStore.shared.load()
-        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         EiliLoginDiagnostics.record(.configurationReady, for: diagnosticAttempt)
         if anisetteMode == .onDevice {
             codeProvider.log("步驟 1/3：生成本地 anisette（ODA）…")
@@ -161,6 +160,20 @@ public final class PaxAuthService {
                 }
             }
         }
+
+        // The GSA identity must match the identity that minted the
+        // anisette data (isideload declares the anisette server's own
+        // client info). Identity fields the user has not explicitly
+        // overridden follow this fetch's anisette data instead of the
+        // SideSign defaults — a Windows client info left over from the
+        // 2025-10-15 503 bypass, inconsistent with the Mac anisette
+        // channel in use ever since.
+        let loginHeaders = try await EiliSideSignClientConfigurationStore.shared.resolvedLoginHeaders(
+            anisetteClientInfo: anisetteData.clientInfo,
+            anisetteUserAgent: anisetteData.userAgent
+        )
+        let portal = SideSign.DeveloperPortal(customHeaders: loginHeaders)
+        codeProvider.log("GSA 身份：\(loginHeaders.grandSlam.clientInfo) · Xcode \(loginHeaders.grandSlam.xcodeVersion)")
 
         EiliLoginDiagnostics.record(.authenticationStarted, for: diagnosticAttempt)
         codeProvider.log("步驟 2/3：向 Apple 登入（SRP）…")

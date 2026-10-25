@@ -4,7 +4,7 @@ import SideSign
 enum EiliAnisetteMode: String { case remote, onDevice; static let preferenceKey = "mode"; static let sessionKey = "session-mode"; static var selected: Self { Self(rawValue: UserDefaults.standard.string(forKey: preferenceKey) ?? "remote") ?? .remote } }
 struct EiliAnisetteClientConfiguration { func resolvedXcodeVersion() -> String { "test-xcode" } }
 actor EiliAnisetteClientConfigurationStore { static let shared = EiliAnisetteClientConfigurationStore(); func load() async throws -> EiliAnisetteClientConfiguration { .init() } }
-actor EiliSideSignClientConfigurationStore { static let shared = EiliSideSignClientConfigurationStore(); func makePortal() async throws -> SideSign.DeveloperPortal { .init() } }
+actor EiliSideSignClientConfigurationStore { static let shared = EiliSideSignClientConfigurationStore(); func makePortal() async throws -> SideSign.DeveloperPortal { .init() }; func resolvedLoginHeaders(anisetteClientInfo: String, anisetteUserAgent: String) async throws -> SideSignHeaders { .init() } }
 enum EiliAnisetteError: Error { case unavailable }
 struct AnisetteServer { let name: String; let url: String; var nsURL: URL? { URL(string: url) } }
 final class AnisetteServerManager { static let shared = AnisetteServerManager(); var selectedServer: AnisetteServer { AnisetteServer(name: "Test Server", url: "https://example.com") }; var autoRotationEnabled: Bool { false }; func serversForLogin() -> [URL] { [] }; func serverName(for url: URL) -> String? { nil } }

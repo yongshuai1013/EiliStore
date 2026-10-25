@@ -4,11 +4,25 @@ public struct AnisetteData: Sendable, Equatable {
     public var machineID: String
     public var oneTimePassword: String
     public var routingInfo: String
-    public init(machineID: String = "test-machine", oneTimePassword: String = "test-otp", routingInfo: String = "17106176") {
+    public var clientInfo: String
+    public var userAgent: String
+    public init(machineID: String = "test-machine", oneTimePassword: String = "test-otp", routingInfo: String = "17106176", clientInfo: String = "test-client-info", userAgent: String = "test-user-agent") {
         self.machineID = machineID
         self.oneTimePassword = oneTimePassword
         self.routingInfo = routingInfo
+        self.clientInfo = clientInfo
+        self.userAgent = userAgent
     }
+}
+public struct SideSignHeaders: Sendable {
+    public struct GrandSlam: Sendable {
+        public var clientInfo: String = "stub-client-info"
+        public var userAgent: String = "stub-user-agent"
+        public var xcodeVersion: String = "27.0 (27A5218g)"
+        public init() {}
+    }
+    public var grandSlam: GrandSlam = GrandSlam()
+    public init() {}
 }
 public struct TrustedPhoneNumber: Sendable { public init() {} }
 public enum TwoFactorDeliveryMode: Sendable { case sms, voice, trustedDevice }
@@ -44,6 +58,7 @@ public struct DeveloperPortal: Sendable {
     }
     private static let state = Locked(State())
     public init() {}
+    public init(customHeaders: SideSignHeaders) {}
     public static func reset(requests: [VerificationRequest] = [], result: Result<AuthSession, DeveloperPortalError> = .success(AuthSession(appleID: "user@example.invalid")), onAuthenticate: (@Sendable () -> Void)? = nil) {
         state.update { $0 = State(requests: requests, result: result, onAuthenticate: onAuthenticate) }
     }

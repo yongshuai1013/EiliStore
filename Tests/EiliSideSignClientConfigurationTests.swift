@@ -68,6 +68,14 @@ import SideSign
         check(try await store.load() == .empty, "reset")
         let resetPortal = try await store.makePortal()
         check(resetPortal.customHeaders == SideSignHeaders(), "reset failed to restore native defaults")
+        // Login identity alignment: unset identity fields follow the
+        // anisette identity; explicit overrides always win.
+        let loginHeaders = try await store.resolvedLoginHeaders(anisetteClientInfo: "anisette-client", anisetteUserAgent: "anisette-agent")
+        check(loginHeaders.grandSlam.clientInfo == "anisette-client" && loginHeaders.grandSlam.userAgent == "anisette-agent" && loginHeaders.grandSlam.xcodeVersion == "27.0 (27A5218g)", "login headers follow anisette identity")
+        try await store.save(all)
+        let explicitLoginHeaders = try await store.resolvedLoginHeaders(anisetteClientInfo: "anisette-client", anisetteUserAgent: "anisette-agent")
+        check(explicitLoginHeaders.grandSlam.clientInfo == "gs client info" && explicitLoginHeaders.grandSlam.userAgent == "gs agent" && explicitLoginHeaders.grandSlam.xcodeVersion == "14.2 (14C18)", "explicit overrides win over anisette identity")
+        try await store.reset()
         check(portal.customHeaders == headers && second.customHeaders == allHeaders, "reset mutated existing snapshots")
         try Data(repeating: 0x20, count: 65_537).write(to: url)
         do { _ = try await store.load(); fatalError("oversized file loaded") } catch {}
