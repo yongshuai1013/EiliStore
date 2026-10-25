@@ -130,7 +130,7 @@ extension PaxSigningService {
             guard isDuplicateError(error) else { throw error }
             AppLogger.shared.log("創建撞 duplicate(35)，重新拉清單強力清理後重試: \(profileName)")
             let latest = try await portal.listProvisioningProfiles(for: team, session: session)
-            for p in latest where p.name == profileName || (p.name?.hasPrefix(profileName) ?? false) || p.bundleIdentifier == appID.bundleIdentifier {
+            for p in latest where p.name == profileName || p.name.hasPrefix(profileName) || p.bundleIdentifier == appID.bundleIdentifier {
                 if let pid = p.identifier {
                     try? await portal.deleteProvisioningProfile(profileID: pid, team: team, session: session)
                 }
