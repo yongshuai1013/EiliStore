@@ -51,6 +51,11 @@ struct UserCustomizationsView: View {
                 }
                 .accessibilityIdentifier("customizations-anisette-client-config")
 
+                NavigationLink(destination: ODALibraryView()) {
+                    Label("On-Device Library Source", systemImage: "arrow.down.doc")
+                }
+                .accessibilityIdentifier("customizations-oda-library")
+
                 Button(role: .destructive) {
                     showingResetConfirmation = true
                 } label: {

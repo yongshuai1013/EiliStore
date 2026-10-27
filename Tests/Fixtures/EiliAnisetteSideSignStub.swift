@@ -37,6 +37,7 @@ public actor AnisetteDataManager {
     public var active = 0
     public var maxConcurrentForTests = 0
     public var odaCalls = 0
+    public var odaSetupCalls = 0
     public var lastMode: AnisetteMode?
     public var lastODAIdentifier: UUID?
     public var lastODABlob: Data?
@@ -50,6 +51,7 @@ public actor AnisetteDataManager {
     public func setODAResponseForTests(data: AnisetteData?, blob: Data?) { if let data { odaResponse = (data, blob) } else { odaResponse = (AnisetteData(machineID: "m", oneTimePassword: "otp", localUserID: "lu", routingInfo: "r", deviceID: "dev", serialNumber: "s", clientInfo: "ci", userAgent: "ua", clientTime: "t", locale: "en", timeZone: "UTC"), blob) } }
     public func setODAErrorForTests(_ error: Error?) { odaError = error }
     public func setODADelayForTests(_ value: UInt64) { odaDelay = value }
+    public func setupFromRemote(serverSourceURL: URL, fallbackODAURL: URL? = nil, force: Bool = false, clientInfo: String = "") async throws { odaSetupCalls += 1 }
     public func fetchAnisetteData(mode: AnisetteMode? = nil, identifier: UUID, existingAdiBlob: Data? = nil, headers: AnisetteRequestHeaders? = nil, onError: (@Sendable (Error) -> Void)? = nil) async throws -> (AnisetteData, Data?) {
         odaCalls += 1; lastMode = mode; lastODAIdentifier = identifier; lastODABlob = existingAdiBlob
         lastODAHeaders = headers?.rawHeaders ?? [:]

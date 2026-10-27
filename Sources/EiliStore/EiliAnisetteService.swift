@@ -235,9 +235,9 @@ actor EiliAnisetteService {
         }
         EiliLoginDiagnostics.record(.localPreflightPassed, for: diagnosticAttempt)
         EiliLoginDiagnostics.record(.localRequestStarted, for: diagnosticAttempt)
-        let odaSourceURL = URL(string: "https://zzz.haus/oda.json")!
+        let odaConfig = try EiliODASourceConfiguration.selected.validated()
         let (data, blob) = try await SideSign.AnisetteDataManager.shared.fetchAnisetteData(
-            mode: .remoteODA(sourceURL: odaSourceURL, fallbackURL: odaSourceURL),
+            mode: .remoteODA(sourceURL: odaConfig.sourceURL, fallbackURL: odaConfig.fallbackURL ?? odaConfig.sourceURL),
             identifier: identifier,
             existingAdiBlob: KeychainHelper.load(forKey: Self.localBlobKey).flatMap { $0.isEmpty ? nil : $0 },
             headers: .init(rawHeaders: requestHeaders))
@@ -303,6 +303,23 @@ actor EiliAnisetteService {
     @discardableResult
     func downloadLibraries() async throws -> EiliAnisetteLibraryStatus {
         try await downloadLibraries(using: selectedDownloaderStage())
+    }
+
+    /// Re-downloads the on-device runtime libraries from the configured ODA
+    /// source, replacing the SideSign manager's cached set. Changing the
+    /// source URL alone never replaces an already-cached set; this is the
+    /// explicit refresh the library source page offers.
+    func refreshRemoteODALibraries() async throws {
+        #if EILI_ON_DEVICE_ANISETTE
+        await acquire()
+        defer { release() }
+        try Task.checkCancellation()
+        let config = try EiliODASourceConfiguration.selected.validated()
+        try await SideSign.AnisetteDataManager.shared.setupFromRemote(
+            serverSourceURL: config.sourceURL, fallbackODAURL: config.fallbackURL, force: true)
+        #else
+        throw EiliAnisetteError.localBuildRequired
+        #endif
     }
 
     @discardableResult
