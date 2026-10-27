@@ -97,6 +97,16 @@ struct SideSignClientConfigurationView: View {
 
             if mode == .interactive {
                 group("GRANDSLAM AUTH (GSA)", keys: 0..<7)
+                Section("APP TOKENS") {
+                    Toggle(isOn: appTokensToggleBinding) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("App Tokens 改報 Mac 身份").font(.subheadline)
+                            Text("開啟後，只有領取 Xcode token 的 apptokens 請求改用 Phone Client Info（Mac），登入段維持 Client Info 不變（-80046 分段身份）。").font(.caption).foregroundColor(.secondary)
+                        }
+                    }
+                    .accessibilityIdentifier("sidesign-client-config-apptokens-toggle")
+                    .disabled(!loaded || loadFailed || working)
+                }
                 group("APPLE AUTH (IDMSA)", keys: 7..<9)
                 group("DEVELOPER SERVICES", keys: 9..<13)
             } else {
@@ -168,6 +178,14 @@ struct SideSignClientConfigurationView: View {
                 }
             }
         }
+    }
+
+    private var appTokensToggleBinding: Binding<Bool> {
+        Binding(get: { draft.grandSlam.appTokensUsesMacClientInfo }, set: { value in
+            draft.grandSlam.appTokensUsesMacClientInfo = value
+            dirty = true
+            notice = nil
+        })
     }
 
     private func fieldBinding(_ index: Int) -> Binding<String> {
