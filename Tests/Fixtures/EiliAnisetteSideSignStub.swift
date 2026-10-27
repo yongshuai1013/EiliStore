@@ -50,7 +50,7 @@ public actor AnisetteDataManager {
     public var maxConcurrentForTests = 0
     public var odaCalls = 0
     public var odaSetupCalls = 0
-    public var deviceProfileOverride: AnisetteDeviceProfileOverride?
+    nonisolated(unsafe) public var deviceProfileOverride: AnisetteDeviceProfileOverride?
     public var lastMode: AnisetteMode?
     public var lastODAIdentifier: UUID?
     public var lastODABlob: Data?
