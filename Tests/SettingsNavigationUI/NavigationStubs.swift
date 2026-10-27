@@ -97,3 +97,5 @@ struct EiliAnisetteStorageStatus: Sendable {
 }
 
 struct ODALibraryView: View { var body: some View { Text("Library Source") } }
+
+struct AnisetteDeviceProfileView: View { var body: some View { Text("Device Profile") } }

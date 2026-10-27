@@ -52,6 +52,34 @@ struct EiliODASourceConfiguration: Sendable {
     private static func secure(_ url: URL) -> Bool { url.scheme?.lowercased() == "https" && !(url.host ?? "").isEmpty && url.user == nil && url.password == nil }
 }
 
+/// User-supplied synthesized Android device profile for on-device
+/// provisioning (ro.product.model and friends), edited on the device
+/// profile page. Nil when the user has not set any field, which keeps
+/// AnisetteKit's built-in default profile.
+struct EiliDeviceProfileConfiguration {
+    static let keyPrefix = "eilistore.anisette.deviceProfile."
+    static var override: SideSign.AnisetteDeviceProfileOverride? {
+        let defaults = UserDefaults.standard
+        var result = SideSign.AnisetteDeviceProfileOverride()
+        var any = false
+        func take(_ key: String, _ assign: (String) -> Void) {
+            if let value = defaults.string(forKey: keyPrefix + key), !value.isEmpty {
+                assign(value)
+                any = true
+            }
+        }
+        take("sdkVersion") { result.sdkVersion = $0 }
+        take("release") { result.release = $0 }
+        take("model") { result.model = $0 }
+        take("brand") { result.brand = $0 }
+        take("name") { result.name = $0 }
+        take("device") { result.device = $0 }
+        take("manufacturer") { result.manufacturer = $0 }
+        take("fingerprint") { result.fingerprint = $0 }
+        return any ? result : nil
+    }
+}
+
 struct EiliAnisetteStorageStatus: Sendable {
     let cache: EiliAnisetteLibraryStatus
     let provisioningPresent: Bool
@@ -236,6 +264,7 @@ actor EiliAnisetteService {
         EiliLoginDiagnostics.record(.localPreflightPassed, for: diagnosticAttempt)
         EiliLoginDiagnostics.record(.localRequestStarted, for: diagnosticAttempt)
         let odaConfig = try EiliODASourceConfiguration.selected.validated()
+        SideSign.AnisetteDataManager.shared.deviceProfileOverride = EiliDeviceProfileConfiguration.override
         let (data, blob) = try await SideSign.AnisetteDataManager.shared.fetchAnisetteData(
             mode: .remoteODA(sourceURL: odaConfig.sourceURL, fallbackURL: odaConfig.fallbackURL ?? odaConfig.sourceURL),
             identifier: identifier,

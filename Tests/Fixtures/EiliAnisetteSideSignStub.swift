@@ -25,6 +25,18 @@ public struct NotProvisionedError: Error, CustomStringConvertible {
     public var description: String { "badServerResponse(statusCode: -1, payload: \"not provisioned for this server (-45061); reprovision required\")" }
 }
 
+public struct AnisetteDeviceProfileOverride: Sendable, Equatable {
+    public var sdkVersion = ""
+    public var release = ""
+    public var model = ""
+    public var brand = ""
+    public var name = ""
+    public var device = ""
+    public var manufacturer = ""
+    public var fingerprint = ""
+    public init() {}
+}
+
 public actor AnisetteDataManager {
     public static let shared = AnisetteDataManager()
     public var calls = 0
@@ -38,6 +50,7 @@ public actor AnisetteDataManager {
     public var maxConcurrentForTests = 0
     public var odaCalls = 0
     public var odaSetupCalls = 0
+    public var deviceProfileOverride: AnisetteDeviceProfileOverride?
     public var lastMode: AnisetteMode?
     public var lastODAIdentifier: UUID?
     public var lastODABlob: Data?

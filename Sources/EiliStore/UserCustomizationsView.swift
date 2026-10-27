@@ -51,6 +51,11 @@ struct UserCustomizationsView: View {
                 }
                 .accessibilityIdentifier("customizations-anisette-client-config")
 
+                NavigationLink(destination: AnisetteDeviceProfileView()) {
+                    Label("On-Device Device Profile", systemImage: "iphone")
+                }
+                .accessibilityIdentifier("customizations-device-profile")
+
                 NavigationLink(destination: ODALibraryView()) {
                     Label("On-Device Library Source", systemImage: "arrow.down.doc")
                 }
