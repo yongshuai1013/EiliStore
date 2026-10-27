@@ -163,8 +163,8 @@ class UserCustomizationsNavigationTests(unittest.TestCase):
         self.assertEqual(service.count("configuration.applying(to: data)"), 2)
         # The on-device path is the ODATest-verified SideSign manager call;
         # the retired vendored AnisetteClient path must not reappear.
-        self.assertIn("mode: .remoteODA(sourceURL: odaSourceURL, fallbackURL: odaSourceURL)", service)
-        self.assertIn('URL(string: "https://zzz.haus/oda.json")!', service)
+        self.assertIn("mode: .remoteODA(sourceURL: odaConfig.sourceURL, fallbackURL: odaConfig.fallbackURL ?? odaConfig.sourceURL)", service)
+        self.assertIn('defaultFallbackURLString = "https://zzz.haus/oda.json"', service)
         self.assertNotIn("AnisetteClient(", service)
         self.assertNotIn("configuration.applying(to: try Self.convertHeaders(headers))", service)
         self.assertNotIn("resetLocalAnisetteEngine", service)
