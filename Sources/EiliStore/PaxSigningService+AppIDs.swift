@@ -17,6 +17,14 @@ extension PaxSigningService {
     
     /// 創建 App ID
     public func createAppID(name: String, bundleIdentifier: String, for team: SideSign.Team) async throws -> SideSign.AppID {
+        // 空名稱／空 Bundle ID 送到 Apple 只會換來一句看不懂的 35
+        // （'appIdentifierString' 未提供值），在本地先擋下並講清。
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SigningError.signingFailed("App 名稱是空的，請先輸入名稱再創建 App ID")
+        }
+        guard !bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SigningError.signingFailed("Bundle ID 是空的，請先輸入 Bundle ID 再創建 App ID")
+        }
         let (_, session) = try await sessionWithFreshAnisette()
         if isRustSession {
             let result = try await rustDevOp("add_app_id", params: [

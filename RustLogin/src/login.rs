@@ -903,10 +903,22 @@ async fn dev_op(op: String, params: serde_json::Value, token: String, adsid: Str
             serde_json::json!({ "app_ids": response.app_ids.iter().map(app_id_json).collect::<Vec<_>>() })
         }
         "add_app_id" => {
+            let name = param_str(&params, "name");
+            let identifier = param_str(&params, "identifier");
+            // 診斷（2026-10-28 真機）：Apple 回 35「No value was provided for
+            // the parameter 'appIdentifierString'」——同形請求在 SideSign 路徑
+            // 可成功，剩餘嫌疑是送進來的值本身為空。空值直接在本地擋下並
+            // 講清收到什麼；非空但被 Apple 拒時，錯誤鏈帶出實際送出的值，
+            // 一次截圖就能定案，不再隔空猜參數名。
+            if name.is_empty() || identifier.is_empty() {
+                return Err(rootcause::report!(
+                    "add_app_id 未送出：參數為空（name={name:?}, identifier={identifier:?}）"
+                ));
+            }
             let app_id = session
-                .add_app_id(&team, &param_str(&params, "name"), &param_str(&params, "identifier"), ios)
+                .add_app_id(&team, &name, &identifier, ios)
                 .await
-                .context("Failed to add app ID")?;
+                .context(format!("Failed to add app ID (name={name:?}, identifier={identifier:?})"))?;
             serde_json::json!({ "app_id": app_id_json(&app_id) })
         }
         "update_app_id" => {
