@@ -83,17 +83,9 @@ final class EiliRustAuthService {
         let androidLabel = EiliRustLoginSettings.androidClientInfo
         codeProvider.log("Rust 登入：安卓標籤 \(androidLabel)")
 
-        let outcome: (Int32, String) = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var buffer = [CChar](repeating: 0, count: 65536)
-                let rc = apparition_login_with_headers(
-                    appleID, password, androidLabel,
-                    eili_rust_headers, eili_rust_two_factor,
-                    &buffer, buffer.count
-                )
-                continuation.resume(returning: (rc, String(cString: buffer)))
-            }
-        }
+        let outcome: (Int32, String) = await Task.detached(priority: .userInitiated) {
+            Self.runFFI(appleID: appleID, password: password, androidLabel: androidLabel)
+        }.value
 
         guard outcome.0 == 0 else {
             throw RustLoginError.failed(outcome.1)
@@ -121,6 +113,18 @@ final class EiliRustAuthService {
             timeToLive: TimeInterval(result.token_duration)
         )
         return SideSign.AuthSession(account: account, session: session)
+    }
+
+    /// The blocking FFI call itself (runs on the detached task above; the
+    /// Rust side parks this thread on the C callbacks).
+    private static func runFFI(appleID: String, password: String, androidLabel: String) -> (Int32, String) {
+        var buffer = [CChar](repeating: 0, count: 65536)
+        let rc = apparition_login_with_headers(
+            appleID, password, androidLabel,
+            eili_rust_headers, eili_rust_two_factor,
+            &buffer, buffer.count
+        )
+        return (rc, String(cString: buffer))
     }
 
     // MARK: - Callback plumbing (used by the @_cdecl shims below)
@@ -206,7 +210,7 @@ final class EiliRustAuthService {
 @_cdecl("eili_rust_headers")
 func eili_rust_headers(kind: Int32, out: UnsafeMutablePointer<CChar>?, outCap: Int32) -> Int32 {
     guard let out, outCap > 0, let json = EiliRustAuthService.headersJSON(kind: kind) else { return 1 }
-    let bytes = Array(json.utf8)
+    let bytes = Array(json.utf8CString)
     guard bytes.count < Int(outCap) else { return 1 }
     bytes.withUnsafeBufferPointer { src in
         out.update(from: src.baseAddress!, count: src.count)
@@ -220,7 +224,7 @@ func eili_rust_two_factor(params: UnsafePointer<CChar>?, out: UnsafeMutablePoint
     guard let out, outCap > 0 else { return 1 }
     let paramsString = params.map { String(cString: $0) } ?? "{}"
     let response = EiliRustAuthService.twoFactorResponse(paramsJSON: paramsString)
-    let bytes = Array(response.utf8)
+    let bytes = Array(response.utf8CString)
     guard bytes.count < Int(outCap) else { return 1 }
     bytes.withUnsafeBufferPointer { src in
         out.update(from: src.baseAddress!, count: src.count)
