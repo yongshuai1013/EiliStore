@@ -228,7 +228,7 @@ impl AnisetteProvider for LocalAdiProvider {
 // MARK: - 2FA bridge to Swift
 
 /// Swift-side 2FA callback: receives the callback params as JSON, writes
-/// back one action string: "code:<digits>", "sms:<number id>", "devices",
+/// back one action string: "code:<digits>", "sms:<number id>", "voice:<number id>", "devices",
 /// "resend" or "abort". Returns 0 when an action was written.
 pub type TwoFactorCallback = unsafe extern "C" fn(ctx: *mut c_void, params_json: *const c_char, out_action: *mut c_char, out_action_cap: usize) -> i32;
 
@@ -272,10 +272,30 @@ fn params_json(params: &TwoFactorCallbackParams) -> String {
     let last_error = params.last_error.as_ref().map(|e| format!("\"{}\"", json_escape(e))).unwrap_or_else(|| "null".to_string());
     let selected = params.selected_number_id.map(|id| id.to_string()).unwrap_or_else(|| "null".to_string());
     format!(
-        "{{\"unknown\":{},\"sms\":{},\"last_error\":{},\"selected_number_id\":{},\"numbers\":[{}]}}",
-        params.unknown, params.sms, last_error, selected,
+        "{{\"unknown\":{},\"sms\":{},\"voice\":{},\"last_error\":{},\"selected_number_id\":{},\"numbers\":[{}]}}",
+        params.unknown, params.sms, params.voice, last_error, selected,
         numbers.join(",")
     )
+}
+
+fn parse_two_factor_action(action: &str) -> std::result::Result<TwoFactorCallbackResponse, String> {
+    if let Some(code) = action.strip_prefix("code:") {
+        Ok(TwoFactorCallbackResponse::SubmitCode(code.to_string()))
+    } else if let Some(id) = action.strip_prefix("sms:") {
+        id.parse::<u32>()
+            .map(TwoFactorCallbackResponse::SendSms)
+            .map_err(|_| format!("bad sms id in action: {action}"))
+    } else if let Some(id) = action.strip_prefix("voice:") {
+        id.parse::<u32>()
+            .map(TwoFactorCallbackResponse::SendVoice)
+            .map_err(|_| format!("bad voice id in action: {action}"))
+    } else {
+        match action {
+            "devices" => Ok(TwoFactorCallbackResponse::SendToDevices),
+            "resend" => Ok(TwoFactorCallbackResponse::ResendCode),
+            _ => Ok(TwoFactorCallbackResponse::Abort),
+        }
+    }
 }
 
 impl CallbackBridge {
@@ -290,17 +310,7 @@ impl CallbackBridge {
         }
         let nul = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
         let action = String::from_utf8_lossy(&buf[..nul]).into_owned();
-        if let Some(code) = action.strip_prefix("code:") {
-            Ok(TwoFactorCallbackResponse::SubmitCode(code.to_string()))
-        } else if let Some(id) = action.strip_prefix("sms:") {
-            id.parse::<u32>().map(TwoFactorCallbackResponse::SendSms).map_err(|_| format!("bad sms id in action: {action}"))
-        } else {
-            match action.as_str() {
-                "devices" => Ok(TwoFactorCallbackResponse::SendToDevices),
-                "resend" => Ok(TwoFactorCallbackResponse::ResendCode),
-                _ => Ok(TwoFactorCallbackResponse::Abort),
-            }
-        }
+        parse_two_factor_action(&action)
     }
 }
 
@@ -1159,4 +1169,34 @@ pub unsafe extern "C" fn apparition_dev_op(
         }
     };
     finish_dev(dev_op(op, params, token, adsid, provider), out_summary, out_summary_cap, err_buf, err_len)
+}
+
+
+#[cfg(test)]
+mod two_factor_callback_tests {
+    use super::*;
+
+    #[test]
+    fn callback_actions_preserve_the_selected_delivery_method() {
+        assert!(matches!(parse_two_factor_action("sms:7"), Ok(TwoFactorCallbackResponse::SendSms(7))));
+        assert!(matches!(parse_two_factor_action("voice:7"), Ok(TwoFactorCallbackResponse::SendVoice(7))));
+        assert!(matches!(parse_two_factor_action("code:123456"), Ok(TwoFactorCallbackResponse::SubmitCode(code)) if code == "123456"));
+        assert!(parse_two_factor_action("voice:not-a-number").is_err());
+    }
+
+    #[test]
+    fn callback_params_include_the_voice_mode_flag() {
+        let params = TwoFactorCallbackParams {
+            last_error: None,
+            unknown: false,
+            sms: false,
+            voice: true,
+            numbers: Vec::new(),
+            selected_number_id: Some(7),
+        };
+        let json: serde_json::Value = serde_json::from_str(&params_json(&params)).unwrap();
+        assert_eq!(json["sms"], false);
+        assert_eq!(json["voice"], true);
+        assert_eq!(json["selected_number_id"], 7);
+    }
 }

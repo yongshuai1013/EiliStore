@@ -18,3 +18,5 @@ trap 'rm -rf "$build_dir"' EXIT
 "$build_dir/ipa-import-tests"
 "$compiler" "$repo_root/Sources/EiliStore/IPAInstallMetadata.swift" "$repo_root/Tests/IPAInstallMetadataTests.swift" -o "$build_dir/ipa-metadata-tests"
 "$build_dir/ipa-metadata-tests"
+"$compiler" "$repo_root/Sources/EiliStore/IPAAppBundleSelector.swift" "$repo_root/Tests/IPAAppBundleSelectorTests.swift" -o "$build_dir/ipa-app-selector-tests"
+"$build_dir/ipa-app-selector-tests"

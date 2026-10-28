@@ -98,11 +98,11 @@ public class AppInstaller {
             }
 
             let payloadDir = tempDir.appendingPathComponent("Payload", isDirectory: true)
-            let contents = try FileManager.default.contentsOfDirectory(atPath: payloadDir.path)
-            guard let appName = contents.first(where: { $0.hasSuffix(".app") }) else {
-                throw InstallerError.afcFailed("找不到 .app")
+            do {
+                localPackageURL = try IPAAppBundleSelector.select(in: payloadDir)
+            } catch {
+                throw InstallerError.afcFailed(error.localizedDescription)
             }
-            localPackageURL = payloadDir.appendingPathComponent(appName, isDirectory: true)
             remoteUploadPath = "/PublicStaging/\(UUID().uuidString).app"
             remoteStagingDirectory = nil
             remotePackagePath = remoteUploadPath

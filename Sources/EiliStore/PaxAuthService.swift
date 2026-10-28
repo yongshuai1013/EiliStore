@@ -4,7 +4,10 @@ import SideSign
 /// EiliStore 登入接線：參照 SideStore 的流程語義，使用 SideSign 而不複製其 app 實作。
 public final class PaxAuthService {
     public static let shared = PaxAuthService()
-    
+
+    private let loginAttemptLock = NSLock()
+    private var loginAttemptActive = false
+
     private init() {}
     
     // MARK: - Keychain Keys
@@ -69,6 +72,12 @@ public final class PaxAuthService {
     /// 登入（一次 authenticate 內完成 2FA；只有選擇發送方式才會要求發碼）
     public func login(appleID: String, password: String, codeProvider: TwoFACodeProvider = TwoFACodeProvider(), diagnosticAttempt: UUID? = nil) async throws -> Bool {
         let attempt = diagnosticAttempt ?? EiliLoginDiagnostics.shared.begin(onDevice: EiliAnisetteMode.selected == .onDevice)
+        guard beginLoginAttempt() else {
+            EiliLoginDiagnostics.shared.finish(.failed, for: attempt)
+            throw LoginError.loginAlreadyInProgress
+        }
+        defer { endLoginAttempt() }
+
         EiliLoginDiagnostics.record(.authServiceEntered, for: attempt)
         // Diagnostics must not wrap the login in a new async TaskLocal scope.
         // Pass the ID explicitly so a missing runtime context cannot hide all stages.
@@ -84,6 +93,20 @@ public final class PaxAuthService {
             EiliLoginDiagnostics.shared.finish(cancelled ? .cancelled : .failed, for: attempt)
             throw error
         }
+    }
+
+    private func beginLoginAttempt() -> Bool {
+        loginAttemptLock.lock()
+        defer { loginAttemptLock.unlock() }
+        guard !loginAttemptActive else { return false }
+        loginAttemptActive = true
+        return true
+    }
+
+    private func endLoginAttempt() {
+        loginAttemptLock.lock()
+        loginAttemptActive = false
+        loginAttemptLock.unlock()
     }
 
     private func performLogin(appleID: String, password: String, codeProvider: TwoFACodeProvider, diagnosticAttempt: UUID) async throws -> Bool {
@@ -247,12 +270,18 @@ public final class PaxAuthService {
 
     private enum LoginError: Error {
         case sessionSaveFailed
+        case loginAlreadyInProgress
     }
 
     /// 不把 Apple 回應內容、電話資料或伺服器 payload 顯示／記錄到 UI。
     static func loginErrorMessage(for error: Error) -> String {
         if error is CancellationError { return "登入已取消" }
-        if error is LoginError { return "無法安全保存登入資料，請重試。" }
+        if let loginError = error as? LoginError {
+            switch loginError {
+            case .sessionSaveFailed: return "無法安全保存登入資料，請重試。"
+            case .loginAlreadyInProgress: return "上一個登入流程仍在結束，請稍候再重試，避免重複要求驗證碼。"
+            }
+        }
         if let anisetteError = error as? EiliAnisetteError { return anisetteError.localizedDescription }
         if let portalError = error as? DeveloperPortalError {
             switch portalError {

@@ -133,6 +133,43 @@ private final class LockedValue<Value>: @unchecked Sendable {
             unchanged(old); assert(!logged.get())
             diagnosticOutcome("failed")
         }
+        // The same auth service must not start a second network login while a
+        // cancelled/detached first attempt still owns its verification prompt.
+        do {
+            let p = TwoFACodeProvider()
+            let ready = AsyncStream<Bool>.makeStream()
+            p.onMethodRequired = { _, _ in ready.continuation.yield(true) }
+            SideSign.DeveloperPortal.reset(requests: [
+                .selectDeliveryMethod(preferredMode: .sms, phoneNumbers: [])
+            ])
+            let firstTask = Task {
+                try await service.login(appleID: "first@example.invalid", password: "unused", codeProvider: p)
+            }
+            var readyIterator = ready.stream.makeAsyncIterator()
+            let didReachMethodChoice = await readyIterator.next()
+            assert(didReachMethodChoice != nil, "first login did not reach the 2FA choice")
+
+            let fetchesBeforeSecond = EiliAnisetteService.shared.calls
+            let authCallsBeforeSecond = SideSign.DeveloperPortal.authCalls
+            do {
+                _ = try await service.login(appleID: "second@example.invalid", password: "unused")
+                fatalError("overlapping login should be rejected")
+            } catch {
+                assert(PaxAuthService.loginErrorMessage(for: error).contains("仍在結束"))
+            }
+            assert(EiliAnisetteService.shared.calls == fetchesBeforeSecond)
+            assert(SideSign.DeveloperPortal.authCalls == authCallsBeforeSecond)
+
+            p.cancel()
+            do {
+                _ = try await firstTask.value
+                fatalError("cancelled pending login should not complete")
+            } catch is CancellationError {
+            } catch {
+                // The offline fake's cancellation can be wrapped by the service.
+            }
+        }
+
         let old = try oldState(), calls = SideSign.DeveloperPortal.authCalls
         EiliAnisetteService.shared.failure = true
         do { _ = try await service.login(appleID: "new@example.invalid", password: "p"); fatalError("fetch failure expected") } catch {}

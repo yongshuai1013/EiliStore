@@ -115,10 +115,37 @@ unsafe fn write_output(data: &[u8], buf: *mut u8, capacity: usize, out_len: *mut
 }
 
 unsafe fn read_input(ptr: *const u8, len: usize) -> std::result::Result<&'static [u8], i32> {
+    if len == 0 {
+        return Ok(&[]);
+    }
     if ptr.is_null() && len > 0 {
         return Err(fail(APPARITION_INVALID_ARGUMENT, "null input pointer with nonzero length"));
     }
     Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    #[test]
+    fn null_pointer_with_zero_length_is_an_empty_input() {
+        let input = unsafe { read_input(std::ptr::null(), 0) }.expect("empty input is valid");
+        assert!(input.is_empty());
+    }
+
+    #[test]
+    fn null_pointer_with_nonzero_length_is_rejected() {
+        let result = unsafe { read_input(std::ptr::null(), 1) };
+        assert_eq!(result.unwrap_err(), APPARITION_INVALID_ARGUMENT);
+    }
+
+    #[test]
+    fn nonempty_input_is_read() {
+        let bytes = [3, 5, 8];
+        let input = unsafe { read_input(bytes.as_ptr(), bytes.len()) }.expect("valid input");
+        assert_eq!(input, bytes);
+    }
 }
 
 unsafe fn read_c_str(ptr: *const c_char, what: &str) -> std::result::Result<&'static str, i32> {
