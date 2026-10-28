@@ -118,13 +118,16 @@ final class EiliRustAuthService {
     /// The blocking FFI call itself (runs on the detached task above; the
     /// Rust side parks this thread on the C callbacks).
     private static func runFFI(appleID: String, password: String, androidLabel: String) -> (Int32, String) {
-        var buffer = [CChar](repeating: 0, count: 65536)
+        var summary = [CChar](repeating: 0, count: 65536)
+        var err = [CChar](repeating: 0, count: 65536)
         let rc = apparition_login_with_headers(
             appleID, password, androidLabel,
-            eili_rust_headers, eili_rust_two_factor,
-            &buffer, buffer.count
+            eiliHeadersCallback, nil,
+            eiliTwoFactorCallback, nil,
+            &summary, summary.count,
+            &err, err.count
         )
-        return (rc, String(cString: buffer))
+        return (rc, String(cString: rc == 0 ? summary : err))
     }
 
     // MARK: - Callback plumbing (used by the @_cdecl shims below)
@@ -205,10 +208,13 @@ final class EiliRustAuthService {
     }
 }
 
-// MARK: - C callback shims (signatures mirror apparition_anisette.h)
+// MARK: - C callbacks (signatures mirror apparition_anisette.h)
+//
+// Stored as @convention(c) closure constants, the same shape ODATest
+// proved: passing @_cdecl function references straight into the FFI call
+// made the type checker give up on the call expression.
 
-@_cdecl("eili_rust_headers")
-func eili_rust_headers(kind: Int32, out: UnsafeMutablePointer<CChar>?, outCap: Int32) -> Int32 {
+let eiliHeadersCallback: apparition_headers_callback = { _, kind, out, outCap in
     guard let out, outCap > 0, let json = EiliRustAuthService.headersJSON(kind: kind) else { return 1 }
     let bytes = Array(json.utf8CString)
     guard bytes.count < Int(outCap) else { return 1 }
@@ -219,8 +225,7 @@ func eili_rust_headers(kind: Int32, out: UnsafeMutablePointer<CChar>?, outCap: I
     return 0
 }
 
-@_cdecl("eili_rust_two_factor")
-func eili_rust_two_factor(params: UnsafePointer<CChar>?, out: UnsafeMutablePointer<CChar>?, outCap: Int32) -> Int32 {
+let eiliTwoFactorCallback: apparition_two_factor_callback = { _, params, out, outCap in
     guard let out, outCap > 0 else { return 1 }
     let paramsString = params.map { String(cString: $0) } ?? "{}"
     let response = EiliRustAuthService.twoFactorResponse(paramsJSON: paramsString)
