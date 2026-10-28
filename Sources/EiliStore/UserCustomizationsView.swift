@@ -6,6 +6,7 @@ import SwiftUI
 /// session keeps its mode.
 struct UserCustomizationsView: View {
     @AppStorage(EiliAnisetteMode.preferenceKey) private var anisetteModeRawValue = EiliAnisetteMode.remote.rawValue
+    @AppStorage(EiliLoginMethod.preferenceKey) private var loginMethodRawValue = EiliLoginMethod.sideSign.rawValue
     @State private var showingResetConfirmation = false
     @State private var isResetting = false
     @State private var resultMessage: String?
@@ -87,6 +88,20 @@ struct UserCustomizationsView: View {
                     Label("SideSign Client Configuration", systemImage: "network")
                 }
                 .accessibilityIdentifier("customizations-sidesign-client-config")
+            }
+
+            Section(header: Text("LOGIN"),
+                    footer: Text("登入方式於下次登入生效，現有登入不受影響。Rust (isideload) 是備用登入：SRP 段用安卓標籤、領 token 起改報 Mac，與 SideSign 共用同一套 anisette 與 2FA 輸入。")) {
+                Picker("登入方式", selection: $loginMethodRawValue) {
+                    Text("SideSign（現行）").tag(EiliLoginMethod.sideSign.rawValue)
+                    Text("Rust (isideload)（備用）").tag(EiliLoginMethod.rust.rawValue)
+                }
+                .accessibilityIdentifier("login-method-picker")
+
+                NavigationLink(destination: RustLoginSettingsView()) {
+                    Label("Rust 登入設定", systemImage: "terminal")
+                }
+                .accessibilityIdentifier("customizations-rust-login-settings")
             }
         }
         .confirmationDialog("重設本機 Anisette？", isPresented: $showingResetConfirmation, titleVisibility: .visible) {

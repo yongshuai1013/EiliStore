@@ -1,0 +1,36 @@
+import Foundation
+
+/// 登入方式：SideSign（現行）或 Rust (isideload)（備用）。
+/// 在「設定 → 用戶自定義」的 LOGIN 區切換，下次登入生效。
+enum EiliLoginMethod: String, CaseIterable {
+    case sideSign
+    case rust
+
+    static let preferenceKey = "eilistore.login.method"
+
+    static var selected: EiliLoginMethod {
+        let raw = UserDefaults.standard.string(forKey: preferenceKey)
+        return EiliLoginMethod(rawValue: raw ?? "") ?? .sideSign
+    }
+}
+
+/// Rust 登入的用戶設定。
+///
+/// isideload 的登入自稱由 anisette provider 的 `get_client_info()` 決定，
+/// 函式庫沒有現成的用戶設定；我們的 provider 把它做成 FFI 參數，所以這裡
+/// 存的值會在登入時傳給 Rust。token 段的 Mac 自稱由 Rust 內部切換，不在此列。
+enum EiliRustLoginSettings {
+    static let androidClientInfoKey = "eilistore.rustLogin.androidClientInfo"
+
+    /// 與 ODATest 實證成功的 Rust 登入相同的預設安卓標籤。
+    static let defaultAndroidClientInfo = "<Pixel 8> <Android; 14; UQ1A.240205.004> <com.apple.AuthKit/1 (com.apple.android.music/4.9.6)>"
+
+    static var androidClientInfo: String {
+        let stored = UserDefaults.standard.string(forKey: androidClientInfoKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let stored, !stored.isEmpty {
+            return stored
+        }
+        return defaultAndroidClientInfo
+    }
+}

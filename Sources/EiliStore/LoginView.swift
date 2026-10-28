@@ -22,6 +22,7 @@ struct LoginView: View {
     @State private var preferredMethod: TwoFactorDeliveryMode = .sms
     @State private var debugLog = ""
     @AppStorage(EiliAnisetteMode.preferenceKey) private var anisetteModeRawValue = EiliAnisetteMode.remote.rawValue
+    @AppStorage(EiliLoginMethod.preferenceKey) private var loginMethodRawValue = EiliLoginMethod.sideSign.rawValue
 
     private var isOnDeviceMode: Bool {
         EiliAnisetteMode(rawValue: anisetteModeRawValue) == .onDevice
@@ -34,7 +35,7 @@ struct LoginView: View {
 
     var body: some View {
         Form {
-            Section(header: Text("Apple ID 登入（SideSign）")) {
+            Section(header: Text(loginMethodRawValue == EiliLoginMethod.rust.rawValue ? "Apple ID 登入（Rust）" : "Apple ID 登入（SideSign）")) {
                 TextField("Apple ID", text: $appleID)
                     .autocapitalization(.none)
                     .keyboardType(.emailAddress)

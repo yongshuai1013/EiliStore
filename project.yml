@@ -9,7 +9,7 @@ packages:
     version: 0.9.19
   SideSign:
     url: https://github.com/yongshuai1013/SideSign.git
-    branch: feat/apptokens-mac-client-info
+    revision: "f58efa05a5b8429c72414eaa6ad51cefee6c16d3"
   CodeSignKit:
     url: https://github.com/mahee96/CodeSignKit.git
     branch: main
@@ -39,6 +39,11 @@ targets:
         CURRENT_PROJECT_VERSION: 1
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) EILI_ON_DEVICE_ANISETTE"
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/EiliStore/EiliStore-Bridging-Header.h
+        # RustLogin 靜態庫（Scripts/build-rust-login.sh 先行構建，CI 先跑該步）
+        HEADER_SEARCH_PATHS: $(SRCROOT)/build/rust-login-out/include
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/build/rust-login-out/lib/$(PLATFORM_NAME)
+        OTHER_LDFLAGS: -lapparition_anisette
     info:
       path: Sources/EiliStore/Info.plist
       properties:

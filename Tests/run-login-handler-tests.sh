@@ -57,6 +57,7 @@ swiftc -swift-version 5 -parse-as-library -emit-module -emit-object -module-name
   -emit-module-path "$build/SideSign.swiftmodule" Tests/Fixtures/PaxAuthSideSignStub.swift -o "$build/SideSign.o"
 swiftc -swift-version 5 -parse-as-library -D LOGIN_HANDLER_TESTS -I "$build" \
   Sources/EiliStore/EiliLoginDiagnostics.swift Sources/EiliStore/TwoFACodeProvider.swift \
-  Sources/EiliStore/PaxAuthService.swift Tests/PaxAuthServiceFlowTests.swift \
+  Sources/EiliStore/EiliLoginMethod.swift Sources/EiliStore/PaxAuthService.swift \
+  Tests/Fixtures/EiliRustAuthServiceStub.swift Tests/PaxAuthServiceFlowTests.swift \
   "$build/LoginHandlerHarness.swift" Tests/LoginHandlerTests.swift "$build/SideSign.o" -o "$build/login-handler-tests"
 HOME="$home" "$build/login-handler-tests"
