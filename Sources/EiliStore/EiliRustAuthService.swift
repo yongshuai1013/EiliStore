@@ -27,11 +27,13 @@ final class EiliRustAuthService {
     enum RustLoginError: LocalizedError {
         case failed(String)
         case badResult(String)
+        case devFailed(String)
 
         var errorDescription: String? {
             switch self {
             case .failed(let message): return "Rust 登入失敗：\(message)"
             case .badResult(let raw): return "Rust 登入結果無法解析：\(raw)"
+            case .devFailed(let message): return "Rust Portal 操作失敗：\(message)"
             }
         }
     }
@@ -133,6 +135,73 @@ final class EiliRustAuthService {
             timeToLive: TimeInterval(result.token_duration)
         )
         return SideSign.AuthSession(account: account, session: session)
+    }
+
+    // MARK: - Developer operations on a stored session (path B)
+
+    struct TeamsResult: Decodable {
+        struct Team: Decodable { let name: String; let id: String; let type: String }
+        let teams: [Team]
+    }
+
+    /// 用保存的 Xcode token＋adsid 重建 isideload 的 DeveloperSession 列
+    /// Teams——Portal 操作全程走 Rust 自己的請求形狀，不再把 Rust 領的
+    /// token 塞進 SideSign 的形狀（會被 Apple 回 1100）。
+    func fetchTeams(
+        token: String,
+        adsid: String,
+        account: SideSign.Account,
+        fetchAnisette: @escaping (Bool) async -> SideSign.AnisetteData?
+    ) async throws -> [SideSign.Team] {
+        let attempt = Attempt(codeProvider: TwoFACodeProvider(), fetchAnisette: fetchAnisette)
+        Self.attemptLock.lock()
+        Self.currentAttempt = attempt
+        Self.attemptLock.unlock()
+        defer {
+            Self.attemptLock.lock()
+            if Self.currentAttempt === attempt { Self.currentAttempt = nil }
+            Self.attemptLock.unlock()
+        }
+
+        let androidLabel = EiliRustLoginSettings.androidClientInfo
+        let outcome: (Int32, String) = await Task.detached(priority: .userInitiated) {
+            Self.runDevListTeamsFFI(token: token, adsid: adsid, androidLabel: androidLabel)
+        }.value
+        guard outcome.0 == 0 else {
+            throw RustLoginError.devFailed(outcome.1)
+        }
+        guard let data = outcome.1.data(using: .utf8),
+              let result = try? JSONDecoder().decode(TeamsResult.self, from: data) else {
+            throw RustLoginError.badResult(outcome.1)
+        }
+        return result.teams.map { entry in
+            SideSign.Team(
+                identifier: entry.id,
+                name: entry.name,
+                type: Self.teamType(from: entry.type),
+                account: account
+            )
+        }
+    }
+
+    private static func teamType(from raw: String) -> SideSign.TeamType {
+        let lower = raw.lowercased()
+        if lower.contains("organization") || lower.contains("company") { return .organization }
+        if lower.contains("individual") { return .individual }
+        if lower.contains("free") { return .free }
+        return .unknown
+    }
+
+    private static func runDevListTeamsFFI(token: String, adsid: String, androidLabel: String) -> (Int32, String) {
+        var summary = [CChar](repeating: 0, count: 65536)
+        var err = [CChar](repeating: 0, count: 65536)
+        let rc = apparition_dev_list_teams(
+            token, adsid, androidLabel,
+            eiliHeadersCallback, nil,
+            &summary, summary.count,
+            &err, err.count
+        )
+        return (rc, String(cString: rc == 0 ? summary : err))
     }
 
     /// The blocking FFI call itself (runs on the detached task above; the

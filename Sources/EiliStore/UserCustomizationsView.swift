@@ -52,11 +52,6 @@ struct UserCustomizationsView: View {
                 }
                 .accessibilityIdentifier("customizations-anisette-client-config")
 
-                NavigationLink(destination: AnisetteDeviceProfileView()) {
-                    Label("On-Device Device Profile", systemImage: "iphone")
-                }
-                .accessibilityIdentifier("customizations-device-profile")
-
                 NavigationLink(destination: ODALibraryView()) {
                     Label("On-Device Library Source", systemImage: "arrow.down.doc")
                 }
@@ -83,11 +78,18 @@ struct UserCustomizationsView: View {
                 .accessibilityIdentifier("anisette-local-reset")
             }
 
-            Section(header: Text("SIDESIGN")) {
-                NavigationLink(destination: SideSignClientConfigurationView()) {
-                    Label("SideSign Client Configuration", systemImage: "network")
+            if loginMethodRawValue != EiliLoginMethod.rust.rawValue {
+                Section(header: Text("SIDESIGN")) {
+                    NavigationLink(destination: SideSignClientConfigurationView()) {
+                        Label("SideSign Client Configuration", systemImage: "network")
+                    }
+                    .accessibilityIdentifier("customizations-sidesign-client-config")
+
+                    NavigationLink(destination: AnisetteDeviceProfileView()) {
+                        Label("On-Device Device Profile", systemImage: "iphone")
+                    }
+                    .accessibilityIdentifier("customizations-device-profile")
                 }
-                .accessibilityIdentifier("customizations-sidesign-client-config")
             }
 
             Section(header: Text("LOGIN"),

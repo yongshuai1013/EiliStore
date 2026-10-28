@@ -12,6 +12,17 @@ enum EiliLoginMethod: String, CaseIterable {
         let raw = UserDefaults.standard.string(forKey: preferenceKey)
         return EiliLoginMethod(rawValue: raw ?? "") ?? .sideSign
     }
+
+    /// 保存 session 時一併記錄它是哪種登入方式領出來的（與 anisette
+    /// 模式的 sessionKey 同一模式）。後續 Portal 操作按來源分流：
+    /// Rust 領的 token 只在 isideload 自己的請求形狀下使用（B 路線），
+    /// 塞進 SideSign 的形狀會被 Apple 回 1100。
+    static let sessionOriginKey = "eilistore.auth.loginMethod"
+
+    static var savedSessionOrigin: EiliLoginMethod {
+        let raw = UserDefaults.standard.string(forKey: sessionOriginKey)
+        return EiliLoginMethod(rawValue: raw ?? "") ?? .sideSign
+    }
 }
 
 /// Rust 登入的 anisette 來源：App 現行那套（ODA Unicorn／遠端，經回調餵入，

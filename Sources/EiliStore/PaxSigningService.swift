@@ -74,18 +74,37 @@ public final class PaxSigningService {
     public func fetchTeamsForSessionCheck() async throws -> [SideSign.Team] {
         let account: SideSign.Account
         let session: SideSign.Session
-        let portal: SideSign.DeveloperPortal
+        let portal: SideSign.DeveloperPortal?
         do {
             (account, session) = try await sessionWithFreshAnisette()
-            portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
+            portal = EiliLoginMethod.savedSessionOrigin == .rust
+                ? nil
+                : try await EiliSideSignClientConfigurationStore.shared.makePortal()
         } catch {
             throw SessionCheckError.preparationFailed(error.localizedDescription)
         }
         do {
-            return try await portal.fetchTeams(for: account, session: session)
+            if let portal {
+                return try await portal.fetchTeams(for: account, session: session)
+            }
+            return try await rustFetchTeams(account: account, session: session)
         } catch {
             throw SessionCheckError.portalFailed(error.localizedDescription)
         }
+    }
+
+    /// B 路線：session 是 Rust 登入領出來的時候，Teams 改走 isideload
+    /// 自己的 DeveloperSession（保存的 token＋adsid 重建），不經
+    /// SideSign Portal 形狀。anisette 用 sessionWithFreshAnisette 剛換
+    /// 上的那份（回調每次回同一份新鮮快照即可，單次請求只取一次）。
+    private func rustFetchTeams(account: SideSign.Account, session: SideSign.Session) async throws -> [SideSign.Team] {
+        let anisette = session.anisetteData
+        return try await EiliRustAuthService.shared.fetchTeams(
+            token: session.authToken,
+            adsid: session.dsid,
+            account: account,
+            fetchAnisette: { _ in anisette }
+        )
     }
 
     // MARK: - Teams
@@ -93,6 +112,11 @@ public final class PaxSigningService {
     /// 獲取該 Apple ID 下的所有 Team
     public func fetchTeams() async throws -> [SideSign.Team] {
         let (account, session) = try await sessionWithFreshAnisette()
+        if EiliLoginMethod.savedSessionOrigin == .rust {
+            let teams = try await rustFetchTeams(account: account, session: session)
+            print("[PaxStore] 找到 \(teams.count) 個 Team（Rust Portal）")
+            return teams
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let teams = try await portal.fetchTeams(
             for: account,

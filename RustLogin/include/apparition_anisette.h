@@ -88,6 +88,18 @@ int32_t apparition_login_with_headers(const char *email, const char *password,
                                       char *err_buf, size_t err_len);
 
 
+/// Lists the stored session's developer teams through isideload's own
+/// request shape, rebuilding the DeveloperSession from the stored Xcode
+/// app token + adsid; anisette comes from the app via `headers_cb`
+/// (same contract as above). Returns 0 with a JSON summary
+/// {"teams":[{name,id,type}]} in `out_summary`, 2 with the error in
+/// `err_buf`, -2 on invalid arguments.
+int32_t apparition_dev_list_teams(const char *token, const char *adsid,
+                                  const char *claim_client_info,
+                                  apparition_headers_callback headers_cb, void *headers_ctx,
+                                  char *out_summary, size_t out_summary_cap,
+                                  char *err_buf, size_t err_len);
+
 /// Sets the file the Rust login writes stage markers and panic reports
 /// to (it survives a crash, so the app can show it on next launch).
 void apparition_set_diagnostic_log(const char *path);

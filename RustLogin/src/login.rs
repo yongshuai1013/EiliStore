@@ -23,8 +23,8 @@ use std::sync::Arc;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use http::{HeaderMap, HeaderValue};
-use isideload::anisette::{AnisetteClientInfo, AnisetteData, AnisetteDataResponse, AnisetteProvider};
-use isideload::auth::apple_account::{AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse};
+use isideload::anisette::{AnisetteClientInfo, AnisetteData, AnisetteDataGenerator, AnisetteDataResponse, AnisetteProvider};
+use isideload::auth::apple_account::{AppToken, AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse};
 use isideload::auth::grandslam::GrandSlam;
 use isideload::dev::developer_session::DeveloperSession;
 use isideload::dev::teams::TeamsApi;
@@ -32,6 +32,7 @@ use plist::Dictionary;
 use plist_macro::plist;
 use rootcause::prelude::*;
 use sha2::{Digest, Sha256};
+use tokio::sync::RwLock;
 
 use crate::{fail, with_engine, write_error};
 
@@ -610,4 +611,117 @@ pub unsafe extern "C" fn apparition_login_with_headers(
     };
     let bridge = Arc::new(CallbackBridge { cb: two_factor_cb, ctx: two_factor_ctx as usize });
     finish(&email, &password, provider, bridge, out_summary, out_summary_cap, err_buf, err_len)
+}
+
+// MARK: - Developer operations on a stored session (path B)
+//
+// The host app stores the Xcode app token + adsid from a completed
+// sign-in. These entry points rebuild a DeveloperSession from those two
+// values — GrandSlam client claiming the same Mac identity the token
+// was minted under, anisette supplied by the app through the same
+// callback as login — so developer requests keep the exact shape
+// isideload itself uses (the token is never presented through another
+// stack's request shape).
+
+async fn dev_list_teams(token: String, adsid: String, provider: CallbackProvider) -> Result<String, Report> {
+    let client = GrandSlam::new(mac_info(), false, None).await.context("Failed to build the developer client")?;
+    let generator = AnisetteDataGenerator::new(Arc::new(RwLock::new(provider)));
+    let app_token = AppToken { token, duration: 0, expiry: 0 };
+    let mut session = DeveloperSession::new(app_token, adsid, Arc::new(client), generator);
+    let teams = session.list_teams().await.context("Failed to list developer teams")?;
+    let payload = serde_json::json!({
+        "teams": teams
+            .iter()
+            .map(|t| serde_json::json!({
+                "name": t.name.clone().unwrap_or_default(),
+                "id": t.team_id.clone(),
+                "type": t.r#type.clone().unwrap_or_default(),
+            }))
+            .collect::<Vec<_>>(),
+    });
+    Ok(payload.to_string())
+}
+
+fn finish_dev(
+    future: impl std::future::Future<Output = Result<String, Report>>,
+    out_summary: *mut c_char,
+    out_summary_cap: usize,
+    err_buf: *mut c_char,
+    err_len: usize,
+) -> i32 {
+    install_panic_hook();
+    install_crypto_provider();
+    diag("stage: dev op entry");
+    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            unsafe { write_error(err_buf, err_len, &format!("failed to build the tokio runtime: {e}")) };
+            return APPARITION_LOGIN_FAILED;
+        }
+    };
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.block_on(future)));
+    match outcome {
+        Ok(Ok(summary)) => {
+            unsafe { write_error(out_summary, out_summary_cap, &summary) };
+            APPARITION_OK
+        }
+        Ok(Err(error)) => {
+            unsafe { write_error(err_buf, err_len, &format!("{error:?}")) };
+            APPARITION_LOGIN_FAILED
+        }
+        Err(payload) => {
+            let message = if let Some(s) = payload.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "<non-string panic payload>".to_string()
+            };
+            diag(&format!("stage: panic caught at FFI boundary: {message}"));
+            unsafe { write_error(err_buf, err_len, &format!("Rust panic（已攔截）: {message}")) };
+            APPARITION_LOGIN_FAILED
+        }
+    }
+}
+
+/// Lists the stored session's developer teams through isideload's own
+/// request shape, rebuilding the DeveloperSession from the stored Xcode
+/// app token + adsid. Anisette comes from the app via `headers_cb`
+/// (same callback contract as `apparition_login_with_headers`); the
+/// claim is the Android label the sign-in used (the developer client
+/// itself claims the Mac identity, as after a sign-in). Returns 0 with
+/// a JSON summary {"teams":[{name,id,type}]} in `out_summary`, 2 with
+/// the error in `err_buf`, -2 on invalid arguments.
+#[no_mangle]
+pub unsafe extern "C" fn apparition_dev_list_teams(
+    token: *const c_char,
+    adsid: *const c_char,
+    claim_client_info: *const c_char,
+    headers_cb: HeadersCallback,
+    headers_ctx: *mut c_void,
+    out_summary: *mut c_char,
+    out_summary_cap: usize,
+    err_buf: *mut c_char,
+    err_len: usize,
+) -> i32 {
+    let parsed = (|| -> std::result::Result<(String, String, CallbackProvider), i32> {
+        let token = unsafe { read_str(token, "token") }?;
+        let adsid = unsafe { read_str(adsid, "adsid") }?;
+        let claim = unsafe { read_str(claim_client_info, "claim_client_info") }?;
+        let provider = CallbackProvider {
+            cb: headers_cb,
+            ctx: headers_ctx as usize,
+            claim: AnisetteClientInfo { client_info: claim, user_agent: USER_AGENT.to_string() },
+        };
+        Ok((token, adsid, provider))
+    })();
+    let (token, adsid, provider) = match parsed {
+        Ok(values) => values,
+        Err(code) => {
+            let message = crate::LAST_ERROR.lock().map(|slot| slot.clone()).unwrap_or_default();
+            unsafe { write_error(err_buf, err_len, &message) };
+            return code;
+        }
+    };
+    finish_dev(dev_list_teams(token, adsid, provider), out_summary, out_summary_cap, err_buf, err_len)
 }

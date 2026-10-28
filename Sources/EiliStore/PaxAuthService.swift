@@ -48,6 +48,7 @@ public final class PaxAuthService {
             return nil
         }
         UserDefaults.standard.set(EiliAnisetteMode.remote.rawValue, forKey: EiliAnisetteMode.sessionKey)
+        UserDefaults.standard.set(EiliLoginMethod.sideSign.rawValue, forKey: EiliLoginMethod.sessionOriginKey)
         return appleID
     }
 
@@ -155,7 +156,7 @@ public final class PaxAuthService {
             EiliLoginDiagnostics.record(.authenticationReturned, for: diagnosticAttempt)
             try Task.checkCancellation()
             guard !codeProvider.isCancelled else { throw CancellationError() }
-            return try saveSession(session, appleID: appleID, anisetteMode: anisetteMode, codeProvider: codeProvider, diagnosticAttempt: diagnosticAttempt)
+            return try saveSession(session, appleID: appleID, anisetteMode: anisetteMode, loginMethod: .rust, codeProvider: codeProvider, diagnosticAttempt: diagnosticAttempt)
         }
 
         // 2. SideSign 登入（2FA 在同一次調用內等待輸入）
@@ -222,12 +223,12 @@ public final class PaxAuthService {
 
         // SideSign 必須先回傳真正的 AuthSession；兩項保存視為同一筆交易。
         // 寫入失敗不能破壞既有登入，也不能留下新舊帳號混合的狀態。
-        return try saveSession(session, appleID: appleID, anisetteMode: anisetteMode, codeProvider: codeProvider, diagnosticAttempt: diagnosticAttempt)
+        return try saveSession(session, appleID: appleID, anisetteMode: anisetteMode, loginMethod: .sideSign, codeProvider: codeProvider, diagnosticAttempt: diagnosticAttempt)
     }
     
     /// 保存一筆登入成果（兩種登入方式共用）：session 與 Apple ID 視為同一筆
     /// 交易，寫入失敗就回滾，不破壞既有登入、不留下新舊帳號混合的狀態。
-    private func saveSession(_ session: SideSign.AuthSession, appleID: String, anisetteMode: EiliAnisetteMode, codeProvider: TwoFACodeProvider, diagnosticAttempt: UUID) throws -> Bool {
+    private func saveSession(_ session: SideSign.AuthSession, appleID: String, anisetteMode: EiliAnisetteMode, loginMethod: EiliLoginMethod, codeProvider: TwoFACodeProvider, diagnosticAttempt: UUID) throws -> Bool {
         EiliLoginDiagnostics.record(.sessionSaving, for: diagnosticAttempt)
         let previousSession = KeychainHelper.load(forKey: KeychainKey.session)
         let previousAppleID = KeychainHelper.load(forKey: KeychainKey.appleID)
@@ -238,6 +239,7 @@ public final class PaxAuthService {
             throw LoginError.sessionSaveFailed
         }
         UserDefaults.standard.set(anisetteMode.rawValue, forKey: EiliAnisetteMode.sessionKey)
+        UserDefaults.standard.set(loginMethod.rawValue, forKey: EiliLoginMethod.sessionOriginKey)
         codeProvider.log("登入資料已安全保存")
         print("[PaxStore] 登入成功")
         return true
@@ -286,6 +288,7 @@ public final class PaxAuthService {
         KeychainHelper.delete(forKey: KeychainKey.session)
         KeychainHelper.delete(forKey: KeychainKey.appleID)
         UserDefaults.standard.removeObject(forKey: EiliAnisetteMode.sessionKey)
+        UserDefaults.standard.removeObject(forKey: EiliLoginMethod.sessionOriginKey)
         print("[PaxStore] 已登出，session 已清除")
     }
     
