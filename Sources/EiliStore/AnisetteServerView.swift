@@ -113,19 +113,33 @@ struct AnisetteServerView: View {
                 }
             }
         }
-        .alert("編輯 Catalog 來源", isPresented: $showingEditCatalog) {
-            TextField("Server List URL", text: $editCatalogURL)
-                .autocapitalization(.none)
-                .keyboardType(.URL)
-            Button("取消", role: .cancel) {}
-            Button("儲存") {
-                if !editCatalogURL.isEmpty, URL(string: editCatalogURL) != nil {
-                    manager.catalogURL = editCatalogURL
-                    catalogURL = editCatalogURL
+        // 同 AppIDsView 的教訓：.alert 夾 TextField 在 iOS 15 不渲染輸入欄，
+        // 改用與本頁「新增伺服器」相同的 sheet 表單形狀。
+        .sheet(isPresented: $showingEditCatalog) {
+            NavigationView {
+                Form {
+                    Section(footer: Text("修改後點右上角刷新按鈕重新抓取")) {
+                        TextField("Server List URL", text: $editCatalogURL)
+                            .autocapitalization(.none)
+                            .keyboardType(.URL)
+                    }
+                }
+                .navigationTitle("編輯 Catalog 來源")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("取消") { showingEditCatalog = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("儲存") {
+                            if !editCatalogURL.isEmpty, URL(string: editCatalogURL) != nil {
+                                manager.catalogURL = editCatalogURL
+                                catalogURL = editCatalogURL
+                            }
+                            showingEditCatalog = false
+                        }
+                    }
                 }
             }
-        } message: {
-            Text("修改後點右上角刷新按鈕重新抓取")
         }
         .alert("刷新失敗", isPresented: Binding(
             get: { refreshError != nil },

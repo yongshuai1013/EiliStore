@@ -81,10 +81,27 @@ struct FileBrowserView: View {
         .sheet(item: $shareItem) { item in
             ShareSheet(url: item.url)
         }
-        .alert("重新命名", isPresented: $showRenameAlert) {
-            TextField("名稱", text: $renameText)
-            Button("確定") { doRename() }
-            Button("取消", role: .cancel) { }
+        // 同 AppIDsView 的教訓：.alert 夾 TextField 在 iOS 15 不渲染輸入欄，
+        // 改用 sheet 表單。
+        .sheet(isPresented: $showRenameAlert) {
+            NavigationView {
+                Form {
+                    TextField("名稱", text: $renameText)
+                }
+                .navigationTitle("重新命名")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("取消") { showRenameAlert = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("確定") {
+                            doRename()
+                            showRenameAlert = false
+                        }
+                        .disabled(renameText.isEmpty)
+                    }
+                }
+            }
         }
         .alert("提示", isPresented: Binding(
             get: { errorMessage != nil },

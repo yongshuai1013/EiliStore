@@ -9,7 +9,7 @@ struct AppIDsView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     
-    @State private var showCreateAlert = false
+    @State private var showCreateSheet = false
     @State private var newName = ""
     @State private var newBundleID = ""
     
@@ -43,7 +43,7 @@ struct AppIDsView: View {
             
             Section(header: Text("APP IDS (\(appIDs.count))")) {
                 Button("創建新 App ID") {
-                    showCreateAlert = true
+                    showCreateSheet = true
                 }
                 .disabled(selectedTeam == nil || isLoading)
                 
@@ -74,17 +74,40 @@ struct AppIDsView: View {
         }
         .navigationTitle("App ID 管理")
         .onAppear { loadTeams() }
-        .alert("創建 App ID", isPresented: $showCreateAlert) {
-            TextField("名稱", text: $newName)
-            TextField("Bundle ID", text: $newBundleID)
-            Button("創建") {
-                if let team = selectedTeam {
-                    createAppID(name: newName, bundleID: newBundleID, for: team)
+        // 原本用 .alert 夾 TextField 收輸入：iOS 15 的 SwiftUI 不渲染 alert 裡的
+        // 輸入欄（真機實證：對話框只剩標題與按鈕），每次創建都送空值給 Apple、
+        // 換來 35「appIdentifierString 未提供值」。改用與 PortalCreateAppIDView
+        // 相同的 sheet 表單（該形狀在真機可用）。
+        .sheet(isPresented: $showCreateSheet) {
+            NavigationView {
+                Form {
+                    Section(header: Text("App ID"), footer: Text("Bundle ID 使用反向網域格式，例如 com.example.myapp。")) {
+                        TextField("名稱", text: $newName)
+                        TextField("Bundle ID", text: $newBundleID)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                    }
+                }
+                .navigationTitle("創建 App ID")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("取消") { showCreateSheet = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("創建") {
+                            if let team = selectedTeam {
+                                let name = newName
+                                let bundleID = newBundleID
+                                showCreateSheet = false
+                                createAppID(name: name, bundleID: bundleID, for: team)
+                            }
+                        }
+                        .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                  || newBundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                  || selectedTeam == nil || isLoading)
+                    }
                 }
             }
-            Button("取消", role: .cancel) { }
-        } message: {
-            Text("輸入 App 名稱和 Bundle Identifier")
         }
         .alert("刪除 App ID？", isPresented: $showDeleteAlert) {
             Button("刪除", role: .destructive) {
