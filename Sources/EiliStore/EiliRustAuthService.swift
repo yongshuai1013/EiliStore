@@ -81,11 +81,31 @@ final class EiliRustAuthService {
         }
 
         let androidLabel = EiliRustLoginSettings.androidClientInfo
-        codeProvider.log("Rust 登入：安卓標籤 \(androidLabel)")
+        let useNative = EiliRustAnisetteSource.selected == .nativeEngine
+        if useNative {
+            // 原生引擎：anisette 不經回調，由 Rust 內 LocalAdiProvider 自取；
+            // 登入前先把運行庫與引擎備好（需已開 JIT）。
+            codeProvider.log("Rust 登入：anisette 來源＝Apparition 原生引擎（需 JIT）")
+            do {
+                try await EiliNativeAnisetteEngine.shared.prepare { codeProvider.log($0) }
+            } catch {
+                throw RustLoginError.failed(error.localizedDescription)
+            }
+        } else {
+            codeProvider.log("Rust 登入：安卓標籤 \(androidLabel)")
+        }
+        let nativeIdentifier = EiliNativeAnisetteEngine.shared.identifier.uuidString
+        let nativeDataDir = EiliNativeAnisetteEngine.shared.provDir.path
 
         let outcome: (Int32, String) = await Task.detached(priority: .userInitiated) {
-            Self.runFFI(appleID: appleID, password: password, androidLabel: androidLabel)
+            if useNative {
+                return Self.runNativeFFI(appleID: appleID, password: password, identifier: nativeIdentifier, dataDir: nativeDataDir)
+            }
+            return Self.runFFI(appleID: appleID, password: password, androidLabel: androidLabel)
         }.value
+        if useNative, outcome.0 == 0 {
+            attempt.lastAnisette = EiliNativeAnisetteEngine.shared.snapshotAnisette()
+        }
 
         guard outcome.0 == 0 else {
             throw RustLoginError.failed(outcome.1)
@@ -130,6 +150,21 @@ final class EiliRustAuthService {
         return (rc, String(cString: rc == 0 ? summary : err))
     }
 
+    /// Native-engine variant: the ADI engine must already be running
+    /// (see EiliNativeAnisetteEngine.prepare); Rust's LocalAdiProvider
+    /// serves anisette from it and provisions through GrandSlam itself.
+    private static func runNativeFFI(appleID: String, password: String, identifier: String, dataDir: String) -> (Int32, String) {
+        var summary = [CChar](repeating: 0, count: 65536)
+        var err = [CChar](repeating: 0, count: 65536)
+        let rc = apparition_login(
+            appleID, password, identifier, dataDir,
+            eiliTwoFactorCallback, nil,
+            &summary, summary.count,
+            &err, err.count
+        )
+        return (rc, String(cString: rc == 0 ? summary : err))
+    }
+
     // MARK: - Callback plumbing (used by the @_cdecl shims below)
 
     fileprivate static func headersJSON(kind: Int32) -> String? {
@@ -142,7 +177,7 @@ final class EiliRustAuthService {
                 let dict: [String: Any] = [
                     "machine_id": data.machineID,
                     "one_time_password": data.oneTimePassword,
-                    "routing_info": UInt64(data.routingInfo) ?? 17106176,
+                    "routing_info": data.routingInfo.isEmpty ? "17106176" : data.routingInfo,
                     "device_id": data.deviceID,
                     "local_user_id": data.localUserID,
                 ]

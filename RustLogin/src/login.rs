@@ -350,7 +350,15 @@ impl AnisetteProvider for CallbackProvider {
         };
         let value: serde_json::Value = serde_json::from_str(&json).map_err(|e| rootcause::report!("anisette callback returned bad JSON: {e}"))?;
         let field = |name: &str| -> Result<String, Report> {
-            value.get(name).and_then(|v| v.as_str()).map(|s| s.to_string()).ok_or_else(|| rootcause::report!("anisette JSON missing {name}"))
+            // Accept JSON strings, and also bare numbers (routing_info is
+            // numeric in spirit; a sender encoding it as a JSON number is
+            // not "missing" it).
+            let parsed = value.get(name).and_then(|v| {
+                v.as_str().map(|s| s.to_string())
+                    .or_else(|| v.as_u64().map(|n| n.to_string()))
+                    .or_else(|| v.as_i64().map(|n| n.to_string()))
+            });
+            parsed.ok_or_else(|| rootcause::report!("anisette JSON missing {name}"))
         };
         Ok(AnisetteDataResponse::Data(AnisetteData::new(
             field("machine_id")?,

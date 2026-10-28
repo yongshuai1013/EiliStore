@@ -14,6 +14,22 @@ enum EiliLoginMethod: String, CaseIterable {
     }
 }
 
+/// Rust 登入的 anisette 來源：App 現行那套（ODA Unicorn／遠端，經回調餵入，
+/// 免 JIT）或 Apparition 原生引擎（RustLogin crate 內已含 ELF 載入器，
+/// 在進程內直接執行 Android 庫，需 TrollStore 開 JIT；即 ODATest #20
+/// 實證成功的那一條）。
+enum EiliRustAnisetteSource: String, CaseIterable {
+    case appProvided
+    case nativeEngine
+
+    static let preferenceKey = "eilistore.rustLogin.anisetteSource"
+
+    static var selected: EiliRustAnisetteSource {
+        let raw = UserDefaults.standard.string(forKey: preferenceKey)
+        return EiliRustAnisetteSource(rawValue: raw ?? "") ?? .appProvided
+    }
+}
+
 /// Rust 登入的用戶設定。
 ///
 /// isideload 的登入自稱由 anisette provider 的 `get_client_info()` 決定，
