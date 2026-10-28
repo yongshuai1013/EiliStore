@@ -133,18 +133,19 @@ public final class PaxAuthService {
         // codeProvider；成功組成與 SideSign 相同的 AuthSession 後，走下方
         // 同一套保存交易。
         if EiliLoginMethod.selected == .rust {
+            let loginServers = anisetteServers
             EiliLoginDiagnostics.record(.authenticationStarted, for: diagnosticAttempt)
             codeProvider.log("步驟 2/3：向 Apple 登入（Rust / isideload）…")
             let session = try await EiliRustAuthService.shared.login(
                 appleID: appleID,
-                password: password
+                password: password,
                 xcodeVersion: clientConfiguration.resolvedXcodeVersion(),
                 codeProvider: codeProvider,
                 fetchAnisette: { _ in
                     try? await EiliAnisetteService.shared.fetch(
                         remoteIdentifier: identifier,
                         remoteBlob: existingBlob,
-                        servers: anisetteServers,
+                        servers: loginServers,
                         mode: anisetteMode,
                         configuration: clientConfiguration,
                         diagnosticAttempt: diagnosticAttempt
