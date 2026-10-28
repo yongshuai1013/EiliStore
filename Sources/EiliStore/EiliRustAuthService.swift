@@ -184,6 +184,56 @@ final class EiliRustAuthService {
         }
     }
 
+    /// 通用開發者操作（B 路線階段二）：把一個 isideload dev API 操作
+    /// （list_certs／submit_csr／add_device／download_team_profile 等）
+    /// 以保存的 token＋adsid 在 Rust 形狀下跑完，回傳解析後的 JSON。
+    func devOp(
+        _ op: String,
+        params: [String: Any],
+        token: String,
+        adsid: String,
+        fetchAnisette: @escaping (Bool) async -> SideSign.AnisetteData?
+    ) async throws -> [String: Any] {
+        let attempt = Attempt(codeProvider: TwoFACodeProvider(), fetchAnisette: fetchAnisette)
+        Self.attemptLock.lock()
+        Self.currentAttempt = attempt
+        Self.attemptLock.unlock()
+        defer {
+            Self.attemptLock.lock()
+            if Self.currentAttempt === attempt { Self.currentAttempt = nil }
+            Self.attemptLock.unlock()
+        }
+
+        guard let paramsData = try? JSONSerialization.data(withJSONObject: params),
+              let paramsJSON = String(data: paramsData, encoding: .utf8) else {
+            throw RustLoginError.badResult("dev op 參數無法序列化：\(op)")
+        }
+        let androidLabel = EiliRustLoginSettings.androidClientInfo
+        let outcome: (Int32, String) = await Task.detached(priority: .userInitiated) {
+            Self.runDevOpFFI(op: op, paramsJSON: paramsJSON, token: token, adsid: adsid, androidLabel: androidLabel)
+        }.value
+        guard outcome.0 == 0 else {
+            throw RustLoginError.devFailed(outcome.1)
+        }
+        guard let data = outcome.1.data(using: .utf8),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw RustLoginError.badResult(outcome.1)
+        }
+        return object
+    }
+
+    private static func runDevOpFFI(op: String, paramsJSON: String, token: String, adsid: String, androidLabel: String) -> (Int32, String) {
+        var summary = [CChar](repeating: 0, count: 65536)
+        var err = [CChar](repeating: 0, count: 65536)
+        let rc = apparition_dev_op(
+            op, paramsJSON, token, adsid, androidLabel,
+            eiliHeadersCallback, nil,
+            &summary, summary.count,
+            &err, err.count
+        )
+        return (rc, String(cString: rc == 0 ? summary : err))
+    }
+
     private static func teamType(from raw: String) -> SideSign.TeamType {
         let lower = raw.lowercased()
         if lower.contains("organization") || lower.contains("company") { return .organization }

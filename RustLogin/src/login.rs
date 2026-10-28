@@ -27,7 +27,12 @@ use isideload::anisette::{AnisetteClientInfo, AnisetteData, AnisetteDataGenerato
 use isideload::auth::apple_account::{AppToken, AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse};
 use isideload::auth::grandslam::GrandSlam;
 use isideload::dev::developer_session::DeveloperSession;
-use isideload::dev::teams::TeamsApi;
+use isideload::dev::app_groups::{AppGroup, AppGroupsApi};
+use isideload::dev::app_ids::{AppId, AppIdsApi};
+use isideload::dev::certificates::CertificatesApi;
+use isideload::dev::device_type::DeveloperDeviceType;
+use isideload::dev::devices::DevicesApi;
+use isideload::dev::teams::{DeveloperTeam, TeamsApi};
 use plist::Dictionary;
 use plist_macro::plist;
 use rootcause::prelude::*;
@@ -724,4 +729,235 @@ pub unsafe extern "C" fn apparition_dev_list_teams(
         }
     };
     finish_dev(dev_list_teams(token, adsid, provider), out_summary, out_summary_cap, err_buf, err_len)
+}
+
+// MARK: - Developer operations dispatcher (path B, phase 2)
+//
+// One generic entry point for the portal operations the signing /
+// refresh pipeline needs. Each call rebuilds the DeveloperSession from
+// the stored token + adsid exactly like `apparition_dev_list_teams`,
+// runs one isideload dev-API operation, and returns a small JSON
+// document for the host to map onto its own model types.
+
+fn app_id_json(app_id: &AppId) -> serde_json::Value {
+    let mut features = serde_json::Map::new();
+    for (key, value) in app_id.features.iter() {
+        let mapped = match value {
+            plist::Value::String(text) => serde_json::json!(text),
+            plist::Value::Boolean(flag) => serde_json::json!(if *flag { "true" } else { "false" }),
+            plist::Value::Integer(number) => serde_json::json!(number.to_string()),
+            _ => serde_json::json!(format!("{value:?}")),
+        };
+        features.insert(key.clone(), mapped);
+    }
+    serde_json::json!({
+        "app_id_id": app_id.app_id_id,
+        "identifier": app_id.identifier,
+        "name": app_id.name,
+        "features": features,
+    })
+}
+
+fn app_group_json(group: &AppGroup) -> serde_json::Value {
+    serde_json::json!({
+        "application_group": group.application_group,
+        "identifier": group.identifier,
+        "name": group.name.clone().unwrap_or_default(),
+    })
+}
+
+fn device_json(device: &isideload::dev::devices::DeveloperDevice) -> serde_json::Value {
+    serde_json::json!({
+        "device_id": device.device_id.clone().unwrap_or_default(),
+        "device_number": device.device_number,
+        "name": device.name.clone().unwrap_or_default(),
+        "status": device.status.clone().unwrap_or_default(),
+    })
+}
+
+fn param_str<'a>(params: &'a serde_json::Value, key: &str) -> String {
+    params.get(key).and_then(|v| v.as_str()).unwrap_or_default().to_string()
+}
+
+async fn dev_op(op: String, params: serde_json::Value, token: String, adsid: String, provider: CallbackProvider) -> Result<String, Report> {
+    let client = GrandSlam::new(mac_info(), false, None).await.context("Failed to build the developer client")?;
+    let generator = AnisetteDataGenerator::new(Arc::new(RwLock::new(provider)));
+    let app_token = AppToken { token, duration: 0, expiry: 0 };
+    let mut session = DeveloperSession::new(app_token, adsid, Arc::new(client), generator);
+    let team = DeveloperTeam {
+        name: None,
+        team_id: param_str(&params, "team_id"),
+        r#type: None,
+        status: None,
+    };
+    let ios = DeveloperDeviceType::Ios;
+
+    let payload: serde_json::Value = match op.as_str() {
+        "list_certs" => {
+            let certs = session.list_ios_certs(&team).await.context("Failed to list certificates")?;
+            serde_json::json!({
+                "certs": certs.iter().map(|c| serde_json::json!({
+                    "certificate_id": c.certificate_id.clone().unwrap_or_default(),
+                    "serial_number": c.serial_number.clone().unwrap_or_default(),
+                    "machine_name": c.machine_name.clone().unwrap_or_default(),
+                    "machine_id": c.machine_id.clone().unwrap_or_default(),
+                    "status": c.status.clone().unwrap_or_default(),
+                    "cert_content_b64": c.cert_content.as_ref().map(|d| B64.encode(d.as_ref())).unwrap_or_default(),
+                })).collect::<Vec<_>>(),
+            })
+        }
+        "submit_csr" => {
+            let request = session
+                .submit_development_csr(&team, param_str(&params, "csr_content"), param_str(&params, "machine_name"), ios)
+                .await
+                .context("Failed to submit development CSR")?;
+            serde_json::json!({ "cert_request_id": request.cert_request_id })
+        }
+        "revoke_cert" => {
+            session
+                .revoke_development_cert(&team, &param_str(&params, "serial_number"), ios)
+                .await
+                .context("Failed to revoke certificate")?;
+            serde_json::json!({})
+        }
+        "list_devices" => {
+            let devices = session.list_devices(&team, ios).await.context("Failed to list devices")?;
+            serde_json::json!({ "devices": devices.iter().map(device_json).collect::<Vec<_>>() })
+        }
+        "add_device" => {
+            let device = session
+                .add_device(&team, &param_str(&params, "name"), &param_str(&params, "device_number"), ios)
+                .await
+                .context("Failed to add device")?;
+            serde_json::json!({ "device": device_json(&device) })
+        }
+        "list_app_ids" => {
+            let response = session.list_app_ids(&team, ios).await.context("Failed to list app IDs")?;
+            serde_json::json!({ "app_ids": response.app_ids.iter().map(app_id_json).collect::<Vec<_>>() })
+        }
+        "add_app_id" => {
+            let app_id = session
+                .add_app_id(&team, &param_str(&params, "name"), &param_str(&params, "identifier"), ios)
+                .await
+                .context("Failed to add app ID")?;
+            serde_json::json!({ "app_id": app_id_json(&app_id) })
+        }
+        "update_app_id" => {
+            let app_id = AppId {
+                app_id_id: param_str(&params, "app_id_id"),
+                identifier: param_str(&params, "identifier"),
+                name: param_str(&params, "name"),
+                features: plist::Dictionary::new(),
+                expiration_date: None,
+            };
+            let mut features = plist::Dictionary::new();
+            if let Some(map) = params.get("features").and_then(|v| v.as_object()) {
+                for (key, value) in map {
+                    if let Some(text) = value.as_str() {
+                        features.insert(key.clone(), plist::Value::String(text.to_string()));
+                    }
+                }
+            }
+            let updated = session.update_app_id(&team, &app_id, features, ios).await.context("Failed to update app ID")?;
+            serde_json::json!({ "app_id": app_id_json(&updated) })
+        }
+        "delete_app_id" => {
+            session.delete_app_id(&team, &param_str(&params, "app_id_id"), ios).await.context("Failed to delete app ID")?;
+            serde_json::json!({})
+        }
+        "list_app_groups" => {
+            let groups = session.list_app_groups(&team, ios).await.context("Failed to list app groups")?;
+            serde_json::json!({ "groups": groups.iter().map(app_group_json).collect::<Vec<_>>() })
+        }
+        "add_app_group" => {
+            let group = session
+                .add_app_group(&team, &param_str(&params, "name"), &param_str(&params, "identifier"), ios)
+                .await
+                .context("Failed to add app group")?;
+            serde_json::json!({ "group": app_group_json(&group) })
+        }
+        "assign_app_group" => {
+            let group = AppGroup {
+                name: Some(param_str(&params, "group_name")),
+                identifier: param_str(&params, "group_identifier"),
+                application_group: param_str(&params, "application_group"),
+            };
+            let app_id = AppId {
+                app_id_id: param_str(&params, "app_id_id"),
+                identifier: String::new(),
+                name: String::new(),
+                features: plist::Dictionary::new(),
+                expiration_date: None,
+            };
+            session.assign_app_group(&team, &group, &app_id, ios).await.context("Failed to assign app group")?;
+            serde_json::json!({})
+        }
+        "download_team_profile" => {
+            let app_id = AppId {
+                app_id_id: param_str(&params, "app_id_id"),
+                identifier: param_str(&params, "identifier"),
+                name: param_str(&params, "name"),
+                features: plist::Dictionary::new(),
+                expiration_date: None,
+            };
+            let profile = session
+                .download_team_provisioning_profile(&team, &app_id, ios)
+                .await
+                .context("Failed to download team provisioning profile")?;
+            serde_json::json!({
+                "profile_b64": B64.encode(profile.encoded_profile.as_ref()),
+                "provisioning_profile_id": profile.provisioning_profile_id,
+                "uuid": profile.uuid,
+                "name": profile.name,
+            })
+        }
+        other => {
+            return Err(rootcause::report!("unknown dev op: {other}"));
+        }
+    };
+    Ok(payload.to_string())
+}
+
+/// Runs one developer-portal operation (see `dev_op`) against the
+/// stored session. `op` names the operation, `params_json` carries its
+/// arguments (always including "team_id"). Same return contract as
+/// `apparition_dev_list_teams`.
+#[no_mangle]
+pub unsafe extern "C" fn apparition_dev_op(
+    op: *const c_char,
+    params_json: *const c_char,
+    token: *const c_char,
+    adsid: *const c_char,
+    claim_client_info: *const c_char,
+    headers_cb: HeadersCallback,
+    headers_ctx: *mut c_void,
+    out_summary: *mut c_char,
+    out_summary_cap: usize,
+    err_buf: *mut c_char,
+    err_len: usize,
+) -> i32 {
+    let parsed = (|| -> std::result::Result<(String, serde_json::Value, String, String, CallbackProvider), i32> {
+        let op = unsafe { read_str(op, "op") }?;
+        let params_text = unsafe { read_str(params_json, "params_json") }?;
+        let params: serde_json::Value = serde_json::from_str(&params_text)
+            .map_err(|_| fail(APPARITION_INVALID_ARGUMENT, "params_json isn't valid JSON"))?;
+        let token = unsafe { read_str(token, "token") }?;
+        let adsid = unsafe { read_str(adsid, "adsid") }?;
+        let claim = unsafe { read_str(claim_client_info, "claim_client_info") }?;
+        let provider = CallbackProvider {
+            cb: headers_cb,
+            ctx: headers_ctx as usize,
+            claim: AnisetteClientInfo { client_info: claim, user_agent: USER_AGENT.to_string() },
+        };
+        Ok((op, params, token, adsid, provider))
+    })();
+    let (op, params, token, adsid, provider) = match parsed {
+        Ok(values) => values,
+        Err(code) => {
+            let message = crate::LAST_ERROR.lock().map(|slot| slot.clone()).unwrap_or_default();
+            unsafe { write_error(err_buf, err_len, &message) };
+            return code;
+        }
+    };
+    finish_dev(dev_op(op, params, token, adsid, provider), out_summary, out_summary_cap, err_buf, err_len)
 }

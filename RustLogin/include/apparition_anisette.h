@@ -100,6 +100,21 @@ int32_t apparition_dev_list_teams(const char *token, const char *adsid,
                                   char *out_summary, size_t out_summary_cap,
                                   char *err_buf, size_t err_len);
 
+/// Runs one developer-portal operation against the stored session
+/// (op name + JSON params, always including "team_id"): list_certs,
+/// submit_csr, revoke_cert, list_devices, add_device, list_app_ids,
+/// add_app_id, update_app_id, delete_app_id, list_app_groups,
+/// add_app_group, assign_app_group, download_team_profile. The
+/// DeveloperSession is rebuilt from the stored token + adsid, anisette
+/// via `headers_cb`. Returns 0 with a JSON result in `out_summary`,
+/// 2 with the error in `err_buf`, -2 on invalid arguments.
+int32_t apparition_dev_op(const char *op, const char *params_json,
+                          const char *token, const char *adsid,
+                          const char *claim_client_info,
+                          apparition_headers_callback headers_cb, void *headers_ctx,
+                          char *out_summary, size_t out_summary_cap,
+                          char *err_buf, size_t err_len);
+
 /// Sets the file the Rust login writes stage markers and panic reports
 /// to (it survives a crash, so the app can show it on next launch).
 void apparition_set_diagnostic_log(const char *path);

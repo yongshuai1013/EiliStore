@@ -131,6 +131,11 @@ public final class PaxSigningService {
     /// 獲取指定 Team 下的所有證書
     public func fetchCertificates(for team: SideSign.Team) async throws -> [SideSign.X509Certificate] {
         let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            let certs = try await rustFetchCertificates(team: team, session: session)
+            print("[PaxStore] 找到 \(certs.count) 個證書（Rust Portal）")
+            return certs
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let certs = try await portal.fetchCertificates(
             for: team,
@@ -144,6 +149,11 @@ public final class PaxSigningService {
     /// - Returns: 包含私鑰的 KeyStore（必須保存好，簽名時要用）
     public func createCertificate(for team: SideSign.Team, machineName: String = "PaxStore") async throws -> SideSign.KeyStore {
         let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            let keyStore = try await rustCreateCertificate(team: team, machineName: machineName, session: session)
+            print("[PaxStore] 證書創建成功（Rust Portal）")
+            return keyStore
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let keyStore = try await portal.addCertificate(
             machineName: machineName,
@@ -195,6 +205,14 @@ public final class PaxSigningService {
     /// 撤銷指定證書
     public func revokeCertificate(_ certificate: SideSign.X509Certificate, for team: SideSign.Team) async throws {
         let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            _ = try await rustDevOp("revoke_cert", params: [
+                "team_id": team.identifier,
+                "serial_number": certificate.serialNumber,
+            ], session: session)
+            print("[PaxStore] 證書已撤銷（Rust Portal）")
+            return
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let success = try await portal.revokeCertificate(
             certificate,
