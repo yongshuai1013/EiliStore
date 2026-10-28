@@ -164,6 +164,7 @@ dependencies = [
  "plist-macro",
  "rootcause",
  "rustls",
+ "serde",
  "serde_json",
  "sha2 0.11.1",
  "tokio",

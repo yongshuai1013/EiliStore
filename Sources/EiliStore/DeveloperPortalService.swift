@@ -57,31 +57,49 @@ public final class DeveloperPortalService: DeveloperPortalServicing, Sendable {
     }
     public func fetchTeams() async throws -> [SideSign.Team] {
         let (account, session) = try await fresh()
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustTeams(account: account, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.fetchTeams(for: account, session: session)
     }
     public func fetchAppIDs(for team: SideSign.Team) async throws -> [SideSign.AppID] {
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustListAppIDs(team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.fetchAppIDs(for: team, session: session)
     }
     public func fetchProfiles(for team: SideSign.Team) async throws -> [SideSign.ListedProvisioningProfile] {
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustListProfiles(team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.listProvisioningProfiles(for: team, session: session)
     }
     public func fetchCertificates(for team: SideSign.Team) async throws -> [SideSign.X509Certificate] {
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustFetchCertificates(team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.fetchCertificates(for: team, session: session)
     }
     public func fetchAppGroups(for team: SideSign.Team) async throws -> [SideSign.AppGroup] {
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustListAppGroups(team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.fetchAppGroups(for: team, session: session)
     }
     public func fetchDevices(for team: SideSign.Team) async throws -> [SideSign.Device] {
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustListDevices(team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.fetchDevices(for: team, types: .all, session: session)
     }
@@ -98,6 +116,9 @@ public final class DeveloperPortalService: DeveloperPortalServicing, Sendable {
     public func createProfile(name: String, appID: SideSign.AppID, certificateIDs: [String], deviceIDs: [String], type: SideSign.ProfileType, for team: SideSign.Team) async throws -> SideSign.ProvisioningProfile {
         try validateProfile(name: name, appID: appID.identifier, certificateIDs: certificateIDs, deviceIDs: deviceIDs, type: type, team: team)
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustCreateProfile(name: name, appID: appID, certificateIDs: certificateIDs, deviceIDs: deviceIDs, team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.createProvisioningProfile(name: name, appID: appID, certificateIDs: certificateIDs, deviceIDs: deviceIDs, type: type, team: team, session: session)
     }
@@ -106,6 +127,9 @@ public final class DeveloperPortalService: DeveloperPortalServicing, Sendable {
         try DeveloperPortalValidation.requireIdentifier(id)
         try validateProfile(name: name, appID: appIDId, certificateIDs: certificateIDs, deviceIDs: deviceIDs, type: type, team: team)
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustUpdateProfile(profileID: id, name: name, appIDId: appIDId, certificateIDs: certificateIDs, deviceIDs: deviceIDs, team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.updateProvisioningProfile(profileID: id, name: name, appIDId: appIDId, certificateIDs: certificateIDs, deviceIDs: deviceIDs, type: type, team: team, session: session)
     }
@@ -117,6 +141,9 @@ public final class DeveloperPortalService: DeveloperPortalServicing, Sendable {
     public func downloadProfile(_ profile: SideSign.ListedProvisioningProfile, for team: SideSign.Team) async throws -> SideSign.ProvisioningProfile {
         let id = try profileIdentifier(profile)
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustDownloadProfile(profileID: id, team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.downloadProvisioningProfile(profileID: id, team: team, session: session)
     }
@@ -124,12 +151,19 @@ public final class DeveloperPortalService: DeveloperPortalServicing, Sendable {
         try DeveloperPortalValidation.requireIdentifier(appID.identifier)
         guard SideSign.ProfileType.allCases.contains(type), !(team.type == .free && type.isPaidOnly) else { throw DeveloperPortalValidationError.invalidProfileConfiguration }
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustGenerateProfile(appID: appID, team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.downloadProvisioningProfile(for: appID, type: type, team: team, session: session)
     }
     public func deleteProfile(_ profile: SideSign.ListedProvisioningProfile, for team: SideSign.Team) async throws {
         let id = try profileIdentifier(profile)
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            try await PaxSigningService.shared.rustDeleteProfile(profileID: id, team: team, session: session)
+            return
+        }
         let portal = try await portalProvider()
         guard try await portal.deleteProvisioningProfile(profileID: id, team: team, session: session) else { throw DeveloperPortalValidationError.operationFailed }
     }
@@ -148,6 +182,9 @@ public final class DeveloperPortalService: DeveloperPortalServicing, Sendable {
         try DeveloperPortalValidation.validateName(name)
         try DeveloperPortalValidation.validateAppGroupIdentifier(groupIdentifier)
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustCreateAppGroup(name: name, groupIdentifier: groupIdentifier, team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.addAppGroup(name: name, groupIdentifier: groupIdentifier, team: team, session: session)
     }
@@ -157,18 +194,29 @@ public final class DeveloperPortalService: DeveloperPortalServicing, Sendable {
         var updated = group
         updated.name = name
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustUpdateAppGroup(updated, team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.updateAppGroup(updated, team: team, session: session)
     }
     public func deleteAppGroup(_ group: SideSign.AppGroup, for team: SideSign.Team) async throws {
         try DeveloperPortalValidation.requireIdentifier(group.groupID)
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            try await PaxSigningService.shared.rustDeleteAppGroup(group, team: team, session: session)
+            return
+        }
         let portal = try await portalProvider()
         guard try await portal.deleteAppGroup(group, team: team, session: session) else { throw DeveloperPortalValidationError.operationFailed }
     }
     public func assignAppGroups(_ groups: [SideSign.AppGroup], to appID: SideSign.AppID, for team: SideSign.Team) async throws -> SideSign.AppID {
         try DeveloperPortalValidation.requireIdentifier(appID.identifier)
         for group in groups { try DeveloperPortalValidation.requireIdentifier(group.groupID) }
+        if PaxSigningService.shared.isRustSession {
+            let (_, session) = try await fresh(for: team)
+            return try await PaxSigningService.shared.rustAssignAppGroups(groups, to: appID, team: team, session: session)
+        }
         let (_, enablingSession) = try await fresh(for: team)
         let portal = try await portalProvider()
         var enabled = appID.copy()
@@ -183,6 +231,9 @@ public final class DeveloperPortalService: DeveloperPortalServicing, Sendable {
         try DeveloperPortalValidation.validateDeviceIdentifier(identifier)
         guard [SideSign.DeviceType.iPhone, .iPad, .appleTV, .appleWatch, .mac, .visionPro].contains(type) else { throw DeveloperPortalValidationError.invalidDeviceIdentifier }
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustRegisterDevice(name: name, identifier: identifier, team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.registerDevice(name: name, identifier: identifier, type: type, team: team, session: session)
     }
@@ -192,18 +243,28 @@ public final class DeveloperPortalService: DeveloperPortalServicing, Sendable {
         var updated = device
         updated.name = name
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustUpdateDevice(device, name: name, team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.updateDevice(updated, team: team, session: session)
     }
     public func disableDevice(_ device: SideSign.Device, for team: SideSign.Team) async throws -> SideSign.Device {
         try DeveloperPortalValidation.requireIdentifier(device.identifier)
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            return try await PaxSigningService.shared.rustDisableDevice(device, team: team, session: session)
+        }
         let portal = try await portalProvider()
         return try await portal.disableDevice(device, team: team, session: session)
     }
     public func deleteDevice(_ device: SideSign.Device, for team: SideSign.Team) async throws {
         try DeveloperPortalValidation.requireIdentifier(device.identifier)
         let (_, session) = try await fresh(for: team)
+        if PaxSigningService.shared.isRustSession {
+            try await PaxSigningService.shared.rustDeleteDevice(device, team: team, session: session)
+            return
+        }
         let portal = try await portalProvider()
         guard try await portal.deleteDevice(device, team: team, session: session) else { throw DeveloperPortalValidationError.operationFailed }
     }
