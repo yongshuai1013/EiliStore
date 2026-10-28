@@ -336,7 +336,6 @@ final class EiliRustAuthService {
                     }
                 } else {
                     let code = try await attempt.codeProvider.awaitCode(
-                        mode: sms ? .sms : .trustedDevice,
                         mode: voice ? .voice : (sms ? .sms : .trustedDevice),
                         rejected: lastError != nil
                     )
