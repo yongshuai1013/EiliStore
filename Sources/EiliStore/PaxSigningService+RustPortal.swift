@@ -99,4 +99,186 @@ extension PaxSigningService {
         }
         throw SigningError.certificateFailed("已送出 CSR，但證書清單裡找不到新證書")
     }
+
+    // MARK: - Developer Portal 頁面用（DeveloperPortalService 分流）
+
+    func rustTeams(account: SideSign.Account, session: SideSign.Session) async throws -> [SideSign.Team] {
+        let anisette = session.anisetteData
+        return try await EiliRustAuthService.shared.fetchTeams(
+            token: session.authToken, adsid: session.dsid, account: account,
+            fetchAnisette: { _ in anisette }
+        )
+    }
+
+    func rustListAppIDs(team: SideSign.Team, session: SideSign.Session) async throws -> [SideSign.AppID] {
+        let result = try await rustDevOp("list_app_ids", params: ["team_id": team.identifier], session: session)
+        return (result["app_ids"] as? [[String: Any]] ?? []).map(rustMapAppID)
+    }
+
+    func rustListAppGroups(team: SideSign.Team, session: SideSign.Session) async throws -> [SideSign.AppGroup] {
+        let result = try await rustDevOp("list_app_groups", params: ["team_id": team.identifier], session: session)
+        return (result["groups"] as? [[String: Any]] ?? []).map(rustMapAppGroup)
+    }
+
+    func rustListDevices(team: SideSign.Team, session: SideSign.Session) async throws -> [SideSign.Device] {
+        let result = try await rustDevOp("list_devices", params: ["team_id": team.identifier], session: session)
+        return (result["devices"] as? [[String: Any]] ?? []).map(rustMapDevice)
+    }
+
+    func rustMapListedProfile(_ dict: [String: Any]) -> SideSign.ListedProvisioningProfile? {
+        guard let name = dict["name"] as? String, !name.isEmpty,
+              let uuid = UUID(uuidString: dict["uuid"] as? String ?? "") else { return nil }
+        let expire = ISO8601DateFormatter().date(from: dict["date_expire_iso"] as? String ?? "") ?? .distantPast
+        return SideSign.ListedProvisioningProfile(
+            provisioningProfileId: (dict["provisioning_profile_id"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+            name: name,
+            status: (dict["status"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+            type: (dict["type"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+            uuid: uuid,
+            dateExpire: expire,
+            appId: SideSign.AppIDPayload(
+                appIdId: (dict["app_id_id"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                identifier: (dict["bundle_id"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                prefix: nil,
+                name: nil
+            ),
+            deviceIds: dict["device_ids"] as? [String],
+            isFreeProvisioningProfile: dict["is_free"] as? Bool,
+            isTeamProfile: dict["is_team_profile"] as? Bool
+        )
+    }
+
+    func rustListProfiles(team: SideSign.Team, session: SideSign.Session) async throws -> [SideSign.ListedProvisioningProfile] {
+        let result = try await rustDevOp("list_profiles", params: ["team_id": team.identifier], session: session)
+        return (result["profiles"] as? [[String: Any]] ?? []).compactMap(rustMapListedProfile)
+    }
+
+    func rustProfileFromResult(_ result: [String: Any]) throws -> SideSign.ProvisioningProfile {
+        guard let b64 = result["profile_b64"] as? String, let data = Data(base64Encoded: b64) else {
+            throw SigningError.profileFailed("Rust Portal 未回傳 profile")
+        }
+        return try SideSign.ProvisioningProfile(data: data)
+    }
+
+    func rustCreateProfile(name: String, appID: SideSign.AppID, certificateIDs: [String], deviceIDs: [String], team: SideSign.Team, session: SideSign.Session) async throws -> SideSign.ProvisioningProfile {
+        let result = try await rustDevOp("create_profile", params: [
+            "team_id": team.identifier, "name": name, "app_id_id": appID.identifier,
+            "certificate_ids": certificateIDs, "device_ids": deviceIDs,
+        ], session: session)
+        return try rustProfileFromResult(result)
+    }
+
+    func rustUpdateProfile(profileID: String, name: String, appIDId: String, certificateIDs: [String], deviceIDs: [String], team: SideSign.Team, session: SideSign.Session) async throws -> SideSign.ProvisioningProfile {
+        let result = try await rustDevOp("update_profile", params: [
+            "team_id": team.identifier, "provisioning_profile_id": profileID, "name": name, "app_id_id": appIDId,
+            "certificate_ids": certificateIDs, "device_ids": deviceIDs,
+        ], session: session)
+        return try rustProfileFromResult(result)
+    }
+
+    func rustDownloadProfile(profileID: String, team: SideSign.Team, session: SideSign.Session) async throws -> SideSign.ProvisioningProfile {
+        let result = try await rustDevOp("download_profile", params: [
+            "team_id": team.identifier, "provisioning_profile_id": profileID,
+        ], session: session)
+        return try rustProfileFromResult(result)
+    }
+
+    func rustGenerateProfile(appID: SideSign.AppID, team: SideSign.Team, session: SideSign.Session) async throws -> SideSign.ProvisioningProfile {
+        let result = try await rustDevOp("download_team_profile", params: [
+            "team_id": team.identifier, "app_id_id": appID.identifier,
+            "identifier": appID.bundleIdentifier, "name": appID.name,
+        ], session: session)
+        return try rustProfileFromResult(result)
+    }
+
+    func rustDeleteProfile(profileID: String, team: SideSign.Team, session: SideSign.Session) async throws {
+        _ = try await rustDevOp("delete_profile", params: [
+            "team_id": team.identifier, "provisioning_profile_id": profileID,
+        ], session: session)
+    }
+
+    func rustCreateAppGroup(name: String, groupIdentifier: String, team: SideSign.Team, session: SideSign.Session) async throws -> SideSign.AppGroup {
+        let result = try await rustDevOp("add_app_group", params: [
+            "team_id": team.identifier, "name": name, "identifier": groupIdentifier,
+        ], session: session)
+        guard let dict = result["group"] as? [String: Any] else {
+            throw SigningError.signingFailed("Rust Portal 未回傳 App Group")
+        }
+        return rustMapAppGroup(dict)
+    }
+
+    func rustUpdateAppGroup(_ group: SideSign.AppGroup, team: SideSign.Team, session: SideSign.Session) async throws -> SideSign.AppGroup {
+        let result = try await rustDevOp("update_app_group", params: [
+            "team_id": team.identifier, "name": group.name,
+            "application_group": group.groupID, "group_identifier": group.identifier,
+        ], session: session)
+        guard let dict = result["group"] as? [String: Any] else {
+            throw SigningError.signingFailed("Rust Portal 未回傳 App Group")
+        }
+        return rustMapAppGroup(dict)
+    }
+
+    func rustDeleteAppGroup(_ group: SideSign.AppGroup, team: SideSign.Team, session: SideSign.Session) async throws {
+        _ = try await rustDevOp("delete_app_group", params: [
+            "team_id": team.identifier, "application_group": group.groupID,
+        ], session: session)
+    }
+
+    func rustAssignAppGroups(_ groups: [SideSign.AppGroup], to appID: SideSign.AppID, team: SideSign.Team, session: SideSign.Session) async throws -> SideSign.AppID {
+        let updated = try await rustDevOp("update_app_id", params: [
+            "team_id": team.identifier, "app_id_id": appID.identifier,
+            "identifier": appID.bundleIdentifier, "name": appID.name,
+            "features": [SideSign.Feature.appGroups.rawValue: "true"],
+        ], session: session)
+        for group in groups {
+            _ = try await rustDevOp("assign_app_group", params: [
+                "team_id": team.identifier, "app_id_id": appID.identifier,
+                "application_group": group.groupID, "group_identifier": group.identifier, "group_name": group.name,
+            ], session: session)
+        }
+        if let dict = updated["app_id"] as? [String: Any] {
+            return rustMapAppID(dict)
+        }
+        return appID
+    }
+
+    func rustRegisterDevice(name: String, identifier: String, team: SideSign.Team, session: SideSign.Session) async throws -> SideSign.Device {
+        let result = try await rustDevOp("add_device", params: [
+            "team_id": team.identifier, "name": name, "device_number": identifier,
+        ], session: session)
+        guard let dict = result["device"] as? [String: Any] else {
+            throw SigningError.signingFailed("Rust Portal 未回傳設備")
+        }
+        return rustMapDevice(dict)
+    }
+
+    func rustUpdateDevice(_ device: SideSign.Device, name: String, team: SideSign.Team, session: SideSign.Session) async throws -> SideSign.Device {
+        let result = try await rustDevOp("update_device", params: [
+            "team_id": team.identifier, "name": name, "device_number": device.identifier,
+            "device_id": device.deviceID ?? "", "status": device.status ?? "",
+        ], session: session)
+        guard let dict = result["device"] as? [String: Any] else {
+            throw SigningError.signingFailed("Rust Portal 未回傳設備")
+        }
+        var mapped = rustMapDevice(dict)
+        mapped.type = device.type
+        return mapped
+    }
+
+    func rustDisableDevice(_ device: SideSign.Device, team: SideSign.Team, session: SideSign.Session) async throws -> SideSign.Device {
+        _ = try await rustDevOp("disable_device", params: [
+            "team_id": team.identifier, "device_number": device.identifier,
+            "device_id": device.deviceID ?? "", "name": device.name,
+        ], session: session)
+        var updated = device
+        updated.status = "d"
+        return updated
+    }
+
+    func rustDeleteDevice(_ device: SideSign.Device, team: SideSign.Team, session: SideSign.Session) async throws {
+        _ = try await rustDevOp("delete_device", params: [
+            "team_id": team.identifier, "device_number": device.identifier,
+            "device_id": device.deviceID ?? "",
+        ], session: session)
+    }
 }

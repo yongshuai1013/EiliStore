@@ -30,7 +30,7 @@ use isideload::dev::developer_session::DeveloperSession;
 use isideload::dev::app_groups::{AppGroup, AppGroupsApi};
 use isideload::dev::app_ids::{AppId, AppIdsApi};
 use isideload::dev::certificates::CertificatesApi;
-use isideload::dev::device_type::DeveloperDeviceType;
+use isideload::dev::device_type::{dev_url, DeveloperDeviceType};
 use isideload::dev::devices::DevicesApi;
 use isideload::dev::teams::{DeveloperTeam, TeamsApi};
 use plist::Dictionary;
@@ -775,6 +775,63 @@ fn device_json(device: &isideload::dev::devices::DeveloperDevice) -> serde_json:
     })
 }
 
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListedProfile {
+    provisioning_profile_id: Option<String>,
+    name: String,
+    status: Option<String>,
+    #[serde(rename = "type")]
+    profile_type: Option<String>,
+    #[serde(rename = "UUID")]
+    uuid: String,
+    date_expire: plist::Date,
+    app_id: Option<ListedProfileApp>,
+    device_ids: Option<Vec<String>>,
+    is_team_profile: Option<bool>,
+    is_free_provisioning_profile: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListedProfileApp {
+    app_id_id: Option<String>,
+    identifier: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadedProfile {
+    encoded_profile: plist::Data,
+    provisioning_profile_id: Option<String>,
+    name: Option<String>,
+    #[serde(rename = "UUID")]
+    uuid: Option<String>,
+}
+
+fn downloaded_profile_json(profile: &DownloadedProfile) -> serde_json::Value {
+    serde_json::json!({
+        "profile_b64": B64.encode(profile.encoded_profile.as_ref()),
+        "provisioning_profile_id": profile.provisioning_profile_id.clone().unwrap_or_default(),
+        "uuid": profile.uuid.clone().unwrap_or_default(),
+        "name": profile.name.clone().unwrap_or_default(),
+    })
+}
+
+fn param_str_array(params: &serde_json::Value, key: &str) -> Vec<plist::Value> {
+    params
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(|text| plist::Value::String(text.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn param_str<'a>(params: &'a serde_json::Value, key: &str) -> String {
     params.get(key).and_then(|v| v.as_str()).unwrap_or_default().to_string()
 }
@@ -910,6 +967,148 @@ async fn dev_op(op: String, params: serde_json::Value, token: String, adsid: Str
                 "uuid": profile.uuid,
                 "name": profile.name,
             })
+        }
+        "list_profiles" => {
+            let body = plist_macro::plist!(dict {
+                "teamId": team.team_id.clone(),
+                "includeTeamProfiles": true,
+            });
+            let profiles: Vec<ListedProfile> = session
+                .send_dev_request(&dev_url("listProvisioningProfiles", ios), body, "provisioningProfiles")
+                .await
+                .context("Failed to list provisioning profiles")?;
+            serde_json::json!({
+                "profiles": profiles.iter().map(|profile| serde_json::json!({
+                    "provisioning_profile_id": profile.provisioning_profile_id.clone().unwrap_or_default(),
+                    "name": profile.name,
+                    "status": profile.status.clone().unwrap_or_default(),
+                    "type": profile.profile_type.clone().unwrap_or_default(),
+                    "uuid": profile.uuid,
+                    "date_expire_iso": profile.date_expire.to_xml_format(),
+                    "app_id_id": profile.app_id.as_ref().and_then(|a| a.app_id_id.clone()).unwrap_or_default(),
+                    "bundle_id": profile.app_id.as_ref().and_then(|a| a.identifier.clone()).unwrap_or_default(),
+                    "device_ids": profile.device_ids.clone().unwrap_or_default(),
+                    "is_team_profile": profile.is_team_profile.unwrap_or(false),
+                    "is_free": profile.is_free_provisioning_profile.unwrap_or(false),
+                })).collect::<Vec<_>>(),
+            })
+        }
+        "create_profile" | "update_profile" => {
+            let is_update = op == "update_profile";
+            let mut body = plist::Dictionary::new();
+            body.insert("teamId".into(), plist::Value::String(team.team_id.clone()));
+            if is_update {
+                body.insert("provisioningProfileId".into(), plist::Value::String(param_str(&params, "provisioning_profile_id")));
+            }
+            body.insert("provisioningProfileName".into(), plist::Value::String(param_str(&params, "name")));
+            body.insert("appIdId".into(), plist::Value::String(param_str(&params, "app_id_id")));
+            body.insert("distributionType".into(), plist::Value::String("limited".into()));
+            body.insert("certificateIds".into(), plist::Value::Array(param_str_array(&params, "certificate_ids")));
+            body.insert("deviceIds".into(), plist::Value::Array(param_str_array(&params, "device_ids")));
+            let endpoint = if is_update { "updateProvisioningProfile" } else { "createProvisioningProfile" };
+            let profile: DownloadedProfile = session
+                .send_dev_request(&dev_url(endpoint, ios), body, "provisioningProfile")
+                .await
+                .context("Failed to create provisioning profile")?;
+            downloaded_profile_json(&profile)
+        }
+        "download_profile" => {
+            let body = plist_macro::plist!(dict {
+                "teamId": team.team_id.clone(),
+                "provisioningProfileId": param_str(&params, "provisioning_profile_id"),
+            });
+            let profile: DownloadedProfile = session
+                .send_dev_request(&dev_url("downloadProvisioningProfile", ios), body, "provisioningProfile")
+                .await
+                .context("Failed to download provisioning profile")?;
+            downloaded_profile_json(&profile)
+        }
+        "delete_profile" => {
+            let body = plist_macro::plist!(dict {
+                "teamId": team.team_id.clone(),
+                "provisioningProfileId": param_str(&params, "provisioning_profile_id"),
+            });
+            session
+                .send_dev_request_no_response(&dev_url("deleteProvisioningProfile", ios), Some(body))
+                .await
+                .context("Failed to delete provisioning profile")?;
+            serde_json::json!({})
+        }
+        "update_device" => {
+            let mut body = plist::Dictionary::new();
+            body.insert("teamId".into(), plist::Value::String(team.team_id.clone()));
+            body.insert("name".into(), plist::Value::String(param_str(&params, "name")));
+            body.insert("deviceNumber".into(), plist::Value::String(param_str(&params, "device_number")));
+            let device_id = param_str(&params, "device_id");
+            if !device_id.is_empty() {
+                body.insert("deviceId".into(), plist::Value::String(device_id));
+            }
+            let status = param_str(&params, "status");
+            if !status.is_empty() {
+                body.insert("status".into(), plist::Value::String(status));
+            }
+            let device: isideload::dev::devices::DeveloperDevice = session
+                .send_dev_request(&dev_url("updateDevice", ios), body, "device")
+                .await
+                .context("Failed to update device")?;
+            serde_json::json!({ "device": device_json(&device) })
+        }
+        "disable_device" => {
+            let mut body = plist::Dictionary::new();
+            body.insert("teamId".into(), plist::Value::String(team.team_id.clone()));
+            body.insert("deviceNumber".into(), plist::Value::String(param_str(&params, "device_number")));
+            body.insert("status".into(), plist::Value::String("d".into()));
+            let device_id = param_str(&params, "device_id");
+            if !device_id.is_empty() {
+                body.insert("deviceId".into(), plist::Value::String(device_id));
+            }
+            let name = param_str(&params, "name");
+            if !name.is_empty() {
+                body.insert("name".into(), plist::Value::String(name));
+            }
+            session
+                .send_dev_request_no_response(&dev_url("disableDevice", ios), Some(body))
+                .await
+                .context("Failed to disable device")?;
+            serde_json::json!({})
+        }
+        "delete_device" => {
+            let mut body = plist::Dictionary::new();
+            body.insert("teamId".into(), plist::Value::String(team.team_id.clone()));
+            body.insert("deviceNumber".into(), plist::Value::String(param_str(&params, "device_number")));
+            let device_id = param_str(&params, "device_id");
+            if !device_id.is_empty() {
+                body.insert("deviceId".into(), plist::Value::String(device_id));
+            }
+            session
+                .send_dev_request_no_response(&dev_url("deleteDevice", ios), Some(body))
+                .await
+                .context("Failed to delete device")?;
+            serde_json::json!({})
+        }
+        "update_app_group" => {
+            let body = plist_macro::plist!(dict {
+                "teamId": team.team_id.clone(),
+                "name": param_str(&params, "name"),
+                "applicationGroup": param_str(&params, "application_group"),
+                "identifier": param_str(&params, "group_identifier"),
+            });
+            let group: AppGroup = session
+                .send_dev_request(&dev_url("updateApplicationGroup", ios), body, "applicationGroup")
+                .await
+                .context("Failed to update app group")?;
+            serde_json::json!({ "group": app_group_json(&group) })
+        }
+        "delete_app_group" => {
+            let body = plist_macro::plist!(dict {
+                "teamId": team.team_id.clone(),
+                "applicationGroup": param_str(&params, "application_group"),
+            });
+            session
+                .send_dev_request_no_response(&dev_url("deleteApplicationGroup", ios), Some(body))
+                .await
+                .context("Failed to delete app group")?;
+            serde_json::json!({})
         }
         other => {
             return Err(rootcause::report!("unknown dev op: {other}"));
