@@ -253,7 +253,7 @@ enum KeychainHelper {
         let offMode = await manager.lastMode
         let offFailoverCalls = await manager.calls
         check(offODACalls == 1, "local fetch did not reach the ODA manager")
-        check(offMode == .remoteODA(sourceURL: URL(string: "https://zzz.haus/oda.json")!, fallbackURL: URL(string: "https://zzz.haus/oda.json")!), "local fetch did not use the verified remoteODA source")
+        check(offMode == .remoteODA(sourceURL: URL(string: EiliODASourceConfiguration.defaultCatalogURLString)!, fallbackURL: URL(string: EiliODASourceConfiguration.defaultFallbackURLString)!), "local fetch did not use the verified remoteODA source")
         check(offFailoverCalls == 0, "local fetch fell back to remote failover")
         check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "local fetch touched the retired vendored provider")
         check(await svc.localLibraryStatus() == .missing, "local fetch installed or required legacy libraries")
@@ -318,7 +318,7 @@ enum KeychainHelper {
         let firstODAIdentifier = await manager.lastODAIdentifier
         let firstODAMode = await manager.lastMode
         check(firstODACalls == 1 && firstODAIdentifier != nil, "local manager not called")
-        check(firstODAMode == .remoteODA(sourceURL: URL(string: "https://zzz.haus/oda.json")!, fallbackURL: URL(string: "https://zzz.haus/oda.json")!), "local fetch did not use the verified remoteODA source")
+        check(firstODAMode == .remoteODA(sourceURL: URL(string: EiliODASourceConfiguration.defaultCatalogURLString)!, fallbackURL: URL(string: EiliODASourceConfiguration.defaultFallbackURLString)!), "local fetch did not use the verified remoteODA source")
         check(FakeAnisetteKitControl.calls == 0 && FakeAnisetteKitControl.initializations == 0, "local fetch touched the retired vendored provider")
         let remoteCallsAfterImplicitLocal = await manager.calls
         check(remoteCallsAfterImplicitLocal == failoverCallsBeforeLocal, "saved on-device preference called remote")

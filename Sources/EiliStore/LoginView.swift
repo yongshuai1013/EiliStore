@@ -22,6 +22,7 @@ struct LoginView: View {
     @State private var preferredMethod: TwoFactorDeliveryMode = .sms
     @State private var debugLog = ""
     @AppStorage(EiliAnisetteMode.preferenceKey) private var anisetteModeRawValue = EiliAnisetteMode.remote.rawValue
+    @AppStorage(EiliLoginMethod.preferenceKey) private var loginMethodRawValue = EiliLoginMethod.sideSign.rawValue
 
     private var isOnDeviceMode: Bool {
         EiliAnisetteMode(rawValue: anisetteModeRawValue) == .onDevice
@@ -34,7 +35,7 @@ struct LoginView: View {
 
     var body: some View {
         Form {
-            Section(header: Text("Apple ID 登入（SideSign）")) {
+            Section(header: Text(loginMethodRawValue == EiliLoginMethod.rust.rawValue ? "Apple ID 登入（Rust）" : "Apple ID 登入（SideSign）")) {
                 TextField("Apple ID", text: $appleID)
                     .autocapitalization(.none)
                     .keyboardType(.emailAddress)
@@ -406,16 +407,19 @@ struct AccountView: View {
         sessionStatus = nil
         Task {
             do {
-                let teams = try await PaxSigningService.shared.fetchTeams()
+                let teams = try await PaxSigningService.shared.fetchTeamsForSessionCheck()
                 await MainActor.run {
                     self.sessionValid = true
                     self.sessionStatus = "Session 有效，找到 \(teams.count) 個 Team"
                     self.isChecking = false
                 }
             } catch {
+                let detail = error.localizedDescription
+                    .components(separatedBy: .newlines)
+                    .joined(separator: " ")
                 await MainActor.run {
                     self.sessionValid = nil
-                    self.sessionStatus = "暫時無法驗證 Session；登入資料已保留，請稍後再檢查。"
+                    self.sessionStatus = "暫時無法驗證 Session：\(String(detail.prefix(180)))；登入資料已保留，請稍後再檢查。"
                     self.isChecking = false
                 }
             }

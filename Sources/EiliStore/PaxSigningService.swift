@@ -53,11 +53,70 @@ public final class PaxSigningService {
         return (authSession.account, freshSession)
     }
     
+    // MARK: - Session 健康檢查（帳號頁專用）
+
+    /// 健康檢查的失敗階段：取新鮮 anisette／組 Portal 是第一段，Portal
+    /// 本身回應是第二段。頁面顯示「未知」時靠這層區分真因。
+    public enum SessionCheckError: LocalizedError {
+        case preparationFailed(String)
+        case portalFailed(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .preparationFailed(let detail): return "準備驗證失敗（anisette／設定）：\(detail)"
+            case .portalFailed(let detail): return "Portal 驗證失敗：\(detail)"
+            }
+        }
+    }
+
+    /// 與 fetchTeams 相同的驗證，但把失敗段落包進錯誤訊息（其他呼叫方
+    /// 仍用原 fetchTeams，行為不變）。
+    public func fetchTeamsForSessionCheck() async throws -> [SideSign.Team] {
+        let account: SideSign.Account
+        let session: SideSign.Session
+        let portal: SideSign.DeveloperPortal?
+        do {
+            (account, session) = try await sessionWithFreshAnisette()
+            portal = EiliLoginMethod.savedSessionOrigin == .rust
+                ? nil
+                : try await EiliSideSignClientConfigurationStore.shared.makePortal()
+        } catch {
+            throw SessionCheckError.preparationFailed(error.localizedDescription)
+        }
+        do {
+            if let portal {
+                return try await portal.fetchTeams(for: account, session: session)
+            }
+            return try await rustFetchTeams(account: account, session: session)
+        } catch {
+            throw SessionCheckError.portalFailed(error.localizedDescription)
+        }
+    }
+
+    /// B 路線：session 是 Rust 登入領出來的時候，Teams 改走 isideload
+    /// 自己的 DeveloperSession（保存的 token＋adsid 重建），不經
+    /// SideSign Portal 形狀。anisette 用 sessionWithFreshAnisette 剛換
+    /// 上的那份（回調每次回同一份新鮮快照即可，單次請求只取一次）。
+    private func rustFetchTeams(account: SideSign.Account, session: SideSign.Session) async throws -> [SideSign.Team] {
+        let anisette = session.anisetteData
+        return try await EiliRustAuthService.shared.fetchTeams(
+            token: session.authToken,
+            adsid: session.dsid,
+            account: account,
+            fetchAnisette: { _ in anisette }
+        )
+    }
+
     // MARK: - Teams
-    
+
     /// 獲取該 Apple ID 下的所有 Team
     public func fetchTeams() async throws -> [SideSign.Team] {
         let (account, session) = try await sessionWithFreshAnisette()
+        if EiliLoginMethod.savedSessionOrigin == .rust {
+            let teams = try await rustFetchTeams(account: account, session: session)
+            print("[PaxStore] 找到 \(teams.count) 個 Team（Rust Portal）")
+            return teams
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let teams = try await portal.fetchTeams(
             for: account,
@@ -72,6 +131,11 @@ public final class PaxSigningService {
     /// 獲取指定 Team 下的所有證書
     public func fetchCertificates(for team: SideSign.Team) async throws -> [SideSign.X509Certificate] {
         let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            let certs = try await rustFetchCertificates(team: team, session: session)
+            print("[PaxStore] 找到 \(certs.count) 個證書（Rust Portal）")
+            return certs
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let certs = try await portal.fetchCertificates(
             for: team,
@@ -85,6 +149,11 @@ public final class PaxSigningService {
     /// - Returns: 包含私鑰的 KeyStore（必須保存好，簽名時要用）
     public func createCertificate(for team: SideSign.Team, machineName: String = "PaxStore") async throws -> SideSign.KeyStore {
         let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            let keyStore = try await rustCreateCertificate(team: team, machineName: machineName, session: session)
+            print("[PaxStore] 證書創建成功（Rust Portal）")
+            return keyStore
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let keyStore = try await portal.addCertificate(
             machineName: machineName,
@@ -136,6 +205,14 @@ public final class PaxSigningService {
     /// 撤銷指定證書
     public func revokeCertificate(_ certificate: SideSign.X509Certificate, for team: SideSign.Team) async throws {
         let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            _ = try await rustDevOp("revoke_cert", params: [
+                "team_id": team.identifier,
+                "serial_number": certificate.serialNumber,
+            ], session: session)
+            print("[PaxStore] 證書已撤銷（Rust Portal）")
+            return
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         let success = try await portal.revokeCertificate(
             certificate,

@@ -6,47 +6,79 @@ import SideSign
 extension PaxSigningService {
     /// 查找或創建 App ID
     public func findOrCreateAppID(bundleIdentifier: String, name: String, for team: SideSign.Team) async throws -> SideSign.AppID {
-        let (_, session) = try await sessionWithFreshAnisette()
-        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
-        
-        let existing = try await portal.fetchAppIDs(for: team, session: session)
+        let existing = try await fetchAppIDs(for: team)
         if let found = existing.first(where: { SigningBundleIdentifiers.matches($0.bundleIdentifier, bundleIdentifier) }) {
             return found
         }
-        
+
         // Apple 要求名字只能含字母數字和空格，把 bundle ID 的點換成空格
         let sanitizedName = name.replacingOccurrences(of: ".", with: " ")
             .replacingOccurrences(of: "-", with: " ")
             .replacingOccurrences(of: "_", with: " ")
-        return try await portal.addAppID(withName: sanitizedName, bundleIdentifier: bundleIdentifier, team: team, session: session)
+        return try await createAppID(name: sanitizedName, bundleIdentifier: bundleIdentifier, for: team)
     }
     
     /// 只開啟 App Groups 單一開關（不重送整包 features，避免 4100）
     public func enableAppGroups(for appID: SideSign.AppID, team: SideSign.Team) async throws -> SideSign.AppID {
-        let (_, session) = try await sessionWithFreshAnisette()
-        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
-        
         var modified = appID.copy()
         modified.features = [SideSign.Feature.appGroups: "true"]
-        return try await portal.updateAppID(modified, team: team, session: session)
+        return try await updateAppID(modified, for: team)
+    }
+
+    /// 獲取 App Groups 列表
+    public func fetchAppGroups(for team: SideSign.Team) async throws -> [SideSign.AppGroup] {
+        let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            let result = try await rustDevOp("list_app_groups", params: ["team_id": team.identifier], session: session)
+            return (result["groups"] as? [[String: Any]] ?? []).map(rustMapAppGroup)
+        }
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
+        return try await portal.fetchAppGroups(for: team, session: session)
+    }
+
+    /// 創建 App Group
+    public func addAppGroup(name: String, groupIdentifier: String, for team: SideSign.Team) async throws -> SideSign.AppGroup {
+        let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            let result = try await rustDevOp("add_app_group", params: [
+                "team_id": team.identifier,
+                "name": name,
+                "identifier": groupIdentifier,
+            ], session: session)
+            guard let dict = result["group"] as? [String: Any] else {
+                throw SigningError.signingFailed("Rust Portal 未回傳 App Group")
+            }
+            return rustMapAppGroup(dict)
+        }
+        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
+        return try await portal.addAppGroup(name: name, groupIdentifier: groupIdentifier, team: team, session: session)
     }
     
     /// 查找或創建 App Group
     public func findOrCreateAppGroup(identifier: String, name: String, for team: SideSign.Team) async throws -> SideSign.AppGroup {
-        let (_, session) = try await sessionWithFreshAnisette()
-        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
-        
-        let existing = try await portal.fetchAppGroups(for: team, session: session)
+        let existing = try await fetchAppGroups(for: team)
         if let found = existing.first(where: { $0.identifier == identifier }) {
             return found
         }
-        
-        return try await portal.addAppGroup(name: name, groupIdentifier: identifier, team: team, session: session)
+
+        return try await addAppGroup(name: name, groupIdentifier: identifier, for: team)
     }
     
     /// 指派 App Groups 到 App ID
     public func assignAppGroups(_ groups: [SideSign.AppGroup], to appID: SideSign.AppID, for team: SideSign.Team) async throws -> SideSign.AppID {
         let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            for group in groups {
+                _ = try await rustDevOp("assign_app_group", params: [
+                    "team_id": team.identifier,
+                    "app_id_id": appID.identifier,
+                    "application_group": group.groupID,
+                    "group_identifier": group.identifier,
+                    "group_name": group.name,
+                ], session: session)
+            }
+            return appID
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         return try await portal.assignAppGroups(groups, to: appID, team: team, session: session)
     }
@@ -58,8 +90,6 @@ extension PaxSigningService {
     public func syncAppGroups(for appID: SideSign.AppID, declaredGroups: [String], team: SideSign.Team) async throws -> SideSign.AppID {
         let valid = declaredGroups.filter { !$0.contains("$(") }
         guard !valid.isEmpty else { return appID }
-        let (_, session) = try await sessionWithFreshAnisette()
-        let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         
         // SideStore 規則：群組 ID 補上 .<teamID> 後綴（已帶後綴的不重複加）
         let adjusted = Array(Set(valid.map { group -> String in
@@ -73,28 +103,33 @@ extension PaxSigningService {
             var features = modified.features
             features[SideSign.Feature.appGroups] = "true"
             modified.features = features
-            updatedAppID = try await portal.updateAppID(modified, team: team, session: session)
+            updatedAppID = try await updateAppID(modified, for: team)
         }
         
         // 找／建群組並指派
         var groups: [SideSign.AppGroup] = []
-        let existing = try await portal.fetchAppGroups(for: team, session: session)
+        let existing = try await fetchAppGroups(for: team)
         for groupIdentifier in adjusted {
             if let found = existing.first(where: { $0.identifier == groupIdentifier }) {
                 groups.append(found)
             } else {
                 let name = "EiliStore " + groupIdentifier.replacingOccurrences(of: ".", with: " ")
-                groups.append(try await portal.addAppGroup(name: name, groupIdentifier: groupIdentifier, team: team, session: session))
+                groups.append(try await addAppGroup(name: name, groupIdentifier: groupIdentifier, for: team))
             }
         }
         
-        let assigned = try await portal.assignAppGroups(groups, to: updatedAppID, team: team, session: session)
+        let assigned = try await assignAppGroups(groups, to: updatedAppID, for: team)
         AppLogger.shared.log("App Groups 已同步 \(appID.bundleIdentifier): \(adjusted.joined(separator: ", "))")
         return assigned
     }
     
     /// 獲取 provisioning profile（查找或創建，然後下載）
     public func provisioningProfile(for appID: SideSign.AppID, team: SideSign.Team) async throws -> SideSign.ProvisioningProfile {
+        // Rust 路線沒有手動 profile 清單 API，簽名改走與 SigningFlowView
+        // 相同的 team profile 下載（本來就是現行簽名法）。
+        if isRustSession {
+            return try await refreshProvisioningProfile(for: appID, team: team)
+        }
         let (_, session) = try await sessionWithFreshAnisette()
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         
@@ -197,6 +232,18 @@ extension PaxSigningService {
     /// 這和一般簽 IPA 時重用／建立 portal 手動 profile 的流程分開；不會刪除 Apple 端資料。
     public func refreshProvisioningProfile(for appID: SideSign.AppID, team: SideSign.Team) async throws -> SideSign.ProvisioningProfile {
         let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            let result = try await rustDevOp("download_team_profile", params: [
+                "team_id": team.identifier,
+                "app_id_id": appID.identifier,
+                "identifier": appID.bundleIdentifier,
+                "name": appID.name,
+            ], session: session)
+            guard let b64 = result["profile_b64"] as? String, let data = Data(base64Encoded: b64) else {
+                throw SigningError.profileFailed("Rust Portal 未回傳 team profile")
+            }
+            return try SideSign.ProvisioningProfile(data: data)
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         return try await portal.downloadProvisioningProfile(
             for: appID,
@@ -215,6 +262,17 @@ extension PaxSigningService {
     /// 註冊設備
     public func registerDevice(udid: String, name: String, for team: SideSign.Team) async throws -> SideSign.Device {
         let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            let result = try await rustDevOp("add_device", params: [
+                "team_id": team.identifier,
+                "name": name,
+                "device_number": udid,
+            ], session: session)
+            guard let dict = result["device"] as? [String: Any] else {
+                throw SigningError.signingFailed("Rust Portal 未回傳設備")
+            }
+            return rustMapDevice(dict)
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         return try await portal.registerDevice(name: name, identifier: udid, type: .iPhone, team: team, session: session)
     }
@@ -222,6 +280,10 @@ extension PaxSigningService {
     /// 獲取已註冊設備
     public func fetchDevices(for team: SideSign.Team) async throws -> [SideSign.Device] {
         let (_, session) = try await sessionWithFreshAnisette()
+        if isRustSession {
+            let result = try await rustDevOp("list_devices", params: ["team_id": team.identifier], session: session)
+            return (result["devices"] as? [[String: Any]] ?? []).map(rustMapDevice)
+        }
         let portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
         return try await portal.fetchDevices(for: team, session: session)
     }

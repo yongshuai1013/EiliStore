@@ -25,6 +25,18 @@ public struct NotProvisionedError: Error, CustomStringConvertible {
     public var description: String { "badServerResponse(statusCode: -1, payload: \"not provisioned for this server (-45061); reprovision required\")" }
 }
 
+public struct AnisetteDeviceProfileOverride: Sendable, Equatable {
+    public var sdkVersion = ""
+    public var release = ""
+    public var model = ""
+    public var brand = ""
+    public var name = ""
+    public var device = ""
+    public var manufacturer = ""
+    public var fingerprint = ""
+    public init() {}
+}
+
 public actor AnisetteDataManager {
     public static let shared = AnisetteDataManager()
     public var calls = 0
@@ -37,6 +49,8 @@ public actor AnisetteDataManager {
     public var active = 0
     public var maxConcurrentForTests = 0
     public var odaCalls = 0
+    public var odaSetupCalls = 0
+    nonisolated(unsafe) public var deviceProfileOverride: AnisetteDeviceProfileOverride?
     public var lastMode: AnisetteMode?
     public var lastODAIdentifier: UUID?
     public var lastODABlob: Data?
@@ -50,6 +64,7 @@ public actor AnisetteDataManager {
     public func setODAResponseForTests(data: AnisetteData?, blob: Data?) { if let data { odaResponse = (data, blob) } else { odaResponse = (AnisetteData(machineID: "m", oneTimePassword: "otp", localUserID: "lu", routingInfo: "r", deviceID: "dev", serialNumber: "s", clientInfo: "ci", userAgent: "ua", clientTime: "t", locale: "en", timeZone: "UTC"), blob) } }
     public func setODAErrorForTests(_ error: Error?) { odaError = error }
     public func setODADelayForTests(_ value: UInt64) { odaDelay = value }
+    public func setupFromRemote(serverSourceURL: URL, fallbackODAURL: URL? = nil, force: Bool = false, clientInfo: String = "") async throws { odaSetupCalls += 1 }
     public func fetchAnisetteData(mode: AnisetteMode? = nil, identifier: UUID, existingAdiBlob: Data? = nil, headers: AnisetteRequestHeaders? = nil, onError: (@Sendable (Error) -> Void)? = nil) async throws -> (AnisetteData, Data?) {
         odaCalls += 1; lastMode = mode; lastODAIdentifier = identifier; lastODABlob = existingAdiBlob
         lastODAHeaders = headers?.rawHeaders ?? [:]

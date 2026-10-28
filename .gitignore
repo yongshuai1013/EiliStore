@@ -8,3 +8,4 @@ AppleMusic*.zip
 /Packages/AnisetteKit/Artifacts/
 /Resources/Frameworks/
 __pycache__/
+/RustLogin/target/

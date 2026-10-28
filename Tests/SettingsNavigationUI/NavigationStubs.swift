@@ -45,6 +45,7 @@ enum IPAParser {
 }
 
 enum EiliAnisetteMode: String { case remote, onDevice; static let preferenceKey = "anisette.mode"; static let localBuildAvailable = true }
+enum EiliLoginMethod: String { case sideSign, rust; static let preferenceKey = "login.method" }
 enum EiliAnisetteLibraryStatus { case engineUnavailable, missing, invalid, present, incompatible(String) }
 enum EiliAnisetteError: LocalizedError { case unavailable; var errorDescription: String? { "Unavailable" } }
 struct ADIRuntimeLibraryDownloader { enum DownloadError: LocalizedError { case unavailable; var errorDescription: String? { "Unavailable" } } }
@@ -95,3 +96,8 @@ struct EiliAnisetteStorageStatus: Sendable {
     let provisioningPresent: Bool
     let automaticAcquisition: Bool
 }
+
+struct ODALibraryView: View { var body: some View { Text("Library Source") } }
+struct RustLoginSettingsView: View { var body: some View { Text("Rust Login Settings") } }
+
+struct AnisetteDeviceProfileView: View { var body: some View { Text("Device Profile") } }
