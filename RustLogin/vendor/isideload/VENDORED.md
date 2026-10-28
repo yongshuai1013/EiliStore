@@ -98,3 +98,9 @@ sent a device push or an SMS to number id 1 immediately, and a re-login
 sent a second one the same way. The `NeedsUnknown2FA` branch now refreshes
 the trusted numbers before calling back, and `select_number` accepts id 1
 when no numbers list could be fetched (the picker's default entry).
+
+Thirteenth change (2026-10-28, EiliStore port): `add_app_id` now also
+sends `appIdentifierString` (same value as `identifier`). Apple's
+addAppId.action rejected the request with error 35, "No value was
+provided for the parameter 'appIdentifierString'", when only
+`identifier` was sent (seen on device in the App ID management page).

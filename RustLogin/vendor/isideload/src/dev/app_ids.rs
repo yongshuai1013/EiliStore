@@ -67,6 +67,11 @@ pub trait AppIdsApi {
         let body = plist!(dict {
             "teamId": &team.team_id,
             "identifier": identifier,
+            // EiliStore patch #13: addAppId.action validates
+            // 'appIdentifierString'; without it Apple answers error 35
+            // ("No value was provided for the parameter
+            // 'appIdentifierString'"), seen on device 2026-10-28.
+            "appIdentifierString": identifier,
             "name": normalize_app_names(name),
         });
 

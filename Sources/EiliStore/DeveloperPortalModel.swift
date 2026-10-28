@@ -38,7 +38,7 @@ public final class DeveloperPortalModel: ObservableObject {
         isLoading = true
         defer { if token == generation { isLoading = false } }
         do {
-            let fetched = try await service.fetchTeams()
+            let fetched = try await fetchTeamsWithRetry()
             guard token == generation, !Task.isCancelled else { return }
             teams = fetched
             guard let selected = fetched.first(where: { $0.identifier == preferredID }) ?? fetched.first else {
@@ -50,6 +50,17 @@ public final class DeveloperPortalModel: ObservableObject {
         } catch {
             guard token == generation else { return }
             errorMessage = Self.safeMessage(error)
+        }
+    }
+
+    /// 列團隊是唯讀操作：漫遊／VPN 等瞬時失敗不該把總覽頁打成全 0＋整頁錯誤，
+    /// 失敗時隔一秒自動重試一次，第二次仍失敗才照原流程報錯。
+    private func fetchTeamsWithRetry() async throws -> [SideSign.Team] {
+        do {
+            return try await service.fetchTeams()
+        } catch {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            return try await service.fetchTeams()
         }
     }
 

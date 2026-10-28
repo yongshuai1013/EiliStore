@@ -83,11 +83,20 @@ extension PaxSigningService {
         let certRequest = try SideSign.CertificateRequest(machineName: machineName)
         let csr = String(decoding: certRequest.csrData, as: UTF8.self)
         let beforeSerials = Set(try await rustFetchCertificates(team: team, session: session).map { $0.serialNumberHex.uppercased() })
-        _ = try await rustDevOp("submit_csr", params: [
-            "team_id": team.identifier,
-            "csr_content": csr,
-            "machine_name": machineName,
-        ], session: session)
+        do {
+            _ = try await rustDevOp("submit_csr", params: [
+                "team_id": team.identifier,
+                "csr_content": csr,
+                "machine_name": machineName,
+            ], session: session)
+        } catch {
+            // Apple 7460：帳號已有現行開發證書或待處理的證書請求——不是鏈路壞掉，
+            // 把原始 Rust 錯誤鏈換成使用者能照著做的說明。
+            if error.localizedDescription.contains("7460") {
+                throw SigningError.certificateFailed("Apple 表示此帳號已有有效的 iOS 開發證書或待處理的證書請求（7460），無法再建立新證書。如需更換，請先撤銷現有證書再試。")
+            }
+            throw error
+        }
         for _ in 0..<10 {
             let certs = try await rustFetchCertificates(team: team, session: session)
             if let fresh = certs.first(where: { !beforeSerials.contains($0.serialNumberHex.uppercased()) }) {
