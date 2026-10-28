@@ -760,11 +760,20 @@ fn app_id_json(app_id: &AppId) -> serde_json::Value {
         };
         features.insert(key.clone(), mapped);
     }
+    // expiration_date 必須轉發：Apple 回應本來就有（SideSign 模型亦有解），
+    // 先前漏帶導致 App 側一律顯示「未知」（2026-10-28 永帥指出）。
+    let expiration_unix = app_id.expiration_date.map(|d| {
+        let st: std::time::SystemTime = d.into();
+        st.duration_since(std::time::UNIX_EPOCH)
+            .map(|x| x.as_secs() as i64)
+            .unwrap_or(0)
+    });
     serde_json::json!({
         "app_id_id": app_id.app_id_id,
         "identifier": app_id.identifier,
         "name": app_id.name,
         "features": features,
+        "expiration_date": expiration_unix,
     })
 }
 

@@ -57,6 +57,7 @@ extension PaxSigningService {
             identifier: dict["app_id_id"] as? String ?? "",
             name: dict["name"] as? String ?? "",
             bundleIdentifier: dict["identifier"] as? String ?? "",
+            expirationDate: (dict["expiration_date"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) },
             features: features
         )
     }
