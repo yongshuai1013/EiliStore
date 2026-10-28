@@ -88,3 +88,13 @@ Eleventh change (2026-10-28, EiliStore port): DeveloperSession gains
 read-only `adsid()` / `app_token()` accessors so the host app can build
 its stored SideSign AuthSession from a completed sign-in. No behavior
 change.
+
+Twelfth change (2026-10-28, EiliStore port): sign-in no longer picks a
+2FA channel by itself. In `login_inner`, both `trustedDeviceSecondaryAuth`
+and `secondaryAuth` now start at `NeedsUnknown2FA` instead of
+`NeedsDevice2FA` / `NeedsSMS2FA(1)`, so the host's two-factor callback
+(the app's method/number picker) runs before anything is sent; upstream
+sent a device push or an SMS to number id 1 immediately, and a re-login
+sent a second one the same way. The `NeedsUnknown2FA` branch now refreshes
+the trusted numbers before calling back, and `select_number` accepts id 1
+when no numbers list could be fetched (the picker's default entry).

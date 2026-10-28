@@ -346,6 +346,7 @@ impl AppleAccount {
                     }
                 }
                 LoginState::NeedsUnknown2FA => {
+                    self.update_trusted_numbers().await;
                     info!(
                         "The most recently attempted 2FA Method failed, please try a different method."
                     );
@@ -747,6 +748,11 @@ impl AppleAccount {
 
     fn select_number(&self, selected_number_id: u32) -> Result<LoginState, Report> {
         let numbers = self.trusted_phone_numbers.clone().unwrap_or_default();
+        if numbers.is_empty() && selected_number_id == 1 {
+            // Patch #12 companion: no list to validate against; upstream
+            // itself started at id 1 in this situation.
+            return Ok(LoginState::NeedsSMS2FA(1));
+        }
         if let Some(number) = numbers.iter().find(|n| n.id == selected_number_id) {
             debug!("Selected trusted number: {}", number.number_with_dial_code);
             return Ok(LoginState::NeedsSMS2FA(number.id));
@@ -937,10 +943,15 @@ impl AppleAccount {
 
         if let Some(plist::Value::String(s)) = status.get("au") {
             return Ok(match s.as_str() {
-                "trustedDeviceSecondaryAuth" => LoginState::NeedsDevice2FA,
-                "secondaryAuth" => LoginState::NeedsSMS2FA(
-                    1, /* Just start by trying 1, user can correct after */
-                ),
+                // EiliStore patch #12: upstream auto-picked a channel here
+                // (device push, or SMS to number id 1) and sent a code before
+                // the callback ever ran, so the app could not offer the
+                // method/number choice its sign-in UI promises ("choose
+                // first, only then ask Apple to send"). Start at
+                // NeedsUnknown2FA instead: the callback picks the method,
+                // and only that choice sends anything.
+                "trustedDeviceSecondaryAuth" => LoginState::NeedsUnknown2FA,
+                "secondaryAuth" => LoginState::NeedsUnknown2FA,
                 "repair" => LoginState::LoggedIn, // Just means that you don't have 2FA set up
                 unknown => LoginState::NeedsExtraStep(unknown.to_string()),
             });
