@@ -137,7 +137,7 @@ public final class PaxAuthService {
             codeProvider.log("步驟 2/3：向 Apple 登入（Rust / isideload）…")
             let session = try await EiliRustAuthService.shared.login(
                 appleID: appleID,
-                password: <redacted>
+                password: password
                 xcodeVersion: clientConfiguration.resolvedXcodeVersion(),
                 codeProvider: codeProvider,
                 fetchAnisette: { _ in
