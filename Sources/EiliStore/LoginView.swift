@@ -407,16 +407,19 @@ struct AccountView: View {
         sessionStatus = nil
         Task {
             do {
-                let teams = try await PaxSigningService.shared.fetchTeams()
+                let teams = try await PaxSigningService.shared.fetchTeamsForSessionCheck()
                 await MainActor.run {
                     self.sessionValid = true
                     self.sessionStatus = "Session 有效，找到 \(teams.count) 個 Team"
                     self.isChecking = false
                 }
             } catch {
+                let detail = error.localizedDescription
+                    .components(separatedBy: .newlines)
+                    .joined(separator: " ")
                 await MainActor.run {
                     self.sessionValid = nil
-                    self.sessionStatus = "暫時無法驗證 Session；登入資料已保留，請稍後再檢查。"
+                    self.sessionStatus = "暫時無法驗證 Session：\(String(detail.prefix(180)))；登入資料已保留，請稍後再檢查。"
                     self.isChecking = false
                 }
             }

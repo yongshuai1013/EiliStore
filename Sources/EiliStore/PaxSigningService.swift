@@ -53,8 +53,43 @@ public final class PaxSigningService {
         return (authSession.account, freshSession)
     }
     
+    // MARK: - Session 健康檢查（帳號頁專用）
+
+    /// 健康檢查的失敗階段：取新鮮 anisette／組 Portal 是第一段，Portal
+    /// 本身回應是第二段。頁面顯示「未知」時靠這層區分真因。
+    public enum SessionCheckError: LocalizedError {
+        case preparationFailed(String)
+        case portalFailed(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .preparationFailed(let detail): return "準備驗證失敗（anisette／設定）：\(detail)"
+            case .portalFailed(let detail): return "Portal 驗證失敗：\(detail)"
+            }
+        }
+    }
+
+    /// 與 fetchTeams 相同的驗證，但把失敗段落包進錯誤訊息（其他呼叫方
+    /// 仍用原 fetchTeams，行為不變）。
+    public func fetchTeamsForSessionCheck() async throws -> [SideSign.Team] {
+        let account: SideSign.Account
+        let session: SideSign.Session
+        let portal: SideSign.DeveloperPortal
+        do {
+            (account, session) = try await sessionWithFreshAnisette()
+            portal = try await EiliSideSignClientConfigurationStore.shared.makePortal()
+        } catch {
+            throw SessionCheckError.preparationFailed(error.localizedDescription)
+        }
+        do {
+            return try await portal.fetchTeams(for: account, session: session)
+        } catch {
+            throw SessionCheckError.portalFailed(error.localizedDescription)
+        }
+    }
+
     // MARK: - Teams
-    
+
     /// 獲取該 Apple ID 下的所有 Team
     public func fetchTeams() async throws -> [SideSign.Team] {
         let (account, session) = try await sessionWithFreshAnisette()
