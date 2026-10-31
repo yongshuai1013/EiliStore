@@ -45,8 +45,14 @@ extension PaxSigningService {
     public func updateAppID(_ appID: SideSign.AppID, for team: SideSign.Team) async throws -> SideSign.AppID {
         let (_, session) = try await sessionWithFreshAnisette()
         if isRustSession {
+            // 只送要啟用的功能、值用 Boolean：重送 Portal 回傳的整包
+            // features（字串值）會被 Apple 以 4100 拒絕；isideload
+            // ensure_group_feature 只送要開的那個功能、Boolean true。
+            // 本函式現行呼叫方（syncAppGroups／enableAppGroups）只啟用、不關閉。
             var featureParams: [String: Any] = [:]
-            for (feature, value) in appID.features { featureParams[feature.rawValue] = value }
+            for (feature, value) in appID.features where value == "true" {
+                featureParams[feature.rawValue] = true
+            }
             let result = try await rustDevOp("update_app_id", params: [
                 "team_id": team.identifier,
                 "app_id_id": appID.identifier,

@@ -941,8 +941,16 @@ async fn dev_op(op: String, params: serde_json::Value, token: String, adsid: Str
             let mut features = plist::Dictionary::new();
             if let Some(map) = params.get("features").and_then(|v| v.as_object()) {
                 for (key, value) in map {
-                    if let Some(text) = value.as_str() {
-                        features.insert(key.clone(), plist::Value::String(text.to_string()));
+                    // 型別原樣轉發：updateAppId 的功能開關只認 Boolean，
+                    // 字串 "true" 會被 Apple 以 4100 拒絕；isideload
+                    // ensure_group_feature 的可用形狀就是 Boolean true。
+                    let converted = match value {
+                        serde_json::Value::Bool(b) => Some(plist::Value::Boolean(*b)),
+                        serde_json::Value::String(text) => Some(plist::Value::String(text.clone())),
+                        _ => None,
+                    };
+                    if let Some(v) = converted {
+                        features.insert(key.clone(), v);
                     }
                 }
             }

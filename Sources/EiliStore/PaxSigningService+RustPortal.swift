@@ -238,7 +238,7 @@ extension PaxSigningService {
         let updated = try await rustDevOp("update_app_id", params: [
             "team_id": team.identifier, "app_id_id": appID.identifier,
             "identifier": appID.bundleIdentifier, "name": appID.name,
-            "features": [SideSign.Feature.appGroups.rawValue: "true"],
+            "features": [SideSign.Feature.appGroups.rawValue: true],
         ], session: session)
         for group in groups {
             _ = try await rustDevOp("assign_app_group", params: [
