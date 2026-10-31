@@ -4,9 +4,11 @@ import Foundation
 enum InstallerTransferGate {
     static func run(
         transfer: () async throws -> Void,
-        installation: () async throws -> Void
+        installation: () async throws -> Void,
+        afterSuccessfulInstallation: () async -> Void = {}
     ) async throws {
         try await transfer()
         try await installation()
+        await afterSuccessfulInstallation()
     }
 }

@@ -34,6 +34,7 @@ typedef struct AfcFileInfo {
 
 void afc_client_free(AfcClientHandle *handle);
 IdeviceFfiError *afc_make_directory(AfcClientHandle *client, const char *path);
+IdeviceFfiError *afc_remove_path(AfcClientHandle *client, const char *path);
 IdeviceFfiError *afc_file_open(AfcClientHandle *client, const char *path, AfcFopenMode mode, AfcFileHandle **handle);
 IdeviceFfiError *afc_file_close(AfcFileHandle *handle);
 IdeviceFfiError *afc_file_write(AfcFileHandle *handle, const uint8_t *data, size_t length);
@@ -46,8 +47,11 @@ void idevice_error_free(IdeviceFfiError *error);
 void test_afc_reset(void);
 void test_afc_fail_next_directory(int32_t code, int32_t sub_code);
 void test_afc_fail_next_open(int32_t code, int32_t sub_code);
+void test_afc_fail_next_remove(int32_t code, int32_t sub_code);
 int32_t test_afc_directory_calls(void);
 int32_t test_afc_open_calls(void);
+int32_t test_afc_remove_calls(void);
+const char *test_afc_last_remove_path(void);
 int32_t test_afc_error_free_calls(void);
 
 #endif

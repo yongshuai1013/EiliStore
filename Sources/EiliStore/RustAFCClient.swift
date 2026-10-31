@@ -146,6 +146,29 @@ public class RustAFCClient {
             } // withLock
         }.value
     }
+
+    /// 僅移除本次 UUID 命名的單一 staged IPA，不接受任意遠端路徑。
+    public func removeStagedIPA(identifier: UUID) async throws {
+        guard let client = afcClient else {
+            throw NSError(domain: "RustAFC", code: -20, userInfo: [NSLocalizedDescriptionKey: "未連接"])
+        }
+
+        let remotePath = IPAStagingPaths(identifier: identifier).uploadPath
+        return try await Task.detached(priority: .userInitiated) {
+            try RustFFILock.shared.withLock {
+                let err = remotePath.withCString { cstr in
+                    afc_remove_path(client, cstr)
+                }
+                if let err {
+                    let code = err.pointee.code
+                    let subCode = err.pointee.sub_code
+                    idevice_error_free(err)
+                    throw self.safeError(code: code, subCode: subCode, errorCode: -31, operation: "移除暫存 IPA 失敗")
+                }
+                print("[RustAFC] 已移除暫存 IPA: \(remotePath)")
+            }
+        }.value
+    }
     
     /// 獲取遠端文件大小（用於上傳後驗證）
     public func getRemoteFileSize(remotePath: String) async throws -> Int64 {

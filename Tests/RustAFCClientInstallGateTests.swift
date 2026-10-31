@@ -49,11 +49,29 @@ struct RustAFCClientInstallGateTests {
         check(openError?.localizedDescription.contains("DO_NOT_EXPOSE") == false, "remote-open Rust debug payload not exposed")
         check(test_afc_error_free_calls() == 1, "remote-open FFI error freed")
 
+        test_afc_reset()
+        try await client.removeStagedIPA(identifier: identifier)
+        check(test_afc_remove_calls() == 1, "staged IPA cleanup removes exactly one path")
+        check(String(cString: test_afc_last_remove_path()) == ipaPaths.uploadPath, "cleanup path is exactly this UUID IPA")
+
+        test_afc_reset()
+        test_afc_fail_next_remove(106, 10)
+        let removeError = await captureError { try await client.removeStagedIPA(identifier: identifier) }
+        check(removeError != nil, "remote remove failure propagates to best-effort caller")
+        check(removeError?.userInfo["ideviceCode"] as? Int32 == 106, "remove error code preserved")
+        check(removeError?.userInfo["ideviceSubCode"] as? Int32 == 10, "remove AFC sub-code preserved")
+        check(removeError?.localizedDescription.contains("DO_NOT_EXPOSE") == false, "remove Rust debug payload not exposed")
+        check(test_afc_remove_calls() == 1, "failed remove targets one file only")
+        check(String(cString: test_afc_last_remove_path()) == ipaPaths.uploadPath, "failed cleanup still targets only this UUID IPA")
+        check(test_afc_error_free_calls() == 1, "failed remove FFI error freed")
+
         try await verifyFailureSkipsInstallation(client: client, localFile: localFile, failDirectory: true)
         try await verifyFailureSkipsInstallation(client: client, localFile: localFile, failDirectory: false)
 
         test_afc_reset()
         var installationEntered = false
+        var cleanupEntered = false
+        var cleanupError: Error?
         try await InstallerTransferGate.run(transfer: {
             try await client.connect()
             do {
@@ -66,10 +84,53 @@ struct RustAFCClientInstallGateTests {
             }
         }, installation: {
             installationEntered = true
+        }, afterSuccessfulInstallation: {
+            cleanupEntered = true
+            do {
+                try await client.connect()
+                try await client.removeStagedIPA(identifier: identifier)
+            } catch {
+                cleanupError = error
+            }
         })
         check(installationEntered, "successful transfer enters installation")
+        check(cleanupEntered, "successful installation enters post-install cleanup")
+        check(cleanupError == nil, "successful staged IPA cleanup succeeds")
         check(test_afc_directory_calls() == 1, "flat IPA staging only creates shared root")
         check(test_afc_open_calls() == 1, "successful remote open reached FFI")
+        check(test_afc_remove_calls() == 1, "successful install cleanup removes exactly one staged IPA")
+        check(String(cString: test_afc_last_remove_path()) == ipaPaths.uploadPath, "post-install cleanup path is the original UUID IPA")
+
+        test_afc_reset()
+        test_afc_fail_next_remove(106, 10)
+        var cleanupFailureObserved = false
+        let cleanupFailureInstallError = await captureError {
+            try await InstallerTransferGate.run(transfer: {}, installation: {}, afterSuccessfulInstallation: {
+                do {
+                    try await client.connect()
+                    try await client.removeStagedIPA(identifier: identifier)
+                } catch {
+                    cleanupFailureObserved = true
+                }
+            })
+        }
+        check(cleanupFailureInstallError == nil, "cleanup failure does not convert successful installation to failure")
+        check(cleanupFailureObserved, "cleanup failure is observed and can be logged")
+        check(test_afc_remove_calls() == 1, "best-effort cleanup failure still targets one file")
+        check(String(cString: test_afc_last_remove_path()) == ipaPaths.uploadPath, "best-effort failure cannot target other staging files")
+
+        test_afc_reset()
+        var failedInstallCleanupEntered = false
+        let installError = await captureError {
+            try await InstallerTransferGate.run(transfer: {}, installation: {
+                throw NSError(domain: "synthetic-install", code: 1)
+            }, afterSuccessfulInstallation: {
+                failedInstallCleanupEntered = true
+            })
+        }
+        check(installError != nil, "installation failure propagates")
+        check(!failedInstallCleanupEntered, "installation failure skips cleanup")
+        check(test_afc_remove_calls() == 0, "failed or uncertain installation leaves staged IPA untouched")
 
         print("RustAFCClientInstallGateTests: PASS")
     }
@@ -87,6 +148,7 @@ struct RustAFCClientInstallGateTests {
             test_afc_fail_next_open(106, 8)
         }
         var installationEntered = false
+        var cleanupEntered = false
         let error = await captureError {
             try await InstallerTransferGate.run(transfer: {
                 try await client.connect()
@@ -100,10 +162,14 @@ struct RustAFCClientInstallGateTests {
                 }
             }, installation: {
                 installationEntered = true
+            }, afterSuccessfulInstallation: {
+                cleanupEntered = true
             })
         }
         check(error != nil, failDirectory ? "directory failure propagates" : "remote-open failure propagates")
         check(!installationEntered, failDirectory ? "directory failure must skip installation" : "remote-open failure must skip installation")
+        check(!cleanupEntered, failDirectory ? "directory failure must skip cleanup" : "upload failure must skip cleanup")
+        check(test_afc_remove_calls() == 0, "transfer failure leaves staged IPA untouched")
         check(test_afc_error_free_calls() == 1, "failed FFI error released in transfer gate")
         check(test_afc_directory_calls() == 1, "IPA transfer never creates a UUID subdirectory")
         if failDirectory {

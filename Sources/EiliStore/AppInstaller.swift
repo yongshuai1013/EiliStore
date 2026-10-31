@@ -63,16 +63,20 @@ public class AppInstaller {
         let remoteUploadPath: String
         let remotePackagePath: String
         let packageType: InstallationPackageType
+        let stagedIPAIdentifier: UUID?
 
         switch selectedMode {
         case .ipa:
-            let stagingPaths = IPAStagingPaths(identifier: UUID())
+            let identifier = UUID()
+            let stagingPaths = IPAStagingPaths(identifier: identifier)
+            stagedIPAIdentifier = identifier
             localPackageURL = ipaURL
             remoteUploadPath = stagingPaths.uploadPath
             remotePackagePath = stagingPaths.installationPath
             packageType = .ipa
 
         case .appBundle:
+            stagedIPAIdentifier = nil
             reportProgress("解壓 IPA...", 10)
             let tempDir = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -143,9 +147,25 @@ public class AppInstaller {
                 installer.disconnect()
                 throw InstallerError.afcFailed("安裝失敗: \(error.localizedDescription)")
             }
+        }, afterSuccessfulInstallation: {
+            guard let stagedIPAIdentifier else { return }
+            await self.cleanupStagedIPA(identifier: stagedIPAIdentifier, host: host, pairingFileURL: pairingURL)
         })
 
         reportProgress("安裝完成", 100)
+    }
+
+    private func cleanupStagedIPA(identifier: UUID, host: String, pairingFileURL: URL) async {
+        let afc = RustAFCClient(host: host, pairingFileURL: pairingFileURL)
+        defer { afc.disconnect() }
+
+        do {
+            try await afc.connect()
+            try await afc.removeStagedIPA(identifier: identifier)
+        } catch {
+            // Cleanup is best-effort; do not turn an already successful install into a failed install.
+            print("[Installer] 暫存 IPA 清理失敗，保留該檔案: \(error.localizedDescription)")
+        }
     }
 
     private func uploadAppBundle(
