@@ -6,6 +6,10 @@ struct RustAFCClientInstallGateTests {
     static func main() async throws {
         let pairingURL = FileManager.default.temporaryDirectory.appendingPathComponent("unused-pairing-record")
         let client = RustAFCClient(host: "127.0.0.1", pairingFileURL: pairingURL)
+        let identifier = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
+        let ipaPaths = IPAStagingPaths(identifier: identifier)
+        check(ipaPaths.uploadPath == "/PublicStaging/550E8400-E29B-41D4-A716-446655440000.ipa", "IPA upload path is a flat UUID file")
+        check(ipaPaths.installationPath == "PublicStaging/550E8400-E29B-41D4-A716-446655440000.ipa", "installation path matches flat IPA file")
         try await client.connect()
         defer { client.disconnect() }
 
@@ -54,7 +58,7 @@ struct RustAFCClientInstallGateTests {
             try await client.connect()
             do {
                 try await client.makeDirectory("/PublicStaging")
-                try await client.uploadFile(localURL: localFile, remotePath: "/PublicStaging/app.ipa") { _, _ in }
+                try await client.uploadFile(localURL: localFile, remotePath: ipaPaths.uploadPath) { _, _ in }
                 client.disconnect()
             } catch {
                 client.disconnect()
@@ -64,6 +68,7 @@ struct RustAFCClientInstallGateTests {
             installationEntered = true
         })
         check(installationEntered, "successful transfer enters installation")
+        check(test_afc_directory_calls() == 1, "flat IPA staging only creates shared root")
         check(test_afc_open_calls() == 1, "successful remote open reached FFI")
 
         print("RustAFCClientInstallGateTests: PASS")
@@ -75,6 +80,7 @@ struct RustAFCClientInstallGateTests {
         failDirectory: Bool
     ) async throws {
         test_afc_reset()
+        let ipaPaths = IPAStagingPaths(identifier: UUID())
         if failDirectory {
             test_afc_fail_next_directory(106, 10)
         } else {
@@ -86,8 +92,7 @@ struct RustAFCClientInstallGateTests {
                 try await client.connect()
                 do {
                     try await client.makeDirectory("/PublicStaging")
-                    try await client.makeDirectory("/PublicStaging/fixture")
-                    try await client.uploadFile(localURL: localFile, remotePath: "/PublicStaging/fixture/app.ipa") { _, _ in }
+                    try await client.uploadFile(localURL: localFile, remotePath: ipaPaths.uploadPath) { _, _ in }
                     client.disconnect()
                 } catch {
                     client.disconnect()
@@ -100,11 +105,10 @@ struct RustAFCClientInstallGateTests {
         check(error != nil, failDirectory ? "directory failure propagates" : "remote-open failure propagates")
         check(!installationEntered, failDirectory ? "directory failure must skip installation" : "remote-open failure must skip installation")
         check(test_afc_error_free_calls() == 1, "failed FFI error released in transfer gate")
+        check(test_afc_directory_calls() == 1, "IPA transfer never creates a UUID subdirectory")
         if failDirectory {
-            check(test_afc_directory_calls() == 1, "directory failure stops remaining transfer")
             check(test_afc_open_calls() == 0, "directory failure occurs before remote open")
         } else {
-            check(test_afc_directory_calls() == 2, "both staging directories created before open")
             check(test_afc_open_calls() == 1, "remote open attempted before transfer failure")
         }
     }

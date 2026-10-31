@@ -17,6 +17,7 @@ trap 'rm -rf "$build"' EXIT
     -I Tests/Fixtures/AFCTestFFI \
     Sources/EiliStore/RustAFCClient.swift \
     Sources/EiliStore/InstallerTransferGate.swift \
+    Sources/EiliStore/IPAStagingPaths.swift \
     Tests/Fixtures/RustAFCClientTestSupport.swift \
     Tests/RustAFCClientInstallGateTests.swift \
     "$build/AFCTestFFI.o" -o "$build/afc-installer-regression-tests"

@@ -61,17 +61,15 @@ public class AppInstaller {
 
         let localPackageURL: URL
         let remoteUploadPath: String
-        let remoteStagingDirectory: String?
         let remotePackagePath: String
         let packageType: InstallationPackageType
 
         switch selectedMode {
         case .ipa:
-            let stagingName = UUID().uuidString
+            let stagingPaths = IPAStagingPaths(identifier: UUID())
             localPackageURL = ipaURL
-            remoteStagingDirectory = "/PublicStaging/\(stagingName)"
-            remoteUploadPath = "/PublicStaging/\(stagingName)/app.ipa"
-            remotePackagePath = "PublicStaging/\(stagingName)/app.ipa"
+            remoteUploadPath = stagingPaths.uploadPath
+            remotePackagePath = stagingPaths.installationPath
             packageType = .ipa
 
         case .appBundle:
@@ -104,7 +102,6 @@ public class AppInstaller {
                 throw InstallerError.afcFailed(error.localizedDescription)
             }
             remoteUploadPath = "/PublicStaging/\(UUID().uuidString).app"
-            remoteStagingDirectory = nil
             remotePackagePath = remoteUploadPath
             packageType = .developerApp
         }
@@ -117,9 +114,6 @@ public class AppInstaller {
 
                 switch selectedMode {
                 case .ipa:
-                    if let remoteStagingDirectory {
-                        try await afc.makeDirectory(remoteStagingDirectory)
-                    }
                     reportProgress("上傳整包 IPA...", 15)
                     try await afc.uploadFile(localURL: localPackageURL, remotePath: remoteUploadPath) { sent, total in
                         let fraction = total > 0 ? Double(sent) / Double(total) : 1
