@@ -60,15 +60,23 @@ public class RustAFCClient {
         }
         
         return try await Task.detached(priority: .userInitiated) {
-            RustFFILock.shared.withLock {
+            try RustFFILock.shared.withLock {
                 let err: UnsafeMutablePointer<IdeviceFfiError>? = path.withCString { cstr in
                     afc_make_directory(client, cstr)
                 }
-                // 目錄已存在也算成功，忽略錯誤
-                if let err = err {
-                    idevice_error_free(err)
+                guard let err else {
+                    print("[RustAFC] 建目錄: \(path)")
+                    return
                 }
-                print("[RustAFC] 建目錄: \(path)")
+                let code = err.pointee.code
+                let subCode = err.pointee.sub_code
+                idevice_error_free(err)
+                // pinned SideStore/idevice 3e55c848 maps IdeviceError::Afc(ObjectExists)
+                // to code 106 / sub_code 16. No other AFC or transport error is success.
+                guard Self.isDirectoryAlreadyExists(code: code, subCode: subCode) else {
+                    throw self.safeError(code: code, subCode: subCode, errorCode: -30, operation: "建立目錄失敗")
+                }
+                print("[RustAFC] 目錄已存在: \(path)")
             }
         }.value
     }
@@ -92,9 +100,10 @@ public class RustAFCClient {
                 if let err = remotePath.withCString({ cstr in
                     afc_file_open(client, cstr, AfcWr, &remoteHandle)
                 }) {
-                    let msg = self.errorMessage(from: err)
+                    let code = err.pointee.code
+                    let subCode = err.pointee.sub_code
                     idevice_error_free(err)
-                    throw NSError(domain: "RustAFC", code: -11, userInfo: [NSLocalizedDescriptionKey: "打開遠程文件失敗: \(msg)"])
+                    throw self.safeError(code: code, subCode: subCode, errorCode: -11, operation: "打開遠程文件失敗")
                 }
                 guard let handle = remoteHandle else {
                     throw NSError(domain: "RustAFC", code: -12, userInfo: [NSLocalizedDescriptionKey: "文件句柄為空"])
@@ -204,6 +213,19 @@ public class RustAFCClient {
     
     private func errorMessage(from err: UnsafeMutablePointer<IdeviceFfiError>) -> String {
         // Do not forward Rust's Debug-formatted payload, which can contain pairing values.
-        return "[\(err.pointee.code):\(err.pointee.sub_code)] 裝置服務錯誤"
+        return errorMessage(code: err.pointee.code, subCode: err.pointee.sub_code)
+    }
+    private func errorMessage(code: Int32, subCode: Int32) -> String {
+        return "[\(code):\(subCode)] 裝置服務錯誤"
+    }
+    private func safeError(code: Int32, subCode: Int32, errorCode: Int, operation: String) -> NSError {
+        return NSError(domain: "RustAFC", code: errorCode, userInfo: [
+            NSLocalizedDescriptionKey: "\(operation): \(errorMessage(code: code, subCode: subCode))",
+            "ideviceCode": code,
+            "ideviceSubCode": subCode
+        ])
+    }
+    private static func isDirectoryAlreadyExists(code: Int32, subCode: Int32) -> Bool {
+        return code == 106 && subCode == 16
     }
 }

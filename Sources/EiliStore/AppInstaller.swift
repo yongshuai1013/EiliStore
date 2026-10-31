@@ -110,44 +110,46 @@ public class AppInstaller {
         }
 
         let afc = RustAFCClient(host: host, pairingFileURL: pairingURL)
-        do {
-            try await afc.connect()
-            try await afc.makeDirectory("/PublicStaging")
+        try await InstallerTransferGate.run(transfer: {
+            do {
+                try await afc.connect()
+                try await afc.makeDirectory("/PublicStaging")
 
-            switch selectedMode {
-            case .ipa:
-                if let remoteStagingDirectory {
-                    try await afc.makeDirectory(remoteStagingDirectory)
+                switch selectedMode {
+                case .ipa:
+                    if let remoteStagingDirectory {
+                        try await afc.makeDirectory(remoteStagingDirectory)
+                    }
+                    reportProgress("上傳整包 IPA...", 15)
+                    try await afc.uploadFile(localURL: localPackageURL, remotePath: remoteUploadPath) { sent, total in
+                        let fraction = total > 0 ? Double(sent) / Double(total) : 1
+                        let percent = min(75, 15 + Int(fraction * 60))
+                        let sentMB = Double(sent) / 1_048_576
+                        let totalMB = Double(total) / 1_048_576
+                        reportProgress(String(format: "上傳 IPA：%.1f / %.1f MB", sentMB, totalMB), percent)
+                    }
+                case .appBundle:
+                    try await uploadAppBundle(at: localPackageURL, remotePath: remoteUploadPath, using: afc, progress: reportProgress)
                 }
-                reportProgress("上傳整包 IPA...", 15)
-                try await afc.uploadFile(localURL: localPackageURL, remotePath: remoteUploadPath) { sent, total in
-                    let fraction = total > 0 ? Double(sent) / Double(total) : 1
-                    let percent = min(75, 15 + Int(fraction * 60))
-                    let sentMB = Double(sent) / 1_048_576
-                    let totalMB = Double(total) / 1_048_576
-                    reportProgress(String(format: "上傳 IPA：%.1f / %.1f MB", sentMB, totalMB), percent)
+                afc.disconnect()
+            } catch {
+                afc.disconnect()
+                throw InstallerError.afcFailed("上傳失敗: \(error.localizedDescription)")
+            }
+        }, installation: {
+            reportProgress("安裝...", 80)
+            let installer = RustInstallationProxy(host: host, pairingFileURL: pairingURL)
+            do {
+                try await installer.connect()
+                try await installer.install(packagePath: remotePackagePath, packageType: packageType) { message, percent in
+                    reportProgress(message, percent)
                 }
-            case .appBundle:
-                try await uploadAppBundle(at: localPackageURL, remotePath: remoteUploadPath, using: afc, progress: reportProgress)
+                installer.disconnect()
+            } catch {
+                installer.disconnect()
+                throw InstallerError.afcFailed("安裝失敗: \(error.localizedDescription)")
             }
-            afc.disconnect()
-        } catch {
-            afc.disconnect()
-            throw InstallerError.afcFailed("上傳失敗: \(error.localizedDescription)")
-        }
-
-        reportProgress("安裝...", 80)
-        let installer = RustInstallationProxy(host: host, pairingFileURL: pairingURL)
-        do {
-            try await installer.connect()
-            try await installer.install(packagePath: remotePackagePath, packageType: packageType) { message, percent in
-                reportProgress(message, percent)
-            }
-            installer.disconnect()
-        } catch {
-            installer.disconnect()
-            throw InstallerError.afcFailed("安裝失敗: \(error.localizedDescription)")
-        }
+        })
 
         reportProgress("安裝完成", 100)
     }
