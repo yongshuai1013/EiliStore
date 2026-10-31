@@ -17,7 +17,7 @@ mkdir -p "$BUILD_DIR"
 rm -rf "$RESULT" "$PROJECT" "$TEST_DIR/build"
 mkdir -p "$TEST_DIR/build"
 
-python3 - "$ROOT/Sources/EiliStore/EiliStoreApp.swift" "$ROOT/Sources/EiliStore/SignViews.swift" "$TEST_DIR/build/ExtractedNavigation.swift" <<'PY'
+python3 - "$ROOT/Sources/EiliStore/EiliStoreApp.swift" "$ROOT/Sources/EiliStore/SignViews.swift" "$ROOT/Sources/EiliStore/SigningFlowView.swift" "$TEST_DIR/build/ExtractedNavigation.swift" <<'PY'
 import sys
 from pathlib import Path
 def extract(source, declaration):
@@ -54,12 +54,14 @@ def extract(source, declaration):
     raise SystemExit(f"Unbalanced declaration: {declaration}")
 app_source = Path(sys.argv[1]).read_text()
 sign_source = Path(sys.argv[2]).read_text()
+picker_source = Path(sys.argv[3]).read_text()
 parts = ['import SwiftUI', 'import UniformTypeIdentifiers',
          extract(app_source, 'struct MainTabView: View'),
          extract(app_source, 'struct SettingsView: View'),
          extract(sign_source, 'private final class ImportedIPASelection'),
-         extract(sign_source, '@MainActor\nstruct SignIPAView: View')]
-Path(sys.argv[3]).write_text('\n\n'.join(parts) + '\n')
+         extract(sign_source, '@MainActor\nstruct SignIPAView: View'),
+         extract(picker_source, 'struct DocumentPicker: UIViewControllerRepresentable')]
+Path(sys.argv[4]).write_text('\n\n'.join(parts) + '\n')
 PY
 
 xcodegen generate --spec "$TEST_DIR/project.yml" --project "$TEST_DIR"

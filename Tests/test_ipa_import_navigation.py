@@ -42,9 +42,12 @@ class IPAImportNavigationTests(unittest.TestCase):
         self.assertIn('Button("選擇 IPA") { showFilePicker = true }', source)
         self.assertIn('Button(installer.isWorking ? "正在處理..." : "開始簽名並安裝", action: startInstall)', source)
 
-    def test_ipa_picker_accepts_provider_item_types_but_import_still_validates(self):
+    def test_ipa_picker_uses_native_picker_and_import_still_validates(self):
         source = (ROOT / 'Sources/EiliStore/SignViews.swift').read_text()
+        self.assertIn('.sheet(isPresented: $showFilePicker)', source)
+        self.assertIn('DocumentPicker(', source)
         self.assertIn('allowedContentTypes: [.item]', source)
+        self.assertNotIn('.fileImporter(', source)
         self.assertNotIn('UTType(filenameExtension: "ipa")', source)
         for identifier in ['ipa-file-picker', 'ipa-import-page', 'ipa-start-install']:
             self.assertIn(f'accessibilityIdentifier("{identifier}")', source)
@@ -55,6 +58,27 @@ class IPAImportNavigationTests(unittest.TestCase):
                       'values.isSymbolicLink != true', 'values.isRegularFile == true',
                       'startAccessingSecurityScopedResource()']:
             self.assertIn(guard, store)
+
+    def test_pairing_picker_accepts_provider_items_and_keeps_scoped_validation(self):
+        source = (ROOT / 'Sources/EiliStore/PairingFileManagementView.swift').read_text()
+        self.assertIn('.sheet(isPresented: $isPickingLockdown)', source)
+        self.assertIn('DocumentPicker(', source)
+        self.assertIn('allowedContentTypes: [.item]', source)
+        self.assertNotIn('.fileImporter(', source)
+        self.assertIn('try store.importLockdown(from: url)', source)
+        self.assertIn('let scoped = url.startAccessingSecurityScopedResource()', source)
+        self.assertIn('defer { if scoped { url.stopAccessingSecurityScopedResource() } }', source)
+        signing_flow = (ROOT / 'Sources/EiliStore/SigningFlowView.swift').read_text()
+        pairing_picker = signing_flow.split('.sheet(isPresented: $isPickingPairing)', 1)[1].split('.sheet(isPresented: $isPickingIPA)', 1)[0]
+        self.assertIn('allowedContentTypes: [.item]', pairing_picker)
+        self.assertIn('deviceUDID = filename', pairing_picker)
+
+    def test_shared_document_picker_uses_configurable_types_and_copy(self):
+        source = (ROOT / 'Sources/EiliStore/SigningFlowView.swift').read_text()
+        self.assertIn('var allowedContentTypes: [UTType] = [.data]', source)
+        self.assertIn('forOpeningContentTypes: allowedContentTypes, asCopy: true', source)
+        runner = (ROOT / 'Tests/run-settings-navigation-ui-tests.sh').read_text()
+        self.assertIn("extract(picker_source, 'struct DocumentPicker: UIViewControllerRepresentable')", runner)
 
 if __name__ == '__main__':
     unittest.main()

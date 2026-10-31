@@ -93,17 +93,17 @@ struct SignIPAView: View {
         .accessibilityIdentifier("ipa-import-page")
         .onAppear { isVisible = true }
         .onDisappear { isVisible = false; selectedIPA = nil }
-        // File providers may label IPA archives as packages or dynamic types,
-        // not public.data. Selection is broad; stage/parser validation is not.
-        .fileImporter(isPresented: $showFilePicker,
-                      allowedContentTypes: [.item]) { result in
-            switch result {
-            case .success(let url): importIPA(url)
-            case .failure(let error):
-                if (error as NSError).code != NSUserCancelledError {
-                    importMessage = "無法選取檔案：\(error.localizedDescription)"
-                }
-            }
+        .sheet(isPresented: $showFilePicker) {
+            DocumentPicker(
+                onPick: { url in
+                    showFilePicker = false
+                    importIPA(url)
+                },
+                onCancel: {
+                    showFilePicker = false
+                },
+                allowedContentTypes: [.item]
+            )
         }
     }
 

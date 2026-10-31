@@ -131,20 +131,24 @@ struct SigningFlowView: View {
             Task { await checkDevices() }
         }
         .sheet(isPresented: $isPickingPairing) {
-            DocumentPicker { url in
-                // 從檔名提取 UDID（格式：{UDID}.plist）
-                let filename = url.deletingPathExtension().lastPathComponent
-                // UDID 通常是 40 位 hex（iOS 8+）或 24 位
-                if filename.count >= 24 {
-                    deviceUDID = filename
-                    log("已從配對檔提取 UDID")
-                } else {
-                    errorMessage = "無法從檔名提取 UDID"
-                }
-                isPickingPairing = false
-            } onCancel: {
-                isPickingPairing = false
-            }
+            DocumentPicker(
+                onPick: { url in
+                    // 從檔名提取 UDID（格式：{UDID}.plist）
+                    let filename = url.deletingPathExtension().lastPathComponent
+                    // UDID 通常是 40 位 hex（iOS 8+）或 24 位
+                    if filename.count >= 24 {
+                        deviceUDID = filename
+                        log("已從配對檔提取 UDID")
+                    } else {
+                        errorMessage = "無法從檔名提取 UDID"
+                    }
+                    isPickingPairing = false
+                },
+                onCancel: {
+                    isPickingPairing = false
+                },
+                allowedContentTypes: [.item]
+            )
         }
         .sheet(isPresented: $isPickingIPA) {
             DocumentPicker { url in
@@ -361,9 +365,10 @@ struct SigningFlowView: View {
 struct DocumentPicker: UIViewControllerRepresentable {
     var onPick: (URL) -> Void
     var onCancel: () -> Void
+    var allowedContentTypes: [UTType] = [.data]
     
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: true)
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: allowedContentTypes, asCopy: true)
         picker.delegate = context.coordinator
         picker.allowsMultipleSelection = false
         return picker

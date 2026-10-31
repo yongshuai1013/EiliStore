@@ -185,21 +185,25 @@ struct PairingFileManagementView: View {
         } message: {
             Text(pendingAction?.explanation ?? "")
         }
-        .fileImporter(isPresented: $isPickingLockdown, allowedContentTypes: [.data]) { result in
-            switch result {
-            case .success(let url):
-                guard !isBusy else {
-                    message = "安裝或刷新正在進行，請完成後再匯入。"
-                    return
-                }
-                updatePairing {
-                    let scoped = url.startAccessingSecurityScopedResource()
-                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                    try store.importLockdown(from: url)
-                }
-            case .failure:
-                message = "未匯入檔案，現有配對檔未變更。"
-            }
+        .sheet(isPresented: $isPickingLockdown) {
+            DocumentPicker(
+                onPick: { url in
+                    isPickingLockdown = false
+                    guard !isBusy else {
+                        message = "安裝或刷新正在進行，請完成後再匯入。"
+                        return
+                    }
+                    updatePairing {
+                        let scoped = url.startAccessingSecurityScopedResource()
+                        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                        try store.importLockdown(from: url)
+                    }
+                },
+                onCancel: {
+                    isPickingLockdown = false
+                },
+                allowedContentTypes: [.item]
+            )
         }
     }
 
