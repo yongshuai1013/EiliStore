@@ -261,6 +261,7 @@ extension PaxSigningService {
     
     /// 註冊設備
     public func registerDevice(udid: String, name: String, for team: SideSign.Team) async throws -> SideSign.Device {
+        try DeveloperPortalValidation.validateDeviceIdentifier(udid)
         let (_, session) = try await sessionWithFreshAnisette()
         if isRustSession {
             let result = try await rustDevOp("add_device", params: [

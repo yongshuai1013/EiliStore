@@ -133,14 +133,13 @@ struct SigningFlowView: View {
         .sheet(isPresented: $isPickingPairing) {
             DocumentPicker(
                 onPick: { url in
-                    // 從檔名提取 UDID（格式：{UDID}.plist）
-                    let filename = url.deletingPathExtension().lastPathComponent
-                    // UDID 通常是 40 位 hex（iOS 8+）或 24 位
-                    if filename.count >= 24 {
-                        deviceUDID = filename
+                    deviceUDID = ""
+                    errorMessage = nil
+                    do {
+                        deviceUDID = try DeveloperPortalValidation.deviceIdentifier(fromPairingFileName: url.lastPathComponent)
                         log("已從配對檔提取 UDID")
-                    } else {
-                        errorMessage = "無法從檔名提取 UDID"
+                    } catch {
+                        errorMessage = error.localizedDescription
                     }
                     isPickingPairing = false
                 },

@@ -21,6 +21,30 @@ import Foundation
         for udid in ["bad", String(repeating: "a", count: 25), String(repeating: "a", count: 40) + "\n", "01234567-0123456789abcdeg"] {
             expect(.invalidDeviceIdentifier) { try DeveloperPortalValidation.validateDeviceIdentifier(udid) }
         }
+        let valid40 = String(repeating: "a", count: 40)
+        let validPairingFileNames = [
+            (valid40 + ".plist", valid40),
+            ("01234567-0123456789abcdef (1).plist", "01234567-0123456789abcdef"),
+            ("01234567-89ab-cdef-0123-456789abcdef.plist", "01234567-89ab-cdef-0123-456789abcdef"),
+            ("01234567-89ab-cdef-0123-456789abcdef (1).plist", "01234567-89ab-cdef-0123-456789abcdef")
+        ]
+        for (fileName, expectedUDID) in validPairingFileNames {
+            let parsedUDID = try DeveloperPortalValidation.deviceIdentifier(fromPairingFileName: fileName)
+            precondition(parsedUDID == expectedUDID, "配對檔 UDID 應原樣保留")
+        }
+        for fileName in [
+            "bad.plist",
+            valid40 + " (2).plist",
+            valid40 + " (1) extra.plist",
+            valid40 + " (1) (1).plist",
+            valid40 + " .plist",
+            " " + valid40 + ".plist",
+            valid40 + "\n.plist",
+            valid40 + ".txt",
+            valid40 + ".plist (1)"
+        ] {
+            expect(.invalidDeviceIdentifier) { try DeveloperPortalValidation.deviceIdentifier(fromPairingFileName: fileName) }
+        }
         for id in [nil, "", "  ", "ID with space", "ID\n"] as [String?] {
             expect(.missingIdentifier) { try DeveloperPortalValidation.requireIdentifier(id) }
         }

@@ -19,7 +19,7 @@ public enum DeveloperPortalValidationError: Error, LocalizedError, Equatable {
         case .missingProfileIdentifier: return "找不到描述檔的 Portal 識別碼，請重新整理。"
         case .operationFailed: return "Apple 未確認刪除成功，請重新整理後檢查。"
         case .missingIdentifier: return "缺少必要的 Portal 識別碼，或識別碼含有空白。"
-        case .invalidDeviceIdentifier: return "UDID 格式無效。支援 40 位十六進位、8-16 位格式及 Mac UUID。"
+        case .invalidDeviceIdentifier: return "UDID 格式無效。請使用 40 位十六進位、8位-16位十六進位或標準 Mac UUID；不可包含空白或其他字元。配對檔副本只接受精確尾綴「 (1)」。"
         case .invalidProfileConfiguration: return "請提供有效的描述檔類型、完整憑證 ID，以及該類型所需的裝置 ID。"
         }
     }
@@ -49,5 +49,22 @@ public enum DeveloperPortalValidation {
     public static func validateDeviceIdentifier(_ value: String) throws {
         let pattern = #"\A(?:[0-9A-Fa-f]{40}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}|[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12})\z"#
         guard value.range(of: pattern, options: .regularExpression) != nil else { throw DeveloperPortalValidationError.invalidDeviceIdentifier }
+    }
+
+    /// Extracts a UDID from a pairing plist filename, allowing only the exact Finder copy suffix " (1)".
+    /// The identifier itself is never trimmed or repaired; every remaining character must match a supported format.
+    public static func deviceIdentifier(fromPairingFileName fileName: String) throws -> String {
+        let plistSuffix = ".plist"
+        guard fileName.count > plistSuffix.count,
+              fileName.lowercased().hasSuffix(plistSuffix) else {
+            throw DeveloperPortalValidationError.invalidDeviceIdentifier
+        }
+
+        var identifier = String(fileName.dropLast(plistSuffix.count))
+        if identifier.hasSuffix(" (1)") {
+            identifier.removeLast(" (1)".count)
+        }
+        try validateDeviceIdentifier(identifier)
+        return identifier
     }
 }
