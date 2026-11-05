@@ -71,7 +71,8 @@ class IPAImportNavigationTests(unittest.TestCase):
         signing_flow = (ROOT / 'Sources/EiliStore/SigningFlowView.swift').read_text()
         pairing_picker = signing_flow.split('.sheet(isPresented: $isPickingPairing)', 1)[1].split('.sheet(isPresented: $isPickingIPA)', 1)[0]
         self.assertIn('allowedContentTypes: [.item]', pairing_picker)
-        self.assertIn('deviceUDID = filename', pairing_picker)
+        self.assertIn('DeveloperPortalValidation.deviceIdentifier(fromPairingFileName: url.lastPathComponent)', pairing_picker)
+        self.assertIn('errorMessage = error.localizedDescription', pairing_picker)
 
     def test_shared_document_picker_uses_configurable_types_and_copy(self):
         source = (ROOT / 'Sources/EiliStore/SigningFlowView.swift').read_text()
