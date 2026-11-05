@@ -11,7 +11,30 @@ import Glibc
 final class RustDeviceTransport {
     enum Service {
         case afc, installationProxy, misagent, heartbeat, lockdown
+
+        fileprivate var label: String {
+            switch self {
+            case .afc: return "afc"
+            case .installationProxy: return "installation-proxy"
+            case .misagent: return "misagent"
+            case .heartbeat: return "heartbeat"
+            case .lockdown: return "lockdown"
+            }
+        }
     }
+
+    private enum FailureCategory: String {
+        case initialization
+        case pairingData = "pairing-data"
+        case pairingParse = "pairing-parse"
+        case invalidHost = "invalid-host"
+        case lockdownTransport = "lockdown-transport"
+        case remoteVerification = "remote-verification"
+        case serviceConnection = "service-connection"
+        case transport
+    }
+
+    private static let safeCategoryKey = "rustDeviceSafeCategory"
 
     private var provider: OpaquePointer?
     private var adapter: OpaquePointer?
@@ -33,10 +56,20 @@ final class RustDeviceTransport {
     }
 
     func connect(_ service: Service, host: String, pairingFileURL: URL) throws -> OpaquePointer {
-        try RustLoggingPrivacy.ensureConfigured()
         disconnect()
-        let (type, data) = try store.validatedConnectionData(at: pairingFileURL)
         do {
+            do {
+                try RustLoggingPrivacy.ensureConfigured()
+            } catch {
+                throw Self.failure("無法初始化安全裝置記錄。", category: .initialization)
+            }
+            let typeAndData: (PairingType, Data)
+            do {
+                typeAndData = try store.validatedConnectionData(at: pairingFileURL)
+            } catch {
+                throw Self.failure("無法驗證已選取的配對資料。", category: .pairingData)
+            }
+            let (type, data) = typeAndData
             if type == .remote {
                 try createRemote(host: host, data: data)
             } else {
@@ -60,14 +93,26 @@ final class RustDeviceTransport {
                 case .heartbeat: error = heartbeat_connect(provider, &client)
                 case .lockdown: error = lockdownd_connect(provider, &client)
                 }
-            } else { throw Self.failure("無法建立配對傳輸。") }
-            try Self.check(error, message: "無法連接裝置服務；請確認配對仍有效及服務可用。")
-            guard let client else { throw Self.failure("裝置服務未返回連線。") }
+            } else { throw Self.failure("無法建立配對傳輸。", category: .transport) }
+            try Self.check(error, message: "無法連接裝置服務；請確認配對仍有效及服務可用。", category: .serviceConnection)
+            guard let client else { throw Self.failure("裝置服務未返回連線。", category: .serviceConnection) }
             return client
         } catch {
             disconnect()
+            print("[RustDeviceTransport] connection failed \(Self.safeFailureSummary(error, service: service))")
             throw error
         }
+    }
+
+    /// Returns only allowlisted fields; never formats localized descriptions or Rust error payloads.
+    static func safeFailureSummary(_ error: Error, service: Service) -> String {
+        let value = error as NSError
+        guard value.domain == "RustDeviceTransport" else {
+            return "service=\(service.label) category=unclassified code=unavailable"
+        }
+        let rawCategory = value.userInfo[safeCategoryKey] as? String
+        let category = rawCategory.flatMap { FailureCategory(rawValue: $0) }?.rawValue ?? FailureCategory.transport.rawValue
+        return "service=\(service.label) category=\(category) code=\(value.code)"
     }
 
     private func address(host: String, port: UInt16) throws -> sockaddr_in {
@@ -78,7 +123,7 @@ final class RustDeviceTransport {
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = port.bigEndian
         guard host.withCString({ inet_pton(AF_INET, $0, &address.sin_addr) }) == 1 else {
-            throw Self.failure("目標必須是有效的 IPv4 地址。")
+            throw Self.failure("目標必須是有效的 IPv4 地址。", category: .invalidHost)
         }
         return address
     }
@@ -88,8 +133,8 @@ final class RustDeviceTransport {
         var pairing: OpaquePointer?
         try Self.check(data.withUnsafeBytes {
             idevice_pairing_file_from_bytes($0.baseAddress?.assumingMemoryBound(to: UInt8.self), UInt(data.count), &pairing)
-        }, message: "無法解析 Lockdown 配對檔。")
-        guard let pairing else { throw Self.failure("Lockdown 配對檔無效。") }
+        }, message: "無法解析 Lockdown 配對檔。", category: .pairingParse)
+        guard let pairing else { throw Self.failure("Lockdown 配對檔無效。", category: .pairingParse) }
         var consumed = false
         defer { if !consumed { idevice_pairing_file_free(pairing) } }
         let error = withUnsafePointer(to: &address) { pointer in
@@ -101,7 +146,7 @@ final class RustDeviceTransport {
         }
         // The pinned implementation consumes the pairing handle only on success.
         consumed = error == nil
-        try Self.check(error, message: "無法建立 Lockdown 傳輸。")
+        try Self.check(error, message: "無法建立 Lockdown 傳輸。", category: .lockdownTransport)
     }
 
     private func createRemote(host: String, data: Data) throws {
@@ -109,8 +154,8 @@ final class RustDeviceTransport {
         var pairing: OpaquePointer?
         try Self.check(data.withUnsafeBytes {
             rp_pairing_file_from_bytes($0.baseAddress?.assumingMemoryBound(to: UInt8.self), UInt(data.count), &pairing)
-        }, message: "無法解析已匯入的 Remote 配對檔。")
-        guard let pairing else { throw Self.failure("Remote 配對檔無效。") }
+        }, message: "無法解析已匯入的 Remote 配對檔。", category: .pairingParse)
+        guard let pairing else { throw Self.failure("Remote 配對檔無效。", category: .pairingParse) }
         defer { rp_pairing_file_free(pairing) }
         let error = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socket in
@@ -121,7 +166,7 @@ final class RustDeviceTransport {
                 }
             }
         }
-        try Self.check(error, message: "Remote 驗證或隧道建立失敗；請確認服務端口及既有配對。未開始首次配對。")
+        try Self.check(error, message: "Remote 驗證或隧道建立失敗；請確認服務端口及既有配對。未開始首次配對。", category: .remoteVerification)
     }
 
     static var remotePort: UInt16 {
@@ -129,15 +174,21 @@ final class RustDeviceTransport {
         return UInt16(exactly: value).flatMap { $0 == 0 ? nil : $0 } ?? 49152
     }
 
-    private static func check(_ error: UnsafeMutablePointer<IdeviceFfiError>?, message: String) throws {
+    private static func check(_ error: UnsafeMutablePointer<IdeviceFfiError>?, message: String, category: FailureCategory) throws {
         guard let error else { return }
         let code = error.pointee.code
         idevice_error_free(error)
         // Rust error messages may embed decoded plist values. Keep only the numeric error code.
-        throw NSError(domain: "RustDeviceTransport", code: Int(code), userInfo: [NSLocalizedDescriptionKey: message])
+        throw NSError(domain: "RustDeviceTransport", code: Int(code), userInfo: [
+            NSLocalizedDescriptionKey: message,
+            safeCategoryKey: category.rawValue
+        ])
     }
 
-    private static func failure(_ message: String) -> NSError {
-        NSError(domain: "RustDeviceTransport", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+    private static func failure(_ message: String, category: FailureCategory) -> NSError {
+        NSError(domain: "RustDeviceTransport", code: -1, userInfo: [
+            NSLocalizedDescriptionKey: message,
+            safeCategoryKey: category.rawValue
+        ])
     }
 }

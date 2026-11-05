@@ -223,7 +223,7 @@ public class AppInstaller {
             lines.append("✅ AFC 連接成功")
             afc.disconnect()
         } catch {
-            lines.append("❌ AFC 連接失敗: \(error.localizedDescription)")
+            lines.append("❌ AFC 連接失敗（\(RustDeviceTransport.safeFailureSummary(error, service: .afc))）")
         }
         return lines.joined(separator: "\n")
     }

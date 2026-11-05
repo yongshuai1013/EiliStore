@@ -13,6 +13,22 @@ struct RustDeviceTransportTests {
         func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             guard condition() else { fatalError("FAIL: \(message)") }
         }
+        let diagnosticMarkers = ["SYNTHETIC_PAIRING_CONTENT", "SYNTHETIC_CREDENTIAL", "SYNTHETIC_UDID", "SYNTHETIC_ACCOUNT"]
+        let noisyTransportError = NSError(domain: "RustDeviceTransport", code: 79, userInfo: [
+            NSLocalizedDescriptionKey: diagnosticMarkers.joined(separator: " "),
+            "rustDeviceSafeCategory": "service-connection"
+        ])
+        let safeSummary = RustDeviceTransport.safeFailureSummary(noisyTransportError, service: .misagent)
+        check(safeSummary == "service=misagent category=service-connection code=79", "connection summary contains only allowlisted fields")
+        for marker in diagnosticMarkers {
+            check(!safeSummary.contains(marker), "connection summary hides \(marker)")
+        }
+        let untrustedCategoryError = NSError(domain: "RustDeviceTransport", code: 80, userInfo: [
+            NSLocalizedDescriptionKey: "SYNTHETIC_ACCOUNT",
+            "rustDeviceSafeCategory": "account:SYNTHETIC_UDID"
+        ])
+        let untrustedSummary = RustDeviceTransport.safeFailureSummary(untrustedCategoryError, service: .afc)
+        check(untrustedSummary == "service=afc category=transport code=80", "unrecognized categories are replaced with a fixed value")
         func plist(_ object: [String: Any]) throws -> Data {
             try PropertyListSerialization.data(fromPropertyList: object, format: .xml, options: 0)
         }

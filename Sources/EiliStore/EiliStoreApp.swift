@@ -82,6 +82,7 @@ struct MyAppsView: View {
     @State private var showRefreshToast = false
     @State private var refreshToastGeneration = UUID()
     @Environment(\.scenePhase) private var scenePhase
+    @State private var foregroundAutoCheckTask: Task<Void, Never>?
 
     private enum HomeSheet: String, Identifiable {
         case appIDSelection
@@ -436,10 +437,19 @@ struct MyAppsView: View {
             .onChange(of: scenePhase) { phase in
                 // 回到前景時比照啟動重跑一次檢查與同步，免得資料停在舊狀態、要重開 App 才更新。
                 // 同樣延後 2 秒，先讓畫面穩下來再跑。
-                guard phase == .active else { return }
-                Task {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    manager.refreshAppIDsRemaining()
+                guard phase == .active else {
+                    foregroundAutoCheckTask?.cancel()
+                    foregroundAutoCheckTask = nil
+                    return
+                }
+                foregroundAutoCheckTask?.cancel()
+                foregroundAutoCheckTask = Task {
+                    do {
+                        try await Task.sleep(nanoseconds: 2_000_000_000)
+                    } catch {
+                        return
+                    }
+                    guard scenePhase == .active else { return }
                     await manager.checkAndAutoRefresh()
                 }
             }

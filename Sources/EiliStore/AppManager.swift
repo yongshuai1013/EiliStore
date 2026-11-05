@@ -43,6 +43,7 @@ struct InstalledApp: Identifiable, Codable {
 }
 
 /// App 管理器：追蹤已安裝 App，支援刷新
+@MainActor
 class AppManager: ObservableObject {
     static let shared = AppManager()
     
@@ -109,6 +110,8 @@ class AppManager: ObservableObject {
     private let appIDSnapshotKey = "EiliStore.AppIDSnapshot.v1"
     @Published private var appIDSnapshot: AppIDSnapshot?
     private var appIDSyncTask: Task<[SideSign.AppID], Error>?
+    private let automaticRefreshCheckGate = AutomaticRefreshCheckGate()
+    private let refreshOperationGate = RefreshOperationGate()
     private var refreshBundleIDCache: [UUID: [String]] = [:]
 
     private var appIDAccountIdentifier: String? {
@@ -368,6 +371,12 @@ class AppManager: ObservableObject {
     ///   - onlyNeedingRefresh: true=只刷即將過期的（自動刷新用），false=刷全部（手動用）
     ///   - onlyBundleId: 指定只刷新一個已安裝 App；nil 時維持批次刷新
     func refreshAll(includeExternal: Bool = false, onlyNeedingRefresh: Bool = false, onlyBundleId: String? = nil) async {
+        guard refreshOperationGate.begin() else {
+            AppLogger.shared.log("已有刷新操作進行中，略過重複刷新請求")
+            return
+        }
+        defer { refreshOperationGate.end() }
+
         var failCount = 0
         var refreshedNames: [String] = []
         let appsToConsider = onlyNeedingRefresh ? appsNeedingRefresh : installedApps
@@ -394,7 +403,6 @@ class AppManager: ObservableObject {
             refreshProgress = "沒有需要刷新的 App"
             return
         }
-        
         isRefreshing = true
         refreshTitle = ""
         isRefreshError = false
@@ -434,7 +442,7 @@ class AppManager: ObservableObject {
             EiliNotificationService.shared.notifyRefreshFailed(reason: "沒有可用的 Team")
             return
         }
-        AppLogger.shared.log("使用 Team: \(team.name)")
+        AppLogger.shared.log("使用可用的 Team")
         
         // 3. 找配對檔
         guard let pairingFile = findPairingFile() else {
@@ -451,7 +459,7 @@ class AppManager: ObservableObject {
             try await misagent.connect()
             AppLogger.shared.log("✅ Misagent 已連接")
         } catch {
-            AppLogger.shared.log("❌ Misagent 連接失敗: \(error.localizedDescription)")
+            AppLogger.shared.log("❌ Misagent 連接失敗（\(RustDeviceTransport.safeFailureSummary(error, service: .misagent))）")
             refreshTitle = "刷新失敗"
             isRefreshError = true
             refreshProgress = "連接設備失敗"
@@ -555,12 +563,17 @@ class AppManager: ObservableObject {
         var refreshedNames: [String] = []
         let bids = externalBundleIds
         guard !bids.isEmpty else { return }
+        guard refreshOperationGate.begin() else {
+            AppLogger.shared.log("已有刷新操作進行中，略過重複刷新請求")
+            return
+        }
         
         isRefreshingExternal = true
         refreshFraction = 0.0
         refreshTitle = ""
         isRefreshError = false
         defer {
+            refreshOperationGate.end()
             isRefreshingExternal = false
             currentlyRefreshingBundleId = nil
         }
@@ -597,7 +610,7 @@ class AppManager: ObservableObject {
         do {
             try await misagent.connect()
         } catch {
-            AppLogger.shared.log("misagent 連接失敗: " + error.localizedDescription)
+            AppLogger.shared.log("misagent 連接失敗（" + RustDeviceTransport.safeFailureSummary(error, service: .misagent) + "）")
             refreshTitle = "刷新失敗"
             isRefreshError = true
             refreshProgress = "連接設備失敗"
@@ -732,6 +745,12 @@ class AppManager: ObservableObject {
     }
     
     func checkAndAutoRefresh() async {
+        await automaticRefreshCheckGate.run { [weak self] in
+            await self?.performAutoRefreshCheck()
+        }
+    }
+
+    private func performAutoRefreshCheck() async {
         // 1. 確保 EiliStore 自己在列表裡（用於自刷新）
         ensureSelfRegistered()
         
