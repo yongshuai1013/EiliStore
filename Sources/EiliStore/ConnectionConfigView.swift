@@ -169,12 +169,16 @@ struct ConnectionConfigView: View {
     
     private func checkReachable() async {
         await MainActor.run { isChecking = true }
-        // TODO: 實際檢測連通性
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        // 真探測：使用者填的 Device IP 寫入 manualGatewayHost（安裝流程實際用的手動地址），
+        // 再交給 VPNConnectionChecker 掃 utun 並對選定協議的埠做 TCP 探測，結果照實顯示。
+        let checker = VPNConnectionChecker.shared
+        let trimmed = deviceIP.trimmingCharacters(in: .whitespacesAndNewlines)
+        checker.manualGatewayHost = trimmed.isEmpty ? nil : trimmed
+        let ok = await checker.checkConnection()
         await MainActor.run {
-            reachable = "Yes"
+            reachable = ok ? "Yes" : "No"
             isChecking = false
-            AppLogger.shared.log("連通性檢測: \(deviceIP) 可達")
+            AppLogger.shared.log("連通性檢測: \(checker.lastDiagnostic)")
         }
     }
 }
