@@ -104,3 +104,27 @@ sends `appIdentifierString` (same value as `identifier`). Apple's
 addAppId.action rejected the request with error 35, "No value was
 provided for the parameter 'appIdentifierString'", when only
 `identifier` was sent (seen on device in the App ID management page).
+
+Fourteenth change (2026-11-19, EiliStore port of Apparition 1.0.0's fix;
+illixion/Apparition issues #12 and #16): sign-in's first GrandSlam request
+was answered by Apple's edge with a bare HTML 403 — on device, both
+accounts and both anisette sources (built-in local and remote) failed
+identically at "Failed to send initial login request", before the password
+was checked. Since 2026-10-29 Apple's edge refuses GrandSlam requests
+keyed on Content-Type: gsd.apple.com rejects `text/x-xml-plist` (what this
+copy sent), gsa.apple.com rejects `application/x-xml-plist`; only
+`text/xml` clears both. A further edge rule refuses a POST to exactly
+`/grandslam/GsService2` without the trailing slash, which the URL bag
+omits. And Apple's own clients send X-Apple-I-MD-RINFO and
+X-Apple-I-Client-Time in every sign-in request; upstream's `get_headers`
+had both commented out. Ported from Apparition 1.0.0's vendored copy of
+this same crate: `base_headers` now sends `Content-Type: text/xml` for
+GrandSlam requests (Accept unchanged, src/auth/grandslam.rs),
+`GrandSlam::get_url` appends the trailing slash for the `gsService` URL
+(same file), and `AnisetteData::get_headers` always sends the routing info
+(when non-empty) and the request time via a std-only `client_time`
+(src/anisette/mod.rs; this crate already depends on web-time, whose
+SystemTime the function takes). Not ported: Apparition's edge-avoidance
+retry (src/auth/edge.rs), its anisette `extra` header passthrough, and its
+MD-LU / legacy device-id fill-ins — those belong to its provider pipeline,
+not to this fix.

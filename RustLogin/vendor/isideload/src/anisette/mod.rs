@@ -55,17 +55,10 @@ impl AnisetteData {
     }
 
     pub fn get_headers(&self) -> HashMap<String, String> {
-        //let dt: DateTime<Utc> = Utc::now().round_subsecs(0);
-
-        HashMap::from_iter([
-            // (
-            //     "X-Apple-I-Client-Time".to_string(),
-            //     dt.format("%+").to_string().replace("+00:00", "Z"),
-            // ),
+        let mut headers = HashMap::from_iter([
             // ("X-Apple-I-SRL-NO".to_string(), serial),
             // ("X-Apple-I-TimeZone".to_string(), "UTC".to_string()),
             // ("X-Apple-Locale".to_string(), "en_US".to_string()),
-            // ("X-Apple-I-MD-RINFO".to_string(), self.routing_info.clone()),
             // ("X-Apple-I-MD-LU".to_string(), self.local_user_id.clone()),
             (
                 "X-Mme-Device-Id".to_string(),
@@ -77,7 +70,24 @@ impl AnisetteData {
             //     "X-Mme-Client-Info".to_string(),
             //     self.device_description.clone(),
             // ),
-        ])
+        ]);
+        // EiliStore patch (see VENDORED.md, fourteenth change; ported from
+        // Apparition 1.0.0, illixion/Apparition#16): Apple's own clients send
+        // the routing info and the request time in every sign-in request, so
+        // send both here, where every provider's data passes through.
+        // Routing info is something every provider must give (remote_v3
+        // refuses an answer without it).
+        if !self.routing_info.trim().is_empty() {
+            headers.insert("X-Apple-I-MD-RINFO".to_string(), self.routing_info.clone());
+        }
+        // The time of the request, which is what Apple's clients put here
+        // (second precision, UTC). Taken when the headers are built, not when
+        // the provider answered, so a cached answer isn't minutes old by the
+        // time it goes out.
+        headers
+            .entry("X-Apple-I-Client-Time".to_string())
+            .or_insert_with(|| client_time(SystemTime::now()));
+        headers
     }
 
     pub fn get_header_map(&self) -> Result<HeaderMap, Report> {
@@ -123,6 +133,25 @@ impl AnisetteData {
             }
         }
     }
+}
+
+/// `2026-11-12T09:30:05Z`: an instant as Apple's clients write `X-Apple-I-Client-Time`.
+/// (EiliStore patch, see VENDORED.md's fourteenth change; ported from
+/// Apparition 1.0.0, illixion/Apparition#16.)
+fn client_time(at: SystemTime) -> String {
+    let seconds = at.duration_since(web_time::UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0) as i64;
+    let (days, of_day) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
+    // Days since 1970-01-01 to a calendar date (Hinnant's civil_from_days).
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", of_day / 3_600, of_day % 3_600 / 60, of_day % 60)
 }
 
 #[derive(Debug, Clone)]

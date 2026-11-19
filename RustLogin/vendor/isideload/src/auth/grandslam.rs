@@ -90,10 +90,17 @@ impl GrandSlam {
     }
 
     pub fn get_url(&self, key: &str) -> Result<String, Report> {
-        let url = self
+        let mut url = self
             .url_bag
             .get_string(key)
             .context("Unable to find key in URL bag")?;
+        // EiliStore patch (see VENDORED.md, fourteenth change; ported from
+        // Apparition 1.0.0, illixion/Apparition#16): Apple's edge answers a
+        // bare HTML 403 to a POST on exactly `/grandslam/GsService2` and takes
+        // `/grandslam/GsService2/`. The URL bag still lists the first form.
+        if key == "gsService" && url.ends_with("/grandslam/GsService2") {
+            url.push('/');
+        }
         Ok(url)
     }
 
@@ -219,7 +226,21 @@ impl GrandSlam {
     ) -> Result<reqwest::header::HeaderMap, Report> {
         let mut headers = reqwest::header::HeaderMap::new();
         if !sms {
-            headers.insert("Content-Type", HeaderValue::from_static("text/x-xml-plist"));
+            // EiliStore patch (see VENDORED.md, fourteenth change; ported from
+            // Apparition 1.0.0, illixion/Apparition#12/#16): Apple's edge
+            // answers a request with a bare HTML 403 before reading it, keyed
+            // on the request's Content-Type, and the two hosts block opposite
+            // values: gsd.apple.com (machine provisioning, MidService) rejects
+            // `text/x-xml-plist` (the legacy value older tooling sends), while
+            // gsa.apple.com (sign-in / URL bag) rejects
+            // `application/x-xml-plist`. `text/xml` is the one value that
+            // clears both: the body is XML either way and Apple parses it the
+            // same, returning its usual `text/x-xml-plist` plist. (`Accept`
+            // isn't matched by the rules, so it stays as Apple's own response
+            // type.) A further rule answers 403 on a POST to
+            // `/grandslam/GsService2` without the trailing slash (see
+            // `get_url`).
+            headers.insert("Content-Type", HeaderValue::from_static("text/xml"));
             headers.insert("Accept", HeaderValue::from_static("text/x-xml-plist"));
         } else {
             headers.insert("Content-Type", HeaderValue::from_static("application/json"));
