@@ -94,6 +94,28 @@ impl GrandSlam {
             .url_bag
             .get_string(key)
             .context("Unable to find key in URL bag")?;
+        // EiliStore patch (see VENDORED.md, fifteenth change; user-directed,
+        // modelled on SideStore/SideSign's Constants.swift, which hardcodes
+        // the sign-in endpoint as `https://gsa.apple.com/grandslam/GsService2`
+        // instead of taking the URL bag's assignment, and signs in stably
+        // there): the bag sometimes assigns gsd.apple.com, whose edge is the
+        // one refusing this client's requests (see the fourteenth change);
+        // gsa's edge does not block them. Keep the bag mechanism, but shunt
+        // the host at this single exit: when the URL's host is exactly
+        // gsd.apple.com, rewrite it to gsa.apple.com, leaving the scheme,
+        // port, path and query untouched. The replacement is anchored at the
+        // host position right after the scheme, so the same string occurring
+        // in the path or query is never touched. (This crate has no direct
+        // `url` dependency, hence the anchored string form.)
+        if let Some((scheme, rest)) = url.split_once("://") {
+            if let Some(after_host) = rest.strip_prefix("gsd.apple.com") {
+                if after_host.is_empty()
+                    || after_host.starts_with(|c| c == '/' || c == ':' || c == '?' || c == '#')
+                {
+                    url = format!("{scheme}://gsa.apple.com{after_host}");
+                }
+            }
+        }
         // EiliStore patch (see VENDORED.md, fourteenth change; ported from
         // Apparition 1.0.0, illixion/Apparition#16): Apple's edge answers a
         // bare HTML 403 to a POST on exactly `/grandslam/GsService2` and takes

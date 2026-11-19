@@ -128,3 +128,20 @@ SystemTime the function takes). Not ported: Apparition's edge-avoidance
 retry (src/auth/edge.rs), its anisette `extra` header passthrough, and its
 MD-LU / legacy device-id fill-ins — those belong to its provider pipeline,
 not to this fix.
+
+Fifteenth change (2026-11-19, user-directed; modelled on
+SideStore/SideSign): a host shunt at the URL bag's single exit,
+`GrandSlam::get_url` (src/auth/grandslam.rs). SideSign's Constants.swift
+hardcodes the sign-in endpoint as
+`https://gsa.apple.com/grandslam/GsService2` and never takes the bag's
+assignment; on device it signs in stably there, while the bag sometimes
+assigns gsd.apple.com — the host whose edge refuses this client's
+requests (fourteenth change). Rather than hardcoding the whole endpoint,
+the bag mechanism stays and only the host is shunted: a URL whose host is
+exactly gsd.apple.com is rewritten to gsa.apple.com, with scheme, port,
+path and query untouched. The rewrite is anchored at the host position
+right after the scheme (this crate has no direct `url` dependency, so no
+parser is used), and it runs before the fourteenth change's trailing-slash
+rule in the same function. The fourteenth change's three fixes stay in
+place as the fallback for any request that still reaches gsd by another
+route.
