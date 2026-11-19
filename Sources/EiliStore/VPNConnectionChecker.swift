@@ -196,45 +196,8 @@ public class VPNConnectionChecker {
     public func checkConnection(timeout: TimeInterval = 5) async -> Bool {
         let tunnels = discoverTunnels()
 
-        var candidates: [String] = []
-        var seen = Set<String>()
-        func add(_ ip: String) {
-            let t = ip.trimmingCharacters(in: .whitespaces)
-            guard !t.isEmpty, !seen.contains(t),
-                  t != "0.0.0.0",
-                  !t.hasPrefix("127."),
-                  !t.hasPrefix("224."),
-                  !t.hasPrefix("239.") else { return }
-            seen.insert(t)
-            candidates.append(t)
-        }
-
-        // 候選 1：點對點對端地址（LocalDevVPN 這類 /32 隧道）
-        for t in tunnels { add(t.peerIP) }
-        // 候選 2：接口所在子網的 .1（WireGuard App 那種 /24 配置，設備端常用 .1；/32 跳過）
-        for t in tunnels {
-            if t.netmask != "255.255.255.255",
-               let localRaw = ipv4Raw(t.localIP), let maskRaw = ipv4Raw(t.netmask),
-               let first = rawToIPv4((localRaw & maskRaw) + 1) {
-                add(first)
-            }
-        }
-        // 候選 3：Wi-Fi 直連（lockdownd 在 Wi-Fi 下監聽 62078，不一定需要經過 VPN）
         let wifiIP = discoverWiFiIP()
-        if let wifiIP = wifiIP { add(wifiIP) }
-        // 候選 3b：localhost（若 lockdownd 綁 0.0.0.0，127.0.0.1 直達；沙盒對 localhost 無回環限制）
-        // 注意：127.0.0.1 會被上面的本機地址過濾掉，這裡直接加入
-        if !candidates.contains("127.0.0.1") { candidates.append("127.0.0.1") }
-        // 候選 4：手動輸入的地址
-        add(gatewayHost)
-        // Current Rust transport accepts IPv4 only. A manual endpoint must not be
-        // validated by probing a different automatic candidate.
-        if let manual = manualGatewayHost { candidates = [manual] }
-        candidates.removeAll { ipv4Raw($0) == nil }
-
-        // 排除接口自己的地址
-        let localIPs = Set(tunnels.map { $0.localIP })
-        candidates.removeAll { localIPs.contains($0) }
+        let candidates = collectCandidates(tunnels: tunnels, wifiIP: wifiIP)
 
         var diag: String
         if tunnels.isEmpty {
@@ -285,6 +248,131 @@ public class VPNConnectionChecker {
             lastDiagnostic = diag + " → 全部無回應"
             return false
         }
+    }
+
+    /// 候選地址收集（checkConnection 與 StartSession 診斷共用同一份邏輯）：
+    /// 隧道對端、子網 .1、Wi-Fi 直連、localhost、目前網關；手動地址存在時只用手動地址。
+    private func collectCandidates(tunnels: [TunnelInfo], wifiIP: String?) -> [String] {
+        var candidates: [String] = []
+        var seen = Set<String>()
+        func add(_ ip: String) {
+            let t = ip.trimmingCharacters(in: .whitespaces)
+            guard !t.isEmpty, !seen.contains(t),
+                  t != "0.0.0.0",
+                  !t.hasPrefix("127."),
+                  !t.hasPrefix("224."),
+                  !t.hasPrefix("239.") else { return }
+            seen.insert(t)
+            candidates.append(t)
+        }
+
+        // 候選 1：點對點對端地址（LocalDevVPN 這類 /32 隧道）
+        for t in tunnels { add(t.peerIP) }
+        // 候選 2：接口所在子網的 .1（WireGuard App 那種 /24 配置，設備端常用 .1；/32 跳過）
+        for t in tunnels {
+            if t.netmask != "255.255.255.255",
+               let localRaw = ipv4Raw(t.localIP), let maskRaw = ipv4Raw(t.netmask),
+               let first = rawToIPv4((localRaw & maskRaw) + 1) {
+                add(first)
+            }
+        }
+        // 候選 3：Wi-Fi 直連（lockdownd 在 Wi-Fi 下監聽 62078，不一定需要經過 VPN）
+        if let wifiIP = wifiIP { add(wifiIP) }
+        // 候選 3b：localhost（若 lockdownd 綁 0.0.0.0，127.0.0.1 直達；沙盒對 localhost 無回環限制）
+        // 注意：127.0.0.1 會被上面的本機地址過濾掉，這裡直接加入
+        if !candidates.contains("127.0.0.1") { candidates.append("127.0.0.1") }
+        // 候選 4：目前網關地址
+        add(gatewayHost)
+        // Current Rust transport accepts IPv4 only. A manual endpoint must not be
+        // validated by probing a different automatic candidate.
+        if let manual = manualGatewayHost { candidates = [manual] }
+        candidates.removeAll { ipv4Raw($0) == nil }
+
+        // 排除接口自己的地址
+        let localIPs = Set(tunnels.map { $0.localIP })
+        candidates.removeAll { localIPs.contains($0) }
+        return candidates
+    }
+
+    /// StartSession 診斷的單一候選結果。
+    /// stage: probe-fail（探測無回應，session 未試）/ connect-fail（lockdown 連線失敗）/
+    /// session-fail（session 被拒，code/subCode 為 FFI 錯誤碼）/ session-ok。
+    public struct SessionProbeOutcome {
+        public let host: String
+        public let stage: String
+        public let code: Int32
+        public let subCode: Int32
+        public var line: String {
+            switch stage {
+            case "session-ok": return "\(host) session 成功"
+            case "session-fail": return "\(host) session 失敗 [code \(code):\(subCode)]"
+            case "connect-fail": return "\(host) lockdown 連線失敗 [code \(code)]"
+            default: return "\(host) 探測無回應（session 未試）"
+            }
+        }
+    }
+
+    public var lastSessionDiagnostic: String = ""
+    public var lastSessionSummary: String = ""
+
+    /// StartSession 判別槍（僅連線檢查頁呼叫）：逐候選連 lockdown 並各試開一次 session，
+    /// 逐一記錄成功／失敗。非致命——不改 gatewayHost、不影響 checkConnection 的判定，
+    /// 一般連線／安裝流程維持不開 session。
+    public func checkStartSession() async -> [SessionProbeOutcome] {
+        guard let url = PairingFileStore.shared.selectedPairingFileURL() else {
+            lastSessionDiagnostic = "尚未選擇配對檔"
+            lastSessionSummary = "未執行"
+            return []
+        }
+        if url.lastPathComponent == PairingType.remote.fileName {
+            lastSessionDiagnostic = "Remote 配對走 RSD 驗證，不經 lockdown StartSession"
+            lastSessionSummary = "不適用"
+            return []
+        }
+        let tunnels = discoverTunnels()
+        let wifiIP = discoverWiFiIP()
+        let candidates = collectCandidates(tunnels: tunnels, wifiIP: wifiIP)
+        var outcomes: [SessionProbeOutcome] = []
+        for host in candidates {
+            let reachable = await probe(host: host, port: gatewayPort, timeout: 3)
+            guard reachable else {
+                let o = SessionProbeOutcome(host: host, stage: "probe-fail", code: 0, subCode: 0)
+                outcomes.append(o)
+                print("[StartSessionCheck] \(o.line)")
+                continue
+            }
+            let client = RustLockdownClient(host: host, pairingFileURL: url)
+            do {
+                try await client.connect()
+            } catch {
+                let o = SessionProbeOutcome(host: host, stage: "connect-fail", code: Int32((error as NSError).code), subCode: 0)
+                outcomes.append(o)
+                print("[StartSessionCheck] \(o.line)")
+                continue
+            }
+            let failure = await client.startSessionDiagnostic()
+            let o: SessionProbeOutcome
+            if let failure {
+                o = SessionProbeOutcome(host: host, stage: "session-fail", code: failure.code, subCode: failure.subCode)
+            } else {
+                o = SessionProbeOutcome(host: host, stage: "session-ok", code: 0, subCode: 0)
+            }
+            outcomes.append(o)
+            print("[StartSessionCheck] \(o.line)")
+            client.disconnect()
+        }
+        if outcomes.isEmpty {
+            lastSessionDiagnostic = "無候選地址可試"
+            lastSessionSummary = "無候選"
+        } else {
+            lastSessionDiagnostic = outcomes.map(\.line).joined(separator: "；")
+            if let ok = outcomes.first(where: { $0.stage == "session-ok" }) {
+                lastSessionSummary = "成功（\(ok.host)）"
+            } else {
+                lastSessionSummary = "全部失敗"
+            }
+        }
+        return outcomes
     }
 
     /// 為 lockdownd 動態啟動的服務端口（AFC / installation_proxy）找一個 TCP 連得上的地址。

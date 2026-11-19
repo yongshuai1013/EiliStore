@@ -5,6 +5,8 @@ struct ConnectionConfigView: View {
     @State private var useLocalVPN = false
     @State private var deviceIP = "10.7.0.1"
     @State private var reachable = ""
+    @State private var sessionStatus = ""
+    @State private var sessionDetail = ""
     @State private var isChecking = false
     @State private var bindHost = "127.0.0.1"
     @State private var bindPort = "51820"
@@ -51,6 +53,17 @@ struct ConnectionConfigView: View {
                     Spacer()
                     Text(reachable)
                         .foregroundColor(reachable == "Yes" ? .green : .secondary)
+                }
+                HStack {
+                    Text("StartSession")
+                    Spacer()
+                    Text(sessionStatus)
+                        .foregroundColor(sessionStatus.hasPrefix("成功") ? .green : .secondary)
+                }
+                if !sessionDetail.isEmpty {
+                    Text(sessionDetail)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 Button("檢測連通性") {
                     Task { await checkReachable() }
@@ -177,8 +190,16 @@ struct ConnectionConfigView: View {
         let ok = await checker.checkConnection()
         await MainActor.run {
             reachable = ok ? "Yes" : "No"
-            isChecking = false
             AppLogger.shared.log("連通性檢測: \(checker.lastDiagnostic)")
+        }
+        // StartSession 判別槍（診斷版）：逐候選試開 lockdown session 並逐一記錄；
+        // 非致命，不影響上面的連通性判定，也不改變一般連線／安裝流程（維持不開 session）。
+        _ = await checker.checkStartSession()
+        await MainActor.run {
+            sessionStatus = checker.lastSessionSummary
+            sessionDetail = checker.lastSessionDiagnostic
+            isChecking = false
+            AppLogger.shared.log("StartSession 檢測: \(checker.lastSessionDiagnostic)")
         }
     }
 }

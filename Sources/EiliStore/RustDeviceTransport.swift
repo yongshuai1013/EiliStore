@@ -104,6 +104,40 @@ final class RustDeviceTransport {
         }
     }
 
+    /// Diagnostic only: attempts `lockdownd_start_session` on an already-connected lockdown client.
+    /// Builds a fresh pairing handle from the validated pairing bytes — the provider's own handle
+    /// was consumed when the provider was created, so it must not be reused here.
+    /// Returns nil on success, or the FFI error's (code, subCode) on failure. Negative codes are
+    /// local pre-flight failures (pairing data unavailable / not a lockdown record / parse failure).
+    /// Never used by the normal connect/install flow, which stays session-free.
+    func attemptStartSession(client: OpaquePointer, pairingFileURL: URL) -> (code: Int32, subCode: Int32)? {
+        let typeAndData: (PairingType, Data)
+        do {
+            typeAndData = try store.validatedConnectionData(at: pairingFileURL)
+        } catch {
+            return (-2, 0)
+        }
+        guard typeAndData.0 == .lockdown else { return (-3, 0) }
+        let data = typeAndData.1
+        var pairing: OpaquePointer?
+        let parseError = data.withUnsafeBytes {
+            idevice_pairing_file_from_bytes($0.baseAddress?.assumingMemoryBound(to: UInt8.self), UInt(data.count), &pairing)
+        }
+        if let parseError {
+            let code = parseError.pointee.code
+            idevice_error_free(parseError)
+            return (code, 0)
+        }
+        guard let pairing else { return (-4, 0) }
+        defer { idevice_pairing_file_free(pairing) }
+        if let error = lockdownd_start_session(client, pairing) {
+            let result = (code: error.pointee.code, subCode: error.pointee.sub_code)
+            idevice_error_free(error)
+            return result
+        }
+        return nil
+    }
+
     /// Returns only allowlisted fields; never formats localized descriptions or Rust error payloads.
     static func safeFailureSummary(_ error: Error, service: Service) -> String {
         let value = error as NSError
