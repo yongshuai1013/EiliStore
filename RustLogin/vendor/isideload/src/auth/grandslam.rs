@@ -41,7 +41,7 @@ impl GrandSlam {
     ) -> Result<Self, Report> {
         let client =
             Self::build_reqwest_client(debug, proxy_url).context("Failed to build HTTP client")?;
-        let base_headers = Self::base_headers(&client_info, false)?;
+        let base_headers = Self::base_headers(&client_info, false, URL_BAG)?;
         let url_bag = Self::fetch_url_bag(&client, base_headers).await?;
         Ok(Self {
             client,
@@ -94,28 +94,6 @@ impl GrandSlam {
             .url_bag
             .get_string(key)
             .context("Unable to find key in URL bag")?;
-        // EiliStore patch (see VENDORED.md, fifteenth change; user-directed,
-        // modelled on SideStore/SideSign's Constants.swift, which hardcodes
-        // the sign-in endpoint as `https://gsa.apple.com/grandslam/GsService2`
-        // instead of taking the URL bag's assignment, and signs in stably
-        // there): the bag sometimes assigns gsd.apple.com, whose edge is the
-        // one refusing this client's requests (see the fourteenth change);
-        // gsa's edge does not block them. Keep the bag mechanism, but shunt
-        // the host at this single exit: when the URL's host is exactly
-        // gsd.apple.com, rewrite it to gsa.apple.com, leaving the scheme,
-        // port, path and query untouched. The replacement is anchored at the
-        // host position right after the scheme, so the same string occurring
-        // in the path or query is never touched. (This crate has no direct
-        // `url` dependency, hence the anchored string form.)
-        if let Some((scheme, rest)) = url.split_once("://") {
-            if let Some(after_host) = rest.strip_prefix("gsd.apple.com") {
-                if after_host.is_empty()
-                    || after_host.starts_with(|c| c == '/' || c == ':' || c == '?' || c == '#')
-                {
-                    url = format!("{scheme}://gsa.apple.com{after_host}");
-                }
-            }
-        }
         // EiliStore patch (see VENDORED.md, fourteenth change; ported from
         // Apparition 1.0.0, illixion/Apparition#16): Apple's edge answers a
         // bare HTML 403 to a POST on exactly `/grandslam/GsService2` and takes
@@ -130,7 +108,7 @@ impl GrandSlam {
         let builder = self
             .client
             .get(url)
-            .headers(Self::base_headers(&self.client_info, false)?);
+            .headers(Self::base_headers(&self.client_info, false, url)?);
 
         Ok(builder)
     }
@@ -139,7 +117,7 @@ impl GrandSlam {
         let builder = self
             .client
             .get(url)
-            .headers(Self::base_headers(&self.client_info, true)?);
+            .headers(Self::base_headers(&self.client_info, true, url)?);
 
         Ok(builder)
     }
@@ -148,7 +126,7 @@ impl GrandSlam {
         let builder = self
             .client
             .put(url)
-            .headers(Self::base_headers(&self.client_info, true)?);
+            .headers(Self::base_headers(&self.client_info, true, url)?);
 
         Ok(builder)
     }
@@ -157,7 +135,7 @@ impl GrandSlam {
         let builder = self
             .client
             .post(url)
-            .headers(Self::base_headers(&self.client_info, false)?);
+            .headers(Self::base_headers(&self.client_info, false, url)?);
 
         Ok(builder)
     }
@@ -166,7 +144,7 @@ impl GrandSlam {
         let builder = self
             .client
             .post(url)
-            .headers(Self::base_headers(&self.client_info, true)?);
+            .headers(Self::base_headers(&self.client_info, true, url)?);
 
         Ok(builder)
     }
@@ -175,7 +153,7 @@ impl GrandSlam {
         let builder = self
             .client
             .patch(url)
-            .headers(Self::base_headers(&self.client_info, false)?);
+            .headers(Self::base_headers(&self.client_info, false, url)?);
 
         Ok(builder)
     }
@@ -245,24 +223,35 @@ impl GrandSlam {
     fn base_headers(
         client_info: &AnisetteClientInfo,
         sms: bool,
+        url: &str,
     ) -> Result<reqwest::header::HeaderMap, Report> {
         let mut headers = reqwest::header::HeaderMap::new();
         if !sms {
-            // EiliStore patch (see VENDORED.md, fourteenth change; ported from
-            // Apparition 1.0.0, illixion/Apparition#12/#16): Apple's edge
-            // answers a request with a bare HTML 403 before reading it, keyed
-            // on the request's Content-Type, and the two hosts block opposite
-            // values: gsd.apple.com (machine provisioning, MidService) rejects
-            // `text/x-xml-plist` (the legacy value older tooling sends), while
-            // gsa.apple.com (sign-in / URL bag) rejects
-            // `application/x-xml-plist`. `text/xml` is the one value that
-            // clears both: the body is XML either way and Apple parses it the
-            // same, returning its usual `text/x-xml-plist` plist. (`Accept`
-            // isn't matched by the rules, so it stays as Apple's own response
-            // type.) A further rule answers 403 on a POST to
-            // `/grandslam/GsService2` without the trailing slash (see
-            // `get_url`).
-            headers.insert("Content-Type", HeaderValue::from_static("text/xml"));
+            // EiliStore patch (see VENDORED.md, fourteenth change; the
+            // per-host condition is user-directed, on the edge evidence of
+            // illixion/Apparition#12/#16, whose fix sends `text/xml`
+            // unconditionally): Apple's edge answers a request with a bare
+            // HTML 403 before reading it, keyed on the request's
+            // Content-Type, and the two hosts block opposite values:
+            // gsd.apple.com (machine provisioning, MidService) rejects
+            // `text/x-xml-plist` (the legacy value this client has always
+            // sent), while gsa.apple.com (sign-in / URL bag) rejects
+            // `application/x-xml-plist` instead. The URL bag assigns the
+            // sign-in host (gsa or gsd) and we don't choose it, so the header
+            // follows the target: a request to gsd.apple.com sends
+            // `text/xml` — the one value both hosts accept, and Apple parses
+            // the XML body the same, returning its usual `text/x-xml-plist`
+            // plist — while a request to any other host keeps the legacy
+            // `text/x-xml-plist` unchanged. (`Accept` isn't matched by the
+            // rules, so it stays as Apple's own response type.) A further
+            // rule answers 403 on a POST to `/grandslam/GsService2` without
+            // the trailing slash (see `get_url`).
+            let content_type = if url_host(url) == "gsd.apple.com" {
+                "text/xml"
+            } else {
+                "text/x-xml-plist"
+            };
+            headers.insert("Content-Type", HeaderValue::from_static(content_type));
             headers.insert("Accept", HeaderValue::from_static("text/x-xml-plist"));
         } else {
             headers.insert("Content-Type", HeaderValue::from_static("application/json"));
@@ -327,6 +316,19 @@ impl GrandSlam {
         };
         Ok(builder.build())
     }
+}
+
+/// The host of an absolute URL: the span between the scheme's `://` and the
+/// first port/path/query/fragment delimiter, with any userinfo dropped.
+/// (This crate has no direct `url` dependency, hence the anchored string
+/// form; it only ever has to tell Apple's two GrandSlam hosts apart.)
+fn url_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let end = rest
+        .find(|c| c == '/' || c == ':' || c == '?' || c == '#')
+        .unwrap_or(rest.len());
+    let authority = &rest[..end];
+    authority.rsplit('@').next().unwrap_or(authority)
 }
 
 pub trait GrandSlamErrorChecker {

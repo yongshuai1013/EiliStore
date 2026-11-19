@@ -118,30 +118,18 @@ copy sent), gsa.apple.com rejects `application/x-xml-plist`; only
 omits. And Apple's own clients send X-Apple-I-MD-RINFO and
 X-Apple-I-Client-Time in every sign-in request; upstream's `get_headers`
 had both commented out. Ported from Apparition 1.0.0's vendored copy of
-this same crate: `base_headers` now sends `Content-Type: text/xml` for
-GrandSlam requests (Accept unchanged, src/auth/grandslam.rs),
-`GrandSlam::get_url` appends the trailing slash for the `gsService` URL
-(same file), and `AnisetteData::get_headers` always sends the routing info
+this same crate, with one user-directed deviation: `base_headers` sends
+`Content-Type: text/xml` only when the request's target host is
+gsd.apple.com, and keeps the legacy `text/x-xml-plist` for every other
+host (Accept unchanged, src/auth/grandslam.rs). Apparition sends
+`text/xml` unconditionally; here the header follows the target because
+the URL bag assigns this client gsa or gsd at random and only gsd's edge
+refuses the legacy value. `GrandSlam::get_url` appends the trailing
+slash for the `gsService` URL (same file), and
+`AnisetteData::get_headers` always sends the routing info
 (when non-empty) and the request time via a std-only `client_time`
 (src/anisette/mod.rs; this crate already depends on web-time, whose
 SystemTime the function takes). Not ported: Apparition's edge-avoidance
 retry (src/auth/edge.rs), its anisette `extra` header passthrough, and its
 MD-LU / legacy device-id fill-ins — those belong to its provider pipeline,
 not to this fix.
-
-Fifteenth change (2026-11-19, user-directed; modelled on
-SideStore/SideSign): a host shunt at the URL bag's single exit,
-`GrandSlam::get_url` (src/auth/grandslam.rs). SideSign's Constants.swift
-hardcodes the sign-in endpoint as
-`https://gsa.apple.com/grandslam/GsService2` and never takes the bag's
-assignment; on device it signs in stably there, while the bag sometimes
-assigns gsd.apple.com — the host whose edge refuses this client's
-requests (fourteenth change). Rather than hardcoding the whole endpoint,
-the bag mechanism stays and only the host is shunted: a URL whose host is
-exactly gsd.apple.com is rewritten to gsa.apple.com, with scheme, port,
-path and query untouched. The rewrite is anchored at the host position
-right after the scheme (this crate has no direct `url` dependency, so no
-parser is used), and it runs before the fourteenth change's trailing-slash
-rule in the same function. The fourteenth change's three fixes stay in
-place as the fallback for any request that still reaches gsd by another
-route.
