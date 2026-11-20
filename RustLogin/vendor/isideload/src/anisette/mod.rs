@@ -28,13 +28,14 @@ pub struct AnisetteData {
     generated_at: SystemTime,
 }
 
-// Some headers don't seem to be required. I guess not including them is technically more efficient soooo
+// EiliStore era-test addition (declared deviation from the pristine
+// 2026-09-09 upstream tree): a public constructor so the out-of-crate
+// `AnisetteProvider`s in the RustLogin wrapper can build `AnisetteData`.
+// Upstream 0.3.17 constructs it only inside this crate (remote_v3), which
+// makes the public provider trait impossible to implement externally;
+// the current vendored copy carries the same patch for the same reason.
+// Field semantics are identical to remote_v3's own construction.
 impl AnisetteData {
-    /// ODATest patch (see VENDORED.md): a public constructor, so an
-    /// out-of-crate `AnisetteProvider` (a local, in-process ADI engine) can
-    /// build `AnisetteData`. Upstream only constructs it inside this crate
-    /// (remote_v3), which makes the public provider trait impossible to
-    /// implement externally.
     pub fn new(
         machine_id: String,
         one_time_password: String,
@@ -53,12 +54,22 @@ impl AnisetteData {
             generated_at: SystemTime::now(),
         }
     }
+}
 
+// Some headers don't seem to be required. I guess not including them is technically more efficient soooo
+impl AnisetteData {
     pub fn get_headers(&self) -> HashMap<String, String> {
-        let mut headers = HashMap::from_iter([
+        //let dt: DateTime<Utc> = Utc::now().round_subsecs(0);
+
+        HashMap::from_iter([
+            // (
+            //     "X-Apple-I-Client-Time".to_string(),
+            //     dt.format("%+").to_string().replace("+00:00", "Z"),
+            // ),
             // ("X-Apple-I-SRL-NO".to_string(), serial),
             // ("X-Apple-I-TimeZone".to_string(), "UTC".to_string()),
             // ("X-Apple-Locale".to_string(), "en_US".to_string()),
+            // ("X-Apple-I-MD-RINFO".to_string(), self.routing_info.clone()),
             // ("X-Apple-I-MD-LU".to_string(), self.local_user_id.clone()),
             (
                 "X-Mme-Device-Id".to_string(),
@@ -70,24 +81,7 @@ impl AnisetteData {
             //     "X-Mme-Client-Info".to_string(),
             //     self.device_description.clone(),
             // ),
-        ]);
-        // EiliStore patch (see VENDORED.md, fourteenth change; ported from
-        // Apparition 1.0.0, illixion/Apparition#16): Apple's own clients send
-        // the routing info and the request time in every sign-in request, so
-        // send both here, where every provider's data passes through.
-        // Routing info is something every provider must give (remote_v3
-        // refuses an answer without it).
-        if !self.routing_info.trim().is_empty() {
-            headers.insert("X-Apple-I-MD-RINFO".to_string(), self.routing_info.clone());
-        }
-        // The time of the request, which is what Apple's clients put here
-        // (second precision, UTC). Taken when the headers are built, not when
-        // the provider answered, so a cached answer isn't minutes old by the
-        // time it goes out.
-        headers
-            .entry("X-Apple-I-Client-Time".to_string())
-            .or_insert_with(|| client_time(SystemTime::now()));
-        headers
+        ])
     }
 
     pub fn get_header_map(&self) -> Result<HeaderMap, Report> {
@@ -135,44 +129,16 @@ impl AnisetteData {
     }
 }
 
-/// `2026-11-12T09:30:05Z`: an instant as Apple's clients write `X-Apple-I-Client-Time`.
-/// (EiliStore patch, see VENDORED.md's fourteenth change; ported from
-/// Apparition 1.0.0, illixion/Apparition#16.)
-fn client_time(at: SystemTime) -> String {
-    let seconds = at.duration_since(web_time::UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0) as i64;
-    let (days, of_day) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
-    // Days since 1970-01-01 to a calendar date (Hinnant's civil_from_days).
-    let shifted = days + 719_468;
-    let era = shifted.div_euclid(146_097);
-    let day_of_era = shifted.rem_euclid(146_097);
-    let year_of_era = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", of_day / 3_600, of_day % 3_600 / 60, of_day % 60)
-}
-
-#[derive(Debug, Clone)]
-pub enum AnisetteDataResponse {
-    Data(AnisetteData),
-    NeedsProvisioning,
-    IncorrectlyProvisioned,
-}
-
 #[cfg_attr(feature = "wasm", async_trait::async_trait(?Send))]
 #[cfg_attr(not(feature = "wasm"), async_trait::async_trait)]
 pub trait AnisetteProvider {
-    async fn get_anisette_data(&self) -> Result<AnisetteDataResponse, Report>;
-
-    async fn resync(&self, _sim: &str) -> Result<AnisetteDataResponse, Report> {
-        Err(report!("anisette resync not supported by this provider"))
-    }
+    async fn get_anisette_data(&self) -> Result<AnisetteData, Report>;
 
     async fn get_client_info(&self) -> Result<AnisetteClientInfo, Report>;
 
-    async fn provision(&mut self, gs: &Arc<GrandSlam>, force_recheck: bool) -> Result<(), Report>;
+    async fn provision(&mut self, gs: Arc<GrandSlam>) -> Result<(), Report>;
+
+    fn needs_provisioning(&self) -> Result<bool, Report>;
 }
 
 #[derive(Clone)]
@@ -199,57 +165,30 @@ impl AnisetteDataGenerator {
             return Ok(data.clone());
         }
 
-        // 3 attempts for the worst case: load anisette from storage, server says -45061 -> reprovision anisette -> get data
-        let data = self.get_data_or_provision(&gs, 3).await?;
-        let arc_data = Arc::new(data);
-        self.data = Some(arc_data.clone());
-        Ok(arc_data)
-    }
-
-    async fn get_data_or_provision(
-        &mut self,
-        gs: &Arc<GrandSlam>,
-        max_iters: usize,
-    ) -> Result<AnisetteData, Report> {
-        if max_iters == 0 {
-            bail!("Max anisette provisioning attempts reached");
-        }
-        // trying to avoid locking as write unless necessary for concurrency later on
+        // trying to avoid locking as write unless necessary to promote concurrency
         let provider = self.provider.read().await;
-        match provider.get_anisette_data().await? {
-            AnisetteDataResponse::Data(data) => Ok(data),
-            status @ (AnisetteDataResponse::NeedsProvisioning
-            | AnisetteDataResponse::IncorrectlyProvisioned) => {
-                drop(provider);
-                let mut provider_write = self.provider.write().await;
-                provider_write
-                    .provision(
-                        gs,
-                        matches!(status, AnisetteDataResponse::IncorrectlyProvisioned),
-                    )
-                    .await?;
-                drop(provider_write);
-                Box::pin(self.get_data_or_provision(gs, max_iters - 1)).await
-            }
+
+        if provider.needs_provisioning()? {
+            drop(provider);
+            let mut provider_write = self.provider.write().await;
+            provider_write.provision(gs).await?;
+            drop(provider_write);
+
+            let provider = self.provider.read().await;
+            let data = provider.get_anisette_data().await?;
+            let arc_data = Arc::new(data);
+            self.data = Some(arc_data.clone());
+            Ok(arc_data)
+        } else {
+            let data = provider.get_anisette_data().await?;
+            let arc_data = Arc::new(data);
+            self.data = Some(arc_data.clone());
+            Ok(arc_data)
         }
     }
 
     pub async fn get_client_info(&self) -> Result<AnisetteClientInfo, Report> {
         let provider = self.provider.read().await;
         provider.get_client_info().await
-    }
-
-    /// Perform a login anisette resync with the server, returning corrected data.
-    pub async fn resync(&mut self, sim: &str) -> Result<Arc<AnisetteData>, Report> {
-        let provider = self.provider.read().await;
-        let data = match provider.resync(sim).await? {
-            AnisetteDataResponse::Data(data) => data,
-            _ => {
-                bail!("Anisette provider failed to provide data for resync, needs provisioning");
-            }
-        };
-        let arc_data = Arc::new(data);
-        self.data = Some(arc_data.clone());
-        Ok(arc_data)
     }
 }

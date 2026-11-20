@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 
-use apparition_signer::{BundleSigningSettings, ProvisioningProfile, Signer, sign_bundle};
+use apple_codesign::{
+    BundleSigningSettings, ProvisioningProfile, RustCryptoCmsSigner, sign_bundle,
+};
 
 use plist::Dictionary;
 use rootcause::prelude::*;
-use tracing::warn;
 
 use crate::{
     dev::{app_ids::Profile, teams::DeveloperTeam},
@@ -18,7 +19,7 @@ pub async fn sign<F, Fut>(
     app: &mut Application,
     cert_identity: &CertificateIdentity,
     main_provisioning_profile: &Profile,
-    all_profiles: &mut Vec<(String, Profile, Dictionary)>,
+    all_profiles: &Vec<(String, Profile, Dictionary)>,
     special: &Option<SpecialApp>,
     team: &DeveloperTeam,
     progress_callback: Option<F>,
@@ -30,11 +31,11 @@ where
     let profile = ProvisioningProfile::parse(main_provisioning_profile.encoded_profile.as_ref())?;
     let certificate_chain = cert_identity.profile_to_certificate_chain(&profile)?;
 
-    let signer = Signer::new(
+    let signer = RustCryptoCmsSigner::new(
         cert_identity.private_key.clone(),
         cert_identity.certificate.clone(),
         certificate_chain,
-    )?;
+    );
     if let Some(callback) = &progress_callback {
         callback(0.4).await;
     }
@@ -58,20 +59,8 @@ where
 
         entitlements.insert(
             "keychain-access-groups".to_string(),
-            plist::Value::Array(keychain_access.clone()),
+            plist::Value::Array(keychain_access),
         );
-
-        let liveprocess_profile = all_profiles
-            .iter_mut()
-            .find(|(bundle_id, _, _)| bundle_id.ends_with("LiveProcess"));
-        if let Some((_, _, liveprocess_entitlements)) = liveprocess_profile {
-            liveprocess_entitlements.insert(
-                "keychain-access-groups".to_string(),
-                plist::Value::Array(keychain_access),
-            );
-        } else {
-            warn!("Could not find LiveProcess profile");
-        }
     }
 
     let mut settings = BundleSigningSettings::new(&team.team_id, entitlements, Some(&signer));

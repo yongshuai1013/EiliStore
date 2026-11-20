@@ -3,45 +3,40 @@ use crate::{
         app_groups::AppGroupsApi,
         app_ids::{AppIdsApi, Profile},
         developer_session::DeveloperSession,
-        device_type::DeveloperDeviceType,
         devices::DevicesApi,
         teams::{DeveloperTeam, TeamsApi},
     },
     sideload::{
         TeamSelection,
         application::{Application, SpecialApp},
-        builder::{ExtensionsBehavior, ExtensionsBehaviorSelection, MaxCertsBehavior},
+        builder::MaxCertsBehavior,
         cert_identity::CertificateIdentity,
         sign,
     },
-    util::{
-        callbacks::{ExtensionsBehaviorCallback, MaxCertsCallback},
-        device::IdeviceInfo,
-        storage::SideloadingStorage,
-    },
+    util::{device::IdeviceInfo, storage::SideloadingStorage},
 };
 
 use std::path::PathBuf;
 
-use apparition_signer::ProvisioningProfile;
+use apple_codesign::ProvisioningProfile;
 use idevice::provider::IdeviceProvider;
 use plist::Dictionary;
 use rootcause::{option_ext::OptionExt, prelude::*};
-use tracing::{info, warn};
+use tracing::info;
 
-pub struct Sideloader<C: MaxCertsCallback, E: ExtensionsBehaviorCallback> {
+pub struct Sideloader {
     team_selection: TeamSelection,
     storage: Box<dyn SideloadingStorage>,
     dev_session: DeveloperSession,
     machine_name: String,
     apple_email: String,
-    max_certs_behavior: MaxCertsBehavior<C>,
-    extensions_behavior: ExtensionsBehaviorSelection<E>,
+    max_certs_behavior: MaxCertsBehavior,
+    //extensions_behavior: ExtensionsBehavior,
     delete_app_after_install: bool,
     team: Option<DeveloperTeam>,
 }
 
-impl<C: MaxCertsCallback, E: ExtensionsBehaviorCallback> Sideloader<C, E> {
+impl Sideloader {
     /// Construct a new `Sideloader` instance with the provided configuration
     ///
     /// See [`crate::sideload::SideloaderBuilder`] for more details and a more convenient way to construct a `Sideloader`.
@@ -49,10 +44,10 @@ impl<C: MaxCertsCallback, E: ExtensionsBehaviorCallback> Sideloader<C, E> {
         dev_session: DeveloperSession,
         apple_email: String,
         team_selection: TeamSelection,
-        max_certs_behavior: MaxCertsBehavior<C>,
+        max_certs_behavior: MaxCertsBehavior,
         machine_name: String,
         storage: Box<dyn SideloadingStorage>,
-        extensions_behavior: ExtensionsBehaviorSelection<E>,
+        //extensions_behavior: ExtensionsBehavior,
         delete_app_after_install: bool,
     ) -> Self {
         Sideloader {
@@ -62,25 +57,20 @@ impl<C: MaxCertsCallback, E: ExtensionsBehaviorCallback> Sideloader<C, E> {
             machine_name,
             apple_email,
             max_certs_behavior,
-            extensions_behavior,
+            //extensions_behavior,
             delete_app_after_install,
             team: None,
         }
     }
 
     /// Sign the app at the provided path and return the path to the signed app bundle (in a temp dir). To sign and install, see [`Self::install_app`].
-    /// `pairing_file` is the optional pairing file to be encrypted and placed in the bundle if installing AltStore.
-    /// `device_udid` is the optional device UDID to be used for AltStore pairing file injection.
     pub async fn sign_app<F, Fut>(
         &mut self,
         app_path: PathBuf,
         team: Option<DeveloperTeam>,
-        // Portal capability IDs (`INCREASED_MEMORY_LIMIT`, ...) to turn on for the main App ID.
-        // One Apple refuses doesn't stop the signing: its entitlement is left out of the profile.
-        capabilities: &[String],
+        // this will be replaced with proper entitlement handling later
+        increased_memory_limit: bool,
         progress_callback: Option<F>,
-        pairing_file: Option<&[u8]>,
-        device_udid: Option<&str>,
     ) -> Result<(PathBuf, Option<SpecialApp>), Report>
     where
         F: Fn(f32) -> Fut,
@@ -106,26 +96,17 @@ impl<C: MaxCertsCallback, E: ExtensionsBehaviorCallback> Sideloader<C, E> {
         }
 
         let mut app = Application::new(app_path)?;
-        // When signing on macOS, choose the provisioning platform from the
-        // target app rather than the operating system of this installer.
-        let profile_platform = if cfg!(target_os = "tvos") || targets_tvos(&app.bundle.app_info) {
-            Some(DeveloperDeviceType::Tvos)
-        } else {
-            None
-        };
         let special = app.get_special_app();
 
         let main_bundle_id = app.main_bundle_id()?;
         let main_app_name = app.main_app_name()?;
         let main_app_id_str = format!("{}.{}", main_bundle_id, team.team_id);
         app.update_bundle_id(&main_bundle_id, &main_app_id_str)?;
-
-        let extensions_behavior = self
-            .extensions_behavior
-            .behavior(app.bundle.app_extensions())
-            .await?;
         let mut app_ids = app
-            .register_app_ids(&extensions_behavior, &mut self.dev_session, &team)
+            .register_app_ids(
+                /*&self.extensions_behavior, */ &mut self.dev_session,
+                &team,
+            )
             .await?;
         let main_app_id = match app_ids
             .iter()
@@ -164,25 +145,10 @@ impl<C: MaxCertsCallback, E: ExtensionsBehaviorCallback> Sideloader<C, E> {
                 .assign_app_group(&team, &app_group, app_id, None)
                 .await?;
 
-        }
-
-        if !capabilities.is_empty() {
-            // All in one request; if Apple refuses it, each on its own, so the rest still count.
-            if let Err(error) = self
-                .dev_session
-                .enable_capabilities(&team, &main_app_id, capabilities)
-                .await
-            {
-                warn!("{error}");
-                for capability in capabilities {
-                    if let Err(error) = self
-                        .dev_session
-                        .enable_capabilities(&team, &main_app_id, std::slice::from_ref(capability))
-                        .await
-                    {
-                        warn!("{error}");
-                    }
-                }
+            if increased_memory_limit {
+                self.dev_session
+                    .add_increased_memory_limit(&team, app_id)
+                    .await?;
             }
         }
 
@@ -192,62 +158,36 @@ impl<C: MaxCertsCallback, E: ExtensionsBehaviorCallback> Sideloader<C, E> {
 
         info!("App IDs configured");
 
-        app.apply_special_app_behavior(
-            &special,
-            &group_identifier,
-            &cert_identity,
-            pairing_file,
-            device_udid,
-        )
-        .await
-        .context("Failed to modify app bundle")?;
+        app.apply_special_app_behavior(&special, &group_identifier, &cert_identity)
+            .await
+            .context("Failed to modify app bundle")?;
 
         let main_provisioning_profile = self
             .dev_session
-            .download_team_provisioning_profile(&team, &main_app_id, profile_platform.clone())
+            .download_team_provisioning_profile(&team, &main_app_id, None)
             .await?;
 
         let mut provisioning_profiles: Vec<(String, Profile, Dictionary)> = Vec::new();
 
-        match extensions_behavior {
-            ExtensionsBehavior::ReuseMain => {
-                // For each extension bundle id, push the main provisioning profile and entitlements to the provisioning_profiles vector
-                let main_entitlements =
-                    ProvisioningProfile::parse(main_provisioning_profile.encoded_profile.as_ref())?
-                        .entitlements()
-                        .clone();
-                let extensions = app.bundle.app_extensions();
-                for ext in extensions {
-                    provisioning_profiles.push((
-                        ext.bundle_identifier().unwrap_or_default().to_string(),
-                        main_provisioning_profile.clone(),
-                        main_entitlements.clone(),
-                    ));
-                }
-            }
-            ExtensionsBehavior::RegisterAll => {
-                for id in app_ids
-                    .into_iter()
-                    .filter(|id| id.identifier != main_app_id.identifier)
-                {
-                    let bundle_id = id.identifier.clone();
+        for id in app_ids
+            .into_iter()
+            .filter(|id| id.identifier != main_app_id.identifier)
+        {
+            let bundle_id = id.identifier.clone();
 
-                    let profile = self
-                        .dev_session
-                        .download_team_provisioning_profile(&team, &id, profile_platform.clone())
-                        .await
-                        .context(format!(
-                            "Failed to download provisioning profile for {}",
-                            bundle_id
-                        ))?;
+            let profile = self
+                .dev_session
+                .download_team_provisioning_profile(&team, &id, None)
+                .await
+                .context(format!(
+                    "Failed to download provisioning profile for {}",
+                    bundle_id
+                ))?;
 
-                    let parsed_profile =
-                        ProvisioningProfile::parse(profile.encoded_profile.as_ref())?;
-                    let entitlements = parsed_profile.entitlements().clone();
+            let parsed_profile = ProvisioningProfile::parse(profile.encoded_profile.as_ref())?;
+            let entitlements = parsed_profile.entitlements().clone();
 
-                    provisioning_profiles.push((bundle_id, profile, entitlements));
-                }
-            }
+            provisioning_profiles.push((bundle_id, profile, entitlements));
         }
 
         if let Some(callback) = &progress_callback {
@@ -277,7 +217,7 @@ impl<C: MaxCertsCallback, E: ExtensionsBehaviorCallback> Sideloader<C, E> {
             &mut app,
             &cert_identity,
             &main_provisioning_profile,
-            &mut provisioning_profiles,
+            &provisioning_profiles,
             &special,
             &team,
             progress_callback,
@@ -292,16 +232,13 @@ impl<C: MaxCertsCallback, E: ExtensionsBehaviorCallback> Sideloader<C, E> {
 
     #[cfg(feature = "install")]
     /// Sign and install an app to a device.
-    /// This is more intended to be a helper function for simple use cases, for more complex scenarios you should call `sign_app` and `install_app` separately.
-    /// `pairing_file` is the optional pairing file to be encrypted and placed in the bundle if installing AltStore.
-    /// `device_udid` is the optional device UDID to be used for AltStore pairing file injection.
     pub async fn install_app<F, Fut>(
         &mut self,
         device_provider: &impl IdeviceProvider,
         app_path: PathBuf,
-        capabilities: &[String],
+        // this is gross but will be replaced with proper entitlement handling later
+        increased_memory_limit: bool,
         progress_callback: Option<F>,
-        pairing_file: Option<&[u8]>,
     ) -> Result<Option<SpecialApp>, Report>
     where
         F: Fn(f32) -> Fut,
@@ -318,22 +255,15 @@ impl<C: MaxCertsCallback, E: ExtensionsBehaviorCallback> Sideloader<C, E> {
             .sign_app(
                 app_path,
                 Some(team),
-                capabilities,
+                increased_memory_limit,
                 progress_callback,
-                pairing_file,
-                Some(&device_info.udid),
             )
             .await?;
 
         info!("Transferring App...");
 
-        let last_logged_progress = std::sync::Arc::new(std::sync::Mutex::new(0));
         crate::sideload::install::install_app(device_provider, &signed_app_path, |progress| {
-            let mut last_progress = last_logged_progress.lock().unwrap();
-            if progress >= *last_progress + 10 {
-                *last_progress = progress;
-                info!("Installing: {}%", progress);
-            }
+            info!("Installing: {}%", progress);
         })
         .await
         .context("Failed to install app on device")?;
@@ -389,54 +319,5 @@ impl<C: MaxCertsCallback, E: ExtensionsBehaviorCallback> Sideloader<C, E> {
 
     pub fn get_email(&self) -> &str {
         &self.apple_email
-    }
-}
-
-/// A TV app needs a tvOS profile even when it is signed from a Mac.
-fn targets_tvos(info: &Dictionary) -> bool {
-    info.get("UIDeviceFamily")
-        .and_then(plist::Value::as_array)
-        .is_some_and(|families| families.iter().any(|v| v.as_unsigned_integer() == Some(3)))
-        || info
-            .get("CFBundleSupportedPlatforms")
-            .and_then(plist::Value::as_array)
-            .is_some_and(|platforms| platforms.iter().any(|v| v.as_string() == Some("AppleTVOS")))
-}
-
-#[cfg(test)]
-mod profile_platform_tests {
-    use super::*;
-
-    #[test]
-    fn device_family_3_is_tvos() {
-        let mut info = Dictionary::new();
-        info.insert(
-            "UIDeviceFamily".into(),
-            plist::Value::Array(vec![plist::Value::Integer(3.into())]),
-        );
-        assert!(targets_tvos(&info));
-    }
-
-    #[test]
-    fn apple_tv_platform_is_tvos() {
-        let mut info = Dictionary::new();
-        info.insert(
-            "CFBundleSupportedPlatforms".into(),
-            plist::Value::Array(vec![plist::Value::String("AppleTVOS".into())]),
-        );
-        assert!(targets_tvos(&info));
-    }
-
-    #[test]
-    fn iphone_and_ipad_do_not_need_tvos_profiles() {
-        let mut info = Dictionary::new();
-        info.insert(
-            "UIDeviceFamily".into(),
-            plist::Value::Array(vec![
-                plist::Value::Integer(1.into()),
-                plist::Value::Integer(2.into()),
-            ]),
-        );
-        assert!(!targets_tvos(&info));
     }
 }

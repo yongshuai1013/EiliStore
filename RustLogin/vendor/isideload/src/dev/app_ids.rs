@@ -2,7 +2,6 @@ use crate::{
     dev::{
         developer_session::DeveloperSession,
         device_type::{DeveloperDeviceType, dev_url},
-        normalize_app_names,
         teams::DeveloperTeam,
     },
     util::plist::{PlistDataExtract, SensitivePlistAttachment},
@@ -67,12 +66,7 @@ pub trait AppIdsApi {
         let body = plist!(dict {
             "teamId": &team.team_id,
             "identifier": identifier,
-            // EiliStore patch #13: addAppId.action validates
-            // 'appIdentifierString'; without it Apple answers error 35
-            // ("No value was provided for the parameter
-            // 'appIdentifierString'"), seen on device 2026-10-28.
-            "appIdentifierString": identifier,
-            "name": normalize_app_names(name),
+            "name": name,
         });
 
         let app_id: AppId = self
@@ -162,29 +156,15 @@ pub trait AppIdsApi {
         app_id: &AppId,
         device_type: impl Into<Option<DeveloperDeviceType>> + Send,
     ) -> Result<Profile, Report> {
-        let requested_platform = device_type.into();
-        let tvos = matches!(requested_platform.as_ref(), Some(DeveloperDeviceType::Tvos));
-        let mut body = plist!(dict {
+        let body = plist!(dict {
             "teamId": &team.team_id,
             "appIdId": &app_id.app_id_id,
         });
-        // Apple's legacy /ios/ endpoint uses a subPlatform field to select
-        // a tvOS provisioning profile; switching to /tvos/ returns HTTP 404.
-        if tvos {
-            body.insert("subPlatform".into(), Value::String("tvOS".into()));
-        }
 
         let response: Profile = self
             .developer_session()
             .send_dev_request(
-                &dev_url(
-                    "downloadTeamProvisioningProfile",
-                    if tvos {
-                        Some(DeveloperDeviceType::Ios)
-                    } else {
-                        requested_platform
-                    },
-                ),
+                &dev_url("downloadTeamProvisioningProfile", device_type),
                 body,
                 "provisioningProfile",
             )
@@ -194,70 +174,43 @@ pub trait AppIdsApi {
         Ok(response)
     }
 
-    /// Turns on `capabilities` (the portal's IDs, such as `INCREASED_MEMORY_LIMIT`) for the App
-    /// ID in one request, through the JSON API that has capabilities the plist API's feature
-    /// codes don't. Apple's reply is kept in the error, since it names what it refused.
-    async fn enable_capabilities(
+    async fn add_increased_memory_limit(
         &mut self,
         team: &DeveloperTeam,
         app_id: &AppId,
-        capabilities: &[String],
     ) -> Result<(), Report> {
-        let body = serde_json::json!({ "data": {
-            "type": "bundleIds",
-            "id": app_id.app_id_id,
-            "attributes": {
-                "hasExclusiveManagedCapabilities": false,
-                "teamId": team.team_id,
-                "bundleType": "bundle",
-                "identifier": app_id.identifier,
-                "seedId": team.team_id,
-                "name": app_id.name,
-            },
-            "relationships": { "bundleIdCapabilities": { "data": capabilities.iter().map(|id| serde_json::json!({
-                "type": "bundleIdCapabilities",
-                "attributes": { "enabled": true, "settings": [] },
-                "relationships": { "capability": { "data": { "type": "capabilities", "id": id } } },
-            })).collect::<Vec<_>>() } },
-        } });
         let dev_session = self.developer_session();
-        let headers = json_api_headers(dev_session).await?;
-        let response = dev_session
-            .get_grandslam_client()
-            .patch(&format!("{BUNDLE_IDS_URL}/{}", app_id.app_id_id))?
-            .headers(headers)
-            .body(body.to_string())
-            .send()
+
+        let mut headers = dev_session
+            .get_headers()
             .await
-            .context("Failed to request capabilities")?;
-        let status = response.status();
-        if !status.is_success() {
-            let reply = response.text().await.unwrap_or_default();
-            // JSON:API errors: the `detail` says why ("…not eligible for this feature").
-            let details: Vec<String> = serde_json::from_str::<serde_json::Value>(&reply)
-                .ok()
-                .and_then(|r| r["errors"].as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|e| e["detail"].as_str().map(|d| d.split_whitespace().collect::<Vec<_>>().join(" ")))
-                .collect();
-            let why = if details.is_empty() { reply } else { details.join(" ") };
-            bail!("Apple refused {} ({status}): {why}", capabilities.join(", "));
-        }
+            .context("Failed to get anisette headers")?;
+        headers.insert(
+            "Content-Type",
+            HeaderValue::from_static("application/vnd.api+json"),
+        );
+        headers.insert(
+            "Accept",
+            HeaderValue::from_static("application/vnd.api+json"),
+        );
+
+        dev_session
+                .get_grandslam_client()
+                .patch(&format!(
+                    "https://developerservices2.apple.com/services/v1/bundleIds/{}",
+                    app_id.app_id_id
+                ))?
+                .headers(headers)
+                .body(format!(
+                "{{\"data\":{{\"relationships\":{{\"bundleIdCapabilities\":{{\"data\":[{{\"relationships\":{{\"capability\":{{\"data\":{{\"id\":\"INCREASED_MEMORY_LIMIT\",\"type\":\"capabilities\"}}}}}},\"type\":\"bundleIdCapabilities\",\"attributes\":{{\"settings\":[],\"enabled\":true}}}}]}}}},\"id\":\"{}\",\"attributes\":{{\"hasExclusiveManagedCapabilities\":false,\"teamId\":\"{}\",\"bundleType\":\"bundle\",\"identifier\":\"{}\",\"seedId\":\"{}\",\"name\":\"{}\"}},\"type\":\"bundleIds\"}}}}",
+                app_id.app_id_id, team.team_id, app_id.identifier, team.team_id, app_id.name
+            ))
+                .send()
+                .await.context("Failed to request increased memory entitlement")?
+                .error_for_status().context("Failed to add increased memory entitlement")?;
+
         Ok(())
     }
-}
-
-const BUNDLE_IDS_URL: &str = "https://developerservices2.apple.com/services/v1/bundleIds";
-
-async fn json_api_headers(dev_session: &mut DeveloperSession) -> Result<reqwest::header::HeaderMap, Report> {
-    let mut headers = dev_session
-        .get_headers()
-        .await
-        .context("Failed to get anisette headers")?;
-    headers.insert("Content-Type", HeaderValue::from_static("application/vnd.api+json"));
-    headers.insert("Accept", HeaderValue::from_static("application/vnd.api+json"));
-    Ok(headers)
 }
 
 impl AppIdsApi for DeveloperSession {

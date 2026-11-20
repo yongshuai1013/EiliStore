@@ -11,14 +11,9 @@ use reqwest::{
 use reqwest_middleware::ClientBuilder as MwClientBuilder;
 use rootcause::prelude::*;
 use tracing::debug;
-use tracing::warn;
 
 #[cfg(not(feature = "wasm"))]
 use crate::sideload::cert_identity::APPLE_ROOT;
-
-/// gsd.apple.com (machine provisioning) chains to this root, which Linux's and Windows' trust
-/// stores may not have; macOS's does.
-const APPLE_ROOT_G3: &[u8] = include_bytes!("../assets/AppleRootCA-G3.cer");
 use crate::{SideloadError, anisette::AnisetteClientInfo, util::plist::PlistDataExtract};
 
 const URL_BAG: &str = "https://gsa.apple.com/grandslam/GsService2/lookup";
@@ -41,7 +36,7 @@ impl GrandSlam {
     ) -> Result<Self, Report> {
         let client =
             Self::build_reqwest_client(debug, proxy_url).context("Failed to build HTTP client")?;
-        let base_headers = Self::base_headers(&client_info, false, URL_BAG)?;
+        let base_headers = Self::base_headers(&client_info, false)?;
         let url_bag = Self::fetch_url_bag(&client, base_headers).await?;
         Ok(Self {
             client,
@@ -50,24 +45,12 @@ impl GrandSlam {
         })
     }
 
-    /// The same client and URL bag, claiming `client_info` instead. Apple issues the Xcode token
-    /// for a sign-in claiming Android only to requests claiming a Mac.
-    pub fn claiming(&self, client_info: AnisetteClientInfo) -> Self {
-        Self {
-            client: self.client.clone(),
-            client_info,
-            url_bag: self.url_bag.clone(),
-        }
-    }
-
     /// Fetch the URL bag from GrandSlam and cache it
     pub async fn fetch_url_bag(
         client: &reqwest_middleware::ClientWithMiddleware,
         base_headers: HeaderMap,
     ) -> Result<Dictionary, Report> {
         debug!("Fetching URL bag from GrandSlam");
-        // Upstream claims a Mac here whatever the sign-in claims. Claiming Android for the sign-in
-        // after a Mac's bag, GSA answers the first SRP request 503, so the bag gets the real claim.
         let resp = client
             .get(URL_BAG)
             .headers(base_headers)
@@ -90,17 +73,10 @@ impl GrandSlam {
     }
 
     pub fn get_url(&self, key: &str) -> Result<String, Report> {
-        let mut url = self
+        let url = self
             .url_bag
             .get_string(key)
             .context("Unable to find key in URL bag")?;
-        // EiliStore patch (see VENDORED.md, fourteenth change; ported from
-        // Apparition 1.0.0, illixion/Apparition#16): Apple's edge answers a
-        // bare HTML 403 to a POST on exactly `/grandslam/GsService2` and takes
-        // `/grandslam/GsService2/`. The URL bag still lists the first form.
-        if key == "gsService" && url.ends_with("/grandslam/GsService2") {
-            url.push('/');
-        }
         Ok(url)
     }
 
@@ -108,7 +84,7 @@ impl GrandSlam {
         let builder = self
             .client
             .get(url)
-            .headers(Self::base_headers(&self.client_info, false, url)?);
+            .headers(Self::base_headers(&self.client_info, false)?);
 
         Ok(builder)
     }
@@ -117,7 +93,7 @@ impl GrandSlam {
         let builder = self
             .client
             .get(url)
-            .headers(Self::base_headers(&self.client_info, true, url)?);
+            .headers(Self::base_headers(&self.client_info, true)?);
 
         Ok(builder)
     }
@@ -126,7 +102,7 @@ impl GrandSlam {
         let builder = self
             .client
             .put(url)
-            .headers(Self::base_headers(&self.client_info, true, url)?);
+            .headers(Self::base_headers(&self.client_info, true)?);
 
         Ok(builder)
     }
@@ -135,7 +111,7 @@ impl GrandSlam {
         let builder = self
             .client
             .post(url)
-            .headers(Self::base_headers(&self.client_info, false, url)?);
+            .headers(Self::base_headers(&self.client_info, false)?);
 
         Ok(builder)
     }
@@ -144,7 +120,7 @@ impl GrandSlam {
         let builder = self
             .client
             .post(url)
-            .headers(Self::base_headers(&self.client_info, true, url)?);
+            .headers(Self::base_headers(&self.client_info, true)?);
 
         Ok(builder)
     }
@@ -153,7 +129,7 @@ impl GrandSlam {
         let builder = self
             .client
             .patch(url)
-            .headers(Self::base_headers(&self.client_info, false, url)?);
+            .headers(Self::base_headers(&self.client_info, false)?);
 
         Ok(builder)
     }
@@ -163,41 +139,14 @@ impl GrandSlam {
         url: &str,
         body: &Dictionary,
         additional_headers: Option<HeaderMap>,
-        retry_limit: Option<u32>,
     ) -> Result<Dictionary, Report> {
-        let result = self
+        let resp = self
             .post(url)?
-            .headers(
-                additional_headers
-                    .clone()
-                    .unwrap_or_else(reqwest::header::HeaderMap::new),
-            )
+            .headers(additional_headers.unwrap_or_else(reqwest::header::HeaderMap::new))
             .body(plist_to_xml_string(body))
             .send()
             .await
-            .context("Failed to send grandslam request")?;
-
-        if let Some(retries) = retry_limit
-            && result.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
-        {
-            if retries > 0 {
-                warn!(
-                    "Received 429 Too Many Requests, retrying request ({} retries left)",
-                    retries
-                );
-                return Box::pin(self.plist_request(
-                    url,
-                    body,
-                    additional_headers,
-                    Some(retries - 1),
-                ))
-                .await;
-            } else {
-                bail!("Received 429 Too Many Requests, no retries left");
-            }
-        }
-
-        let resp = result
+            .context("Failed to send grandslam request")?
             .error_for_status()
             .context("Received error response from grandslam")?
             .text()
@@ -223,35 +172,10 @@ impl GrandSlam {
     fn base_headers(
         client_info: &AnisetteClientInfo,
         sms: bool,
-        url: &str,
     ) -> Result<reqwest::header::HeaderMap, Report> {
         let mut headers = reqwest::header::HeaderMap::new();
         if !sms {
-            // EiliStore patch (see VENDORED.md, fourteenth change; the
-            // per-host condition is user-directed, on the edge evidence of
-            // illixion/Apparition#12/#16, whose fix sends `text/xml`
-            // unconditionally): Apple's edge answers a request with a bare
-            // HTML 403 before reading it, keyed on the request's
-            // Content-Type, and the two hosts block opposite values:
-            // gsd.apple.com (machine provisioning, MidService) rejects
-            // `text/x-xml-plist` (the legacy value this client has always
-            // sent), while gsa.apple.com (sign-in / URL bag) rejects
-            // `application/x-xml-plist` instead. The URL bag assigns the
-            // sign-in host (gsa or gsd) and we don't choose it, so the header
-            // follows the target: a request to gsd.apple.com sends
-            // `text/xml` — the one value both hosts accept, and Apple parses
-            // the XML body the same, returning its usual `text/x-xml-plist`
-            // plist — while a request to any other host keeps the legacy
-            // `text/x-xml-plist` unchanged. (`Accept` isn't matched by the
-            // rules, so it stays as Apple's own response type.) A further
-            // rule answers 403 on a POST to `/grandslam/GsService2` without
-            // the trailing slash (see `get_url`).
-            let content_type = if url_host(url) == "gsd.apple.com" {
-                "text/xml"
-            } else {
-                "text/x-xml-plist"
-            };
-            headers.insert("Content-Type", HeaderValue::from_static(content_type));
+            headers.insert("Content-Type", HeaderValue::from_static("text/x-xml-plist"));
             headers.insert("Accept", HeaderValue::from_static("text/x-xml-plist"));
         } else {
             headers.insert("Content-Type", HeaderValue::from_static("application/json"));
@@ -273,10 +197,6 @@ impl GrandSlam {
             "X-Apple-App-Info",
             HeaderValue::from_static("com.apple.gs.xcode.auth"),
         );
-        headers.insert(
-            reqwest::header::CONNECTION,
-            HeaderValue::from_static("close"),
-        );
 
         Ok(headers)
     }
@@ -288,22 +208,17 @@ impl GrandSlam {
     /// # Errors
     /// Returns an error if the reqwest client cannot be built
     pub fn build_reqwest_client(
-        #[cfg(not(feature = "wasm"))] debug: bool,
-        #[cfg(feature = "wasm")] _debug: bool,
+        debug: bool,
         proxy_url: Option<String>,
     ) -> Result<reqwest_middleware::ClientWithMiddleware, Report> {
         #[cfg(not(feature = "wasm"))]
         let cert = Certificate::from_der(APPLE_ROOT)?;
         #[cfg(not(feature = "wasm"))]
-        let cert_g3 = Certificate::from_der(APPLE_ROOT_G3)?;
-        #[cfg(not(feature = "wasm"))]
         let client = ClientBuilder::new()
             .add_root_certificate(cert)
-            .add_root_certificate(cert_g3)
             .http1_title_case_headers()
             .danger_accept_invalid_certs(debug)
             .connection_verbose(debug)
-            // .pool_max_idle_per_host(0)
             .build()?;
         #[cfg(feature = "wasm")]
         let client = ClientBuilder::new().build()?;
@@ -316,19 +231,6 @@ impl GrandSlam {
         };
         Ok(builder.build())
     }
-}
-
-/// The host of an absolute URL: the span between the scheme's `://` and the
-/// first port/path/query/fragment delimiter, with any userinfo dropped.
-/// (This crate has no direct `url` dependency, hence the anchored string
-/// form; it only ever has to tell Apple's two GrandSlam hosts apart.)
-fn url_host(url: &str) -> &str {
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let end = rest
-        .find(|c| c == '/' || c == ':' || c == '?' || c == '#')
-        .unwrap_or(rest.len());
-    let authority = &rest[..end];
-    authority.rsplit('@').next().unwrap_or(authority)
 }
 
 pub trait GrandSlamErrorChecker {

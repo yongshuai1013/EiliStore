@@ -6,10 +6,10 @@ use crate::dev::{
 use plist::{Data, Date};
 use plist_macro::plist;
 use rootcause::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DevelopmentCertificate {
     pub name: Option<String>,
@@ -25,7 +25,7 @@ pub struct DevelopmentCertificate {
     pub expiration_date: Option<Date>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CertificateType {
     pub certificate_type_display_id: Option<String>,
@@ -39,7 +39,7 @@ pub struct CertificateType {
     pub max_active_certs: Option<i64>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CertRequest {
     pub cert_request_id: String,

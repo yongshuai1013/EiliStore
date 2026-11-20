@@ -67,17 +67,6 @@ impl DeveloperSession {
         ))
     }
 
-    /// EiliStore patch #11: read-only accessors so the host app can build
-    /// its own stored session (SideSign AuthSession) from a completed
-    /// sign-in. No behavior change.
-    pub fn adsid(&self) -> &str {
-        &self.adsid
-    }
-
-    pub fn app_token(&self) -> &crate::auth::apple_account::AppToken {
-        &self.token
-    }
-
     pub async fn get_headers(&mut self) -> Result<HeaderMap, Report> {
         let mut headers = self
             .anisette_generator
