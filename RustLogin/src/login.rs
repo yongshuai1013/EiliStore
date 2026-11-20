@@ -23,7 +23,7 @@ use std::sync::Arc;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use http::{HeaderMap, HeaderValue};
-use isideload::anisette::{AnisetteClientInfo, AnisetteData, AnisetteDataGenerator, AnisetteDataResponse, AnisetteProvider};
+use isideload::anisette::{AnisetteClientInfo, AnisetteData, AnisetteDataGenerator, AnisetteProvider};
 use isideload::auth::apple_account::{AppToken, AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse};
 use isideload::auth::grandslam::GrandSlam;
 use isideload::dev::developer_session::DeveloperSession;
@@ -164,32 +164,44 @@ impl LocalAdiProvider {
 
 #[async_trait::async_trait]
 impl AnisetteProvider for LocalAdiProvider {
-    async fn get_anisette_data(&self) -> Result<AnisetteDataResponse, Report> {
+    async fn get_anisette_data(&self) -> Result<AnisetteData, Report> {
         diag("stage: anisette requested (engine login_code probe)");
         let code = engine_call(|exports| exports.login_code()).await.map_err(|e| rootcause::report!("{e}"))?;
         if code != 0 {
-            // -45061 is "not provisioned"; any other non-zero code gets the
-            // same treatment — provision() will surface the real error if
-            // the identity is broken in some other way.
-            return Ok(AnisetteDataResponse::NeedsProvisioning);
+            // -45061 is "not provisioned"; any other non-zero code gets
+            // the same treatment. The era trait has no NeedsProvisioning
+            // response value: needs_provisioning() below is what routes
+            // the generator into provision() first, so reaching this
+            // branch means the identity broke after that check.
+            return Err(rootcause::report!("local anisette not provisioned (engine login_code={code})"));
         }
         let otp = engine_call(|exports| exports.request_otp()).await.map_err(|e| rootcause::report!("{e}"))?.map_err(|e| rootcause::report!("{e}"))?;
         diag("stage: engine OTP ok");
-        Ok(AnisetteDataResponse::Data(AnisetteData::new(
+        Ok(AnisetteData::new(
             B64.encode(&otp.machine_id),
             B64.encode(&otp.one_time_password),
             "17106176".to_string(),
             ANDROID_CLIENT_INFO.to_string(),
             self.device_id.clone(),
             self.md_lu_hex(),
-        )))
+        ))
     }
 
     async fn get_client_info(&self) -> Result<AnisetteClientInfo, Report> {
         Ok(android_info())
     }
 
-    async fn provision(&mut self, gs: &Arc<GrandSlam>, _force_recheck: bool) -> Result<(), Report> {
+    fn needs_provisioning(&self) -> Result<bool, Report> {
+        // The era trait asks synchronously. with_engine dispatches to
+        // the engine thread and blocks — the same call engine_call
+        // wraps in spawn_blocking on the async path.
+        match with_engine(|exports| exports.login_code()) {
+            Ok(code) => Ok(code != 0),
+            Err(rc) => Err(rootcause::report!("ADI engine call failed (ffi rc={rc})")),
+        }
+    }
+
+    async fn provision(&mut self, gs: Arc<GrandSlam>) -> Result<(), Report> {
         diag("stage: provisioning start");
         // Same exchange as isideload's remote_v3 client performs against
         // Apple (its server half does the ADI calls; here they are local).
@@ -201,7 +213,7 @@ impl AnisetteProvider for LocalAdiProvider {
             "Header": {},
             "Request": {}
         });
-        let response = gs.plist_request(&start_url, &body, Some(headers.clone()), None).await.context("Failed to send start provisioning request")?;
+        let response = gs.plist_request(&start_url, &body, Some(headers.clone())).await.context("Failed to send start provisioning request")?;
         let spim_text = response.get("spim").and_then(|v| v.as_string()).ok_or_else(|| rootcause::report!("Start provisioning response missing spim"))?;
         let spim = B64.decode(spim_text).map_err(|e| rootcause::report!("spim isn't base64: {e}"))?;
 
@@ -213,7 +225,7 @@ impl AnisetteProvider for LocalAdiProvider {
                 "cpim": B64.encode(&cpim),
             }
         });
-        let response = gs.plist_request(&end_url, &body, Some(headers), None).await.context("Failed to send end provisioning request")?;
+        let response = gs.plist_request(&end_url, &body, Some(headers)).await.context("Failed to send end provisioning request")?;
         let ptm_text = response.get("ptm").and_then(|v| v.as_string()).ok_or_else(|| rootcause::report!("End provisioning response missing ptm"))?;
         let tk_text = response.get("tk").and_then(|v| v.as_string()).ok_or_else(|| rootcause::report!("End provisioning response missing tk"))?;
         let ptm = B64.decode(ptm_text).map_err(|e| rootcause::report!("ptm isn't base64: {e}"))?;
@@ -273,7 +285,7 @@ fn params_json(params: &TwoFactorCallbackParams) -> String {
     let selected = params.selected_number_id.map(|id| id.to_string()).unwrap_or_else(|| "null".to_string());
     format!(
         "{{\"unknown\":{},\"sms\":{},\"voice\":{},\"last_error\":{},\"selected_number_id\":{},\"numbers\":[{}]}}",
-        params.unknown, params.sms, params.voice, last_error, selected,
+        params.unknown, params.sms, false, last_error, selected,
         numbers.join(",")
     )
 }
@@ -286,8 +298,12 @@ fn parse_two_factor_action(action: &str) -> std::result::Result<TwoFactorCallbac
             .map(TwoFactorCallbackResponse::SendSms)
             .map_err(|_| format!("bad sms id in action: {action}"))
     } else if let Some(id) = action.strip_prefix("voice:") {
+        // Era isideload has no voice-delivery response (and its callback
+        // params carry no voice flag, so the app never offers it); a
+        // voice action aborts rather than being silently remapped to
+        // another delivery method.
         id.parse::<u32>()
-            .map(TwoFactorCallbackResponse::SendVoice)
+            .map(|_| TwoFactorCallbackResponse::Abort)
             .map_err(|_| format!("bad voice id in action: {action}"))
     } else {
         match action {
@@ -353,7 +369,7 @@ impl CallbackProvider {
 
 #[async_trait::async_trait]
 impl AnisetteProvider for CallbackProvider {
-    async fn get_anisette_data(&self) -> Result<AnisetteDataResponse, Report> {
+    async fn get_anisette_data(&self) -> Result<AnisetteData, Report> {
         diag("stage: anisette requested (app headers callback)");
         let fetched = {
             let this = CallbackProvider { cb: self.cb, ctx: self.ctx, claim: self.claim.clone() };
@@ -361,7 +377,26 @@ impl AnisetteProvider for CallbackProvider {
         };
         let json = match fetched {
             Ok(json) => json,
-            Err(1) => return Ok(AnisetteDataResponse::NeedsProvisioning),
+            Err(1) => {
+                // Era trait: no NeedsProvisioning response value, and
+                // needs_provisioning() below reports false (the app
+                // manages provisioning state on its side), so the
+                // (re)provision callback and the retry live here. Same
+                // observable sequence as the current trait's
+                // provision-then-retry in the generator.
+                let this = CallbackProvider { cb: self.cb, ctx: self.ctx, claim: self.claim.clone() };
+                let done = tokio::task::spawn_blocking(move || this.fetch(1)).await.map_err(|e| rootcause::report!("anisette callback task stopped: {e}"))?;
+                match done {
+                    Ok(_) => {}
+                    Err(rc) => return Err(rootcause::report!("anisette (re)provisioning failed (rc={rc})")),
+                }
+                let this = CallbackProvider { cb: self.cb, ctx: self.ctx, claim: self.claim.clone() };
+                let retried = tokio::task::spawn_blocking(move || this.fetch(0)).await.map_err(|e| rootcause::report!("anisette callback task stopped: {e}"))?;
+                match retried {
+                    Ok(json) => json,
+                    Err(rc) => return Err(rootcause::report!("anisette callback failed (rc={rc})")),
+                }
+            }
             Err(rc) => return Err(rootcause::report!("anisette callback failed (rc={rc})")),
         };
         let value: serde_json::Value = serde_json::from_str(&json).map_err(|e| rootcause::report!("anisette callback returned bad JSON: {e}"))?;
@@ -376,21 +411,27 @@ impl AnisetteProvider for CallbackProvider {
             });
             parsed.ok_or_else(|| rootcause::report!("anisette JSON missing {name}"))
         };
-        Ok(AnisetteDataResponse::Data(AnisetteData::new(
+        Ok(AnisetteData::new(
             field("machine_id")?,
             field("one_time_password")?,
             field("routing_info")?,
             self.claim.client_info.clone(),
             field("device_id")?,
             field("local_user_id")?,
-        )))
+        ))
     }
 
     async fn get_client_info(&self) -> Result<AnisetteClientInfo, Report> {
         Ok(self.claim.clone())
     }
 
-    async fn provision(&mut self, _gs: &Arc<GrandSlam>, _force_recheck: bool) -> Result<(), Report> {
+    fn needs_provisioning(&self) -> Result<bool, Report> {
+        // The app manages provisioning state on its side of the
+        // callback; get_anisette_data folds the (re)provision retry in.
+        Ok(false)
+    }
+
+    async fn provision(&mut self, _gs: Arc<GrandSlam>) -> Result<(), Report> {
         let this = CallbackProvider { cb: self.cb, ctx: self.ctx, claim: self.claim.clone() };
         let done = tokio::task::spawn_blocking(move || this.fetch(1)).await.map_err(|e| rootcause::report!("anisette callback task stopped: {e}"))?;
         match done {
@@ -425,7 +466,10 @@ where
     // after_sign_in: the Xcode token (and developer requests made with it)
     // are claimed as a Mac when the sign-in claimed Android.
     let signing_in = account.grandslam_client.clone();
-    account.grandslam_client = Arc::new(signing_in.claiming(mac_info()));
+    // Era GrandSlam has no claiming(): rebuild the client under the
+    // Mac claim (the same construction dev_list_teams uses below).
+    // This costs one extra URL-bag fetch, with the Mac claim on it.
+    account.grandslam_client = Arc::new(GrandSlam::new(mac_info(), false, None).await.context("Failed to rebuild the developer client")?);
 
     let mut session = match DeveloperSession::from_account(&mut account).await {
         Ok(session) => {
@@ -438,9 +482,10 @@ where
             // again with code_after_login so the pushed code gets checked,
             // then claim Mac again for the token.
             account.grandslam_client = signing_in.clone();
-            account.code_after_login = true;
+            // Era AppleAccount has no code_after_login flag; its login
+            // state machine carries the second sign-in on its own.
             account.login(password, callback).await.context("Second sign-in (code_after_login) failed")?;
-            account.grandslam_client = Arc::new(signing_in.claiming(mac_info()));
+            account.grandslam_client = Arc::new(GrandSlam::new(mac_info(), false, None).await.context("Failed to rebuild the developer client")?);
             DeveloperSession::from_account(&mut account).await.context("Failed to open a developer session")?
         }
         Err(error) => return Err(error.context("Failed to open a developer session").into_dynamic()),
@@ -454,12 +499,18 @@ where
     // from the sign-in — first/last name from the account SPD, adsid and
     // the Xcode app token from the DeveloperSession.
     let (first_name, last_name) = account.get_name().unwrap_or_default();
+    // Era DeveloperSession exposes neither adsid() nor app_token():
+    // take the adsid from the account SPD (the same place
+    // DeveloperSession::from_account reads it) and the token from the
+    // account directly.
+    let adsid = account.spd.as_ref().and_then(|spd| spd.get("adsid")).and_then(|value| value.as_string()).map(|s| s.to_string()).unwrap_or_default();
+    let app_token = account.get_app_token("xcode.auth").await.context("Failed to get xcode token")?;
     let payload = serde_json::json!({
         "first_name": first_name,
         "last_name": last_name,
-        "adsid": session.adsid(),
-        "token": session.app_token().token.clone(),
-        "token_duration": session.app_token().duration,
+        "adsid": adsid,
+        "token": app_token.token.clone(),
+        "token_duration": app_token.duration,
         "teams": teams
             .iter()
             .map(|t| serde_json::json!({
@@ -1208,24 +1259,23 @@ mod two_factor_callback_tests {
     #[test]
     fn callback_actions_preserve_the_selected_delivery_method() {
         assert!(matches!(parse_two_factor_action("sms:7"), Ok(TwoFactorCallbackResponse::SendSms(7))));
-        assert!(matches!(parse_two_factor_action("voice:7"), Ok(TwoFactorCallbackResponse::SendVoice(7))));
+        assert!(matches!(parse_two_factor_action("voice:7"), Ok(TwoFactorCallbackResponse::Abort)));
         assert!(matches!(parse_two_factor_action("code:123456"), Ok(TwoFactorCallbackResponse::SubmitCode(code)) if code == "123456"));
         assert!(parse_two_factor_action("voice:not-a-number").is_err());
     }
 
     #[test]
-    fn callback_params_include_the_voice_mode_flag() {
+    fn callback_params_report_no_voice_mode_for_era_params() {
         let params = TwoFactorCallbackParams {
             last_error: None,
             unknown: false,
             sms: false,
-            voice: true,
             numbers: Vec::new(),
             selected_number_id: Some(7),
         };
         let json: serde_json::Value = serde_json::from_str(&params_json(&params)).unwrap();
         assert_eq!(json["sms"], false);
-        assert_eq!(json["voice"], true);
+        assert_eq!(json["voice"], false);
         assert_eq!(json["selected_number_id"], 7);
     }
 }
