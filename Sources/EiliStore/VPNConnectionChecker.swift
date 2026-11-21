@@ -29,6 +29,7 @@ public class VPNConnectionChecker {
     }
 
     public var lastDiagnostic: String = ""
+    public var lastServiceDiagnostic: String = ""
 
     private init() {}
 
@@ -378,39 +379,49 @@ public class VPNConnectionChecker {
     /// 為 lockdownd 動態啟動的服務端口（AFC / installation_proxy）找一個 TCP 連得上的地址。
     ///
     /// 背景：VPN 回環地址（如 10.7.0.1）通常只轉發 lockdownd 的 62078，
-    /// StartService 返回的動態端口（如 AFC 的 49152）走回環地址連不上，
-    /// 必須用設備本機直連地址（127.0.0.1 / Wi-Fi IP）。並行探測，先通先用。
+    /// StartService 返回的動態端口（如 AFC 的 49152）可能需走設備本機直連地址。
+    /// 按手動 Device IP、127.0.0.1、Wi-Fi IP、VPN 閘道的順序探測；同一主機須同時可達服務埠和 62078。
     /// - Returns: 連得上的 host；全部不通時回 nil
     public func resolveServiceHost(port: UInt16, timeout: TimeInterval = 3) async -> String? {
         var candidates: [String] = []
         var seen = Set<String>()
         func add(_ ip: String) {
             let t = ip.trimmingCharacters(in: .whitespaces)
-            guard !t.isEmpty, !seen.contains(t) else { return }
+            guard !t.isEmpty, !seen.contains(t), ipv4Raw(t) != nil else { return }
             seen.insert(t)
             candidates.append(t)
         }
-        // 本機回環最優先：不依賴 Wi-Fi，沙盒無回環限制
+        // Use the Device IP explicitly configured by the user before local and discovered fallbacks.
+        if let manual = manualGatewayHost { add(manual) }
+        // 本機回環回退：不依賴 Wi-Fi；若手動 Device IP 無法到達動態服務埠，仍可嘗試本機服務。
         add("127.0.0.1")
         // Wi-Fi 直連 IP（服務若只綁 Wi-Fi 接口時需要）
         if let wifiIP = discoverWiFiIP() { add(wifiIP) }
-        // VPN 回環地址放最後（通常只轉發 62078）
+        // VPN 閘道放在回退位置（通常只轉發 62078）
         add(gatewayHost)
 
         var winner: String?
-        await withTaskGroup(of: (String, Bool).self) { group in
-            for c in candidates {
-                group.addTask { (c, await self.probe(host: c, port: port, timeout: timeout)) }
+        var outcomes: [String] = []
+        for candidate in candidates {
+            let serviceReachable = await probe(host: candidate, port: port, timeout: timeout)
+            guard serviceReachable else {
+                outcomes.append("\(candidate):\(port)=fail")
+                continue
             }
-            for await (ip, ok) in group {
-                if ok {
-                    winner = ip
-                    group.cancelAll()
-                    break
-                }
+            let lockdownReachable: Bool
+            if port == gatewayPort {
+                lockdownReachable = true
+            } else {
+                lockdownReachable = await probe(host: candidate, port: gatewayPort, timeout: timeout)
+            }
+            outcomes.append("\(candidate):\(port)=ok,lockdown:\(lockdownReachable ? "ok" : "fail")")
+            if lockdownReachable {
+                winner = candidate
+                break
             }
         }
+        lastServiceDiagnostic = "service-port=\(port) candidates=[\(outcomes.joined(separator: "; "))] selected=\(winner ?? "none")"
+        print("[VPNConnectionChecker] \(lastServiceDiagnostic)")
         return winner
     }
 }
-

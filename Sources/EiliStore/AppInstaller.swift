@@ -51,6 +51,16 @@ public class AppInstaller {
 
         reportProgress("讀取配對檔...", 5)
         guard let pairingURL = findPairingFile() else { throw InstallerError.noPairingFile }
+        reportProgress("檢查 AFC／安裝代理服務埠...", 6)
+        let serviceHosts = try await resolveInstallServiceHosts(lockdownHost: host, pairingFileURL: pairingURL)
+        if let afcPort = serviceHosts.afcPort, let installationProxyPort = serviceHosts.installationProxyPort {
+            reportProgress(
+                "服務路徑已確認：AFC \(serviceHosts.afcHost):\(afcPort)，installation_proxy \(serviceHosts.installationProxyHost):\(installationProxyPort)",
+                7
+            )
+        } else {
+            reportProgress("服務路徑：Remote Pairing / RSD（\(host)）", 7)
+        }
 
         var extractionDirectory: URL?
         defer {
@@ -110,7 +120,7 @@ public class AppInstaller {
             packageType = .developerApp
         }
 
-        let afc = RustAFCClient(host: host, pairingFileURL: pairingURL)
+        let afc = RustAFCClient(host: serviceHosts.afcHost, pairingFileURL: pairingURL)
         try await InstallerTransferGate.run(transfer: {
             do {
                 try await afc.connect()
@@ -136,7 +146,7 @@ public class AppInstaller {
             }
         }, installation: {
             reportProgress("安裝...", 80)
-            let installer = RustInstallationProxy(host: host, pairingFileURL: pairingURL)
+            let installer = RustInstallationProxy(host: serviceHosts.installationProxyHost, pairingFileURL: pairingURL)
             do {
                 try await installer.connect()
                 try await installer.install(packagePath: remotePackagePath, packageType: packageType) { message, percent in
@@ -149,7 +159,7 @@ public class AppInstaller {
             }
         }, afterSuccessfulInstallation: {
             guard let stagedIPAIdentifier else { return }
-            await self.cleanupStagedIPA(identifier: stagedIPAIdentifier, host: host, pairingFileURL: pairingURL)
+            await self.cleanupStagedIPA(identifier: stagedIPAIdentifier, host: serviceHosts.afcHost, pairingFileURL: pairingURL)
         })
 
         reportProgress("安裝完成", 100)
@@ -165,6 +175,56 @@ public class AppInstaller {
         } catch {
             // Cleanup is best-effort; do not turn an already successful install into a failed install.
             print("[Installer] 暫存 IPA 清理失敗，保留該檔案: \(error.localizedDescription)")
+        }
+    }
+
+    private func resolveInstallServiceHosts(
+        lockdownHost: String,
+        pairingFileURL: URL
+    ) async throws -> (afcHost: String, installationProxyHost: String, afcPort: UInt16?, installationProxyPort: UInt16?) {
+        let checker = VPNConnectionChecker.shared
+        if pairingFileURL.lastPathComponent == PairingType.remote.fileName {
+            print("[Installer] Remote pairing uses RSD; TCP service-port resolution is not applicable (host=\(lockdownHost))")
+            return (lockdownHost, lockdownHost, nil, nil)
+        }
+
+        let lockdown = RustLockdownClient(host: lockdownHost, pairingFileURL: pairingFileURL)
+        defer { lockdown.disconnect() }
+        do {
+            try await lockdown.connect()
+            try await lockdown.startSession()
+
+            let (afcPort, afcSSL) = try await lockdown.startService("com.apple.afc")
+            guard let afcHost = await checker.resolveServiceHost(port: afcPort) else {
+                throw InstallerError.serviceEndpointFailed(
+                    "AFC 動態埠 \(afcPort) 無可用主機；\(checker.lastServiceDiagnostic)"
+                )
+            }
+
+            let (installationProxyPort, installationProxySSL) = try await lockdown.startService(
+                "com.apple.mobile.installation_proxy"
+            )
+            guard let installationProxyHost = await checker.resolveServiceHost(port: installationProxyPort) else {
+                throw InstallerError.serviceEndpointFailed(
+                    "installation_proxy 動態埠 \(installationProxyPort) 無可用主機；\(checker.lastServiceDiagnostic)"
+                )
+            }
+
+            print(
+                "[Installer] service endpoints afc=\(afcHost):\(afcPort) ssl=\(afcSSL), " +
+                "installation_proxy=\(installationProxyHost):\(installationProxyPort) ssl=\(installationProxySSL)"
+            )
+            return (afcHost, installationProxyHost, afcPort, installationProxyPort)
+        } catch let error as InstallerError {
+            throw error
+        } catch {
+            let summary: String
+            if (error as NSError).domain == "RustDeviceTransport" {
+                summary = RustDeviceTransport.safeFailureSummary(error, service: .lockdown)
+            } else {
+                summary = error.localizedDescription
+            }
+            throw InstallerError.serviceEndpointFailed("Lockdown 動態服務查詢失敗：\(summary)")
         }
     }
 
@@ -217,13 +277,36 @@ public class AppInstaller {
         guard let pairingURL = findPairingFile() else {
             return lines.joined(separator: "\n") + "\n無配對檔"
         }
-        let afc = RustAFCClient(host: host, pairingFileURL: pairingURL)
+        let endpoints: (afcHost: String, installationProxyHost: String, afcPort: UInt16?, installationProxyPort: UInt16?)
+        do {
+            endpoints = try await resolveInstallServiceHosts(lockdownHost: host, pairingFileURL: pairingURL)
+        } catch {
+            lines.append("❌ 服務端點檢查失敗（\(error.localizedDescription)）")
+            return lines.joined(separator: "\n")
+        }
+        if let afcPort = endpoints.afcPort, let proxyPort = endpoints.installationProxyPort {
+            lines.append("AFC 動態埠：\(endpoints.afcHost):\(afcPort)")
+            lines.append("installation_proxy 動態埠：\(endpoints.installationProxyHost):\(proxyPort)")
+        } else {
+            lines.append("服務傳輸：Remote Pairing / RSD")
+        }
+
+        let afc = RustAFCClient(host: endpoints.afcHost, pairingFileURL: pairingURL)
         do {
             try await afc.connect()
             lines.append("✅ AFC 連接成功")
             afc.disconnect()
         } catch {
             lines.append("❌ AFC 連接失敗（\(RustDeviceTransport.safeFailureSummary(error, service: .afc))）")
+        }
+
+        let installer = RustInstallationProxy(host: endpoints.installationProxyHost, pairingFileURL: pairingURL)
+        do {
+            try await installer.connect()
+            lines.append("✅ installation_proxy 連接成功")
+            installer.disconnect()
+        } catch {
+            lines.append("❌ installation_proxy 連接失敗（\(RustDeviceTransport.safeFailureSummary(error, service: .installationProxy))）")
         }
         return lines.joined(separator: "\n")
     }
@@ -250,12 +333,14 @@ private final class ProgressGate {
 public enum InstallerError: Error, LocalizedError {
     case vpnNotConnected
     case noPairingFile
+    case serviceEndpointFailed(String)
     case afcFailed(String)
 
     public var errorDescription: String? {
         switch self {
         case .vpnNotConnected: return "VPN 未連接"
         case .noPairingFile: return "找不到配對檔"
+        case .serviceEndpointFailed(let message): return "裝置服務連線檢查失敗：\(message)"
         case .afcFailed(let message): return message
         }
     }

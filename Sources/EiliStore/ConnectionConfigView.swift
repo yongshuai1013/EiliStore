@@ -131,6 +131,8 @@ struct ConnectionConfigView: View {
     private func load() {
         useLocalVPN = defaults.bool(forKey: "eilistore.useLocalVPN")
         deviceIP = defaults.string(forKey: "eilistore.deviceIP") ?? "10.7.0.1"
+        let configuredIP = deviceIP.trimmingCharacters(in: .whitespacesAndNewlines)
+        VPNConnectionChecker.shared.manualGatewayHost = configuredIP.isEmpty ? nil : configuredIP
         bindHost = defaults.string(forKey: "eilistore.bindHost") ?? "127.0.0.1"
         bindPort = defaults.string(forKey: "eilistore.bindPort") ?? "51820"
         emproxyEnabled = defaults.object(forKey: "eilistore.emproxyEnabled") as? Bool ?? true
@@ -175,6 +177,8 @@ struct ConnectionConfigView: View {
     private func save() {
         defaults.set(useLocalVPN, forKey: "eilistore.useLocalVPN")
         defaults.set(deviceIP, forKey: "eilistore.deviceIP")
+        let configuredIP = deviceIP.trimmingCharacters(in: .whitespacesAndNewlines)
+        VPNConnectionChecker.shared.manualGatewayHost = configuredIP.isEmpty ? nil : configuredIP
         defaults.set(bindHost, forKey: "eilistore.bindHost")
         defaults.set(bindPort, forKey: "eilistore.bindPort")
         AppLogger.shared.log("連接配置已保存: useLocalVPN=\(useLocalVPN), deviceIP=\(deviceIP)")

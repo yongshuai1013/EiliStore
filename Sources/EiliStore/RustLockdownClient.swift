@@ -56,15 +56,28 @@ public class RustLockdownClient {
             return (port, ssl)
         }.value
     }
+
+    /// Establishes the paired Lockdown session required before requesting device services.
+    public func startSession() async throws {
+        if let failure = await attemptStartSession() {
+            throw NSError(domain: "RustLockdown", code: -12, userInfo: [
+                NSLocalizedDescriptionKey: "StartSession 失敗 [code \(failure.code):\(failure.subCode)]"
+            ])
+        }
+    }
+
+    private func attemptStartSession() async -> (code: Int32, subCode: Int32)? {
+        guard let client = lockdownClient else { return (-10, 0) }
+        return await Task.detached(priority: .userInitiated) {
+            self.transport.attemptStartSession(client: client, pairingFileURL: self.pairingFileURL)
+        }.value
+    }
     
     /// 診斷專用：對已連線的 lockdown client 試開一次 session（StartSession）。
     /// 成功回傳 nil；失敗回傳 FFI 的 (code, subCode)。僅供連線檢查的判別槍使用；
     /// 一般連線／安裝流程不呼叫此方法、維持不開 session。
     public func startSessionDiagnostic() async -> (code: Int32, subCode: Int32)? {
-        guard let client = lockdownClient else { return (-10, 0) }
-        return await Task.detached(priority: .userInitiated) {
-            self.transport.attemptStartSession(client: client, pairingFileURL: self.pairingFileURL)
-        }.value
+        await attemptStartSession()
     }
     
     private func errorMessage(from err: UnsafeMutablePointer<IdeviceFfiError>) -> String {
